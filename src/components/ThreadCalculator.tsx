@@ -40,6 +40,13 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [outputThreadRoot, setOutputThreadRoot] = useState<number>(0);   // mm
   const [copied, setCopied] = useState<boolean>(false);
 
+  // Auxiliary string states for fluid text input
+  const [threadStartsStr, setThreadStartsStr] = useState<string>("1");
+  const [calcPitchStr, setCalcPitchStr] = useState<string>("1.5");
+  const [calcDiaStr, setCalcDiaStr] = useState<string>("20.0");
+  const [threadPassesStr, setThreadPassesStr] = useState<string>("10");
+  const [g76_r_finStr, setG76_RFinStr] = useState<string>("0.02");
+
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
       setThreadStarts(1);
@@ -54,6 +61,12 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       setG76_A("60");
       setG76_QMin(0);
       setG76_RFin(0);
+
+      setThreadStartsStr("");
+      setCalcPitchStr("");
+      setCalcDiaStr("");
+      setThreadPassesStr("");
+      setG76_RFinStr("");
     }
   };
 
@@ -62,12 +75,16 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     if (threadProfile === "whitworth") {
       setG76_A("55");
       setTpi("11");
-      setCalcPitch(parseFloat((25.4 / 11).toFixed(4)));
+      const pitch = parseFloat((25.4 / 11).toFixed(4));
+      setCalcPitch(pitch);
+      setCalcPitchStr(pitch.toString());
     } else if (threadProfile === "npt") {
       setG76_A("60");
       setThreadTaper("conica");
       setTpi("11.5");
-      setCalcPitch(parseFloat((25.4 / 11.5).toFixed(4)));
+      const pitch = parseFloat((25.4 / 11.5).toFixed(4));
+      setCalcPitch(pitch);
+      setCalcPitchStr(pitch.toString());
     } else {
       setG76_A("60");
     }
@@ -79,14 +96,65 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     const sanitized = valStr.replace(",", ".");
     const val = parseFloat(sanitized);
     if (val > 0) {
-      setCalcPitch(parseFloat((25.4 / val).toFixed(4)));
+      const pitch = parseFloat((25.4 / val).toFixed(4));
+      setCalcPitch(pitch);
+      setCalcPitchStr(pitch.toString());
     }
   };
 
-  const handlePitchChange = (val: number) => {
-    setCalcPitch(val);
-    if (threadProfile !== "metrica" && val > 0) {
-      setTpi((25.4 / val).toFixed(2));
+  const handleThreadStartsChange = (valStr: string) => {
+    setThreadStartsStr(valStr);
+    const parsed = parseInt(valStr);
+    if (!isNaN(parsed)) {
+      setThreadStarts(parsed);
+    } else {
+      setThreadStarts(0);
+    }
+  };
+
+  const handlePitchInputChange = (valStr: string) => {
+    setCalcPitchStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setCalcPitch(parsed);
+      if (threadProfile !== "metrica" && parsed > 0) {
+        setTpi((25.4 / parsed).toFixed(2));
+      }
+    } else {
+      setCalcPitch(0);
+    }
+  };
+
+  const handleDiaInputChange = (valStr: string) => {
+    setCalcDiaStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setCalcDia(parsed);
+    } else {
+      setCalcDia(0);
+    }
+  };
+
+  const handleThreadPassesChange = (valStr: string) => {
+    setThreadPassesStr(valStr);
+    const parsed = parseInt(valStr);
+    if (!isNaN(parsed)) {
+      setThreadPasses(parsed);
+    } else {
+      setThreadPasses(0);
+    }
+  };
+
+  const handleRFinChange = (valStr: string) => {
+    setG76_RFinStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setG76_RFin(parsed);
+    } else {
+      setG76_RFin(0);
     }
   };
 
@@ -255,13 +323,12 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
 
               {/* Thread starts */}
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono uppercase text-zinc-400">Nº de Entradas (Starts)</label>
+                <label className="text-[10px] font-mono uppercase text-zinc-400 font-bold">Nº de Entradas (Starts)</label>
                 <input
-                  type="number"
-                  min="1"
-                  max="8"
-                  value={threadStarts}
-                  onChange={(e) => setThreadStarts(Math.max(1, parseInt(e.target.value) || 1))}
+                  type="text"
+                  value={threadStartsStr}
+                  onChange={(e) => handleThreadStartsChange(e.target.value)}
+                  placeholder="Ex: 1"
                   className="bg-[#121216] border border-zinc-800 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none"
                 />
               </div>
@@ -284,28 +351,28 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
 
               {/* Pitch P */}
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono uppercase text-zinc-400">
+                <label className="text-[10px] font-mono uppercase text-zinc-400 font-bold">
                   {threadProfile !== "metrica" ? "Passo P (mm) (Calculado)" : "Passo P (mm)"}
                 </label>
                 <input
-                  type="number"
-                  step="0.0001"
-                  value={calcPitch}
-                  onChange={(e) => handlePitchChange(Math.max(0.0001, parseFloat(e.target.value) || 0))}
+                  type="text"
+                  value={calcPitchStr}
+                  onChange={(e) => handlePitchInputChange(e.target.value)}
+                  placeholder="Ex: 1.5"
                   className={`bg-[#121216] border focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none ${
-                    threadProfile !== "metrica" ? "border-zinc-800 text-zinc-300" : "border-zinc-800 text-zinc-100"
+                    threadProfile !== "metrica" ? "border-zinc-800 text-zinc-350" : "border-zinc-800 text-zinc-100"
                   }`}
                 />
               </div>
 
               {/* Nominal Dia */}
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono uppercase text-zinc-400">Diâmetro Nominal Ø (mm)</label>
+                <label className="text-[10px] font-mono uppercase text-zinc-400 font-bold">Diâmetro Nominal Ø (mm)</label>
                 <input
-                  type="number"
-                  step="0.1"
-                  value={calcDia}
-                  onChange={(e) => setCalcDia(Math.max(1, parseFloat(e.target.value) || 0))}
+                  type="text"
+                  value={calcDiaStr}
+                  onChange={(e) => handleDiaInputChange(e.target.value)}
+                  placeholder="Ex: 20"
                   className="bg-[#121216] border border-zinc-800 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none"
                 />
               </div>
@@ -380,25 +447,24 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
               </div>
 
               <div>
-                <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1">Nº Passadas (N)</label>
+                <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1 font-bold">Nº Passadas (N)</label>
                 <input
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={threadPasses}
-                  onChange={(e) => setThreadPasses(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none"
+                  type="text"
+                  value={threadPassesStr}
+                  onChange={(e) => handleThreadPassesChange(e.target.value)}
+                  placeholder="Ex: 10"
+                  className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400"
                 />
               </div>
 
               <div>
-                <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1">Passe Acab. R</label>
+                <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1 font-bold">Passe Acab. R</label>
                 <input
-                  type="number"
-                  step="0.01"
-                  value={g76_r_fin}
-                  onChange={(e) => setG76_RFin(Math.max(0, parseFloat(e.target.value) || 0))}
-                  className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none"
+                  type="text"
+                  value={g76_r_finStr}
+                  onChange={(e) => handleRFinChange(e.target.value)}
+                  placeholder="Ex: 0.02"
+                  className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400"
                 />
               </div>
             </div>

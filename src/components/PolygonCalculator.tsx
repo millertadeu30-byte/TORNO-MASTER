@@ -39,6 +39,14 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
   const [feed, setFeed] = useState<number>(400);
   const [depthZ, setDepthZ] = useState<string>("-15");
 
+  // Auxiliary string states for fluid text input
+  const [diamSextStr, setDiamSextStr] = useState<string>("31.2");
+  const [diamBarraStr, setDiamBarraStr] = useState<string>("36.0");
+  const [diamFresaStr, setDiamFresaStr] = useState<string>("16.0");
+  const [quebraCantosStr, setQuebraCantosStr] = useState<string>("2.0");
+  const [spindleStr, setSpindleStr] = useState<string>("4000");
+  const [feedStr, setFeedStr] = useState<string>("400");
+
   const [copied, setCopied] = useState<boolean>(false);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
   const [zoom, setZoom] = useState<number>(1.0);
@@ -61,6 +69,13 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
       setSpindle(0);
       setFeed(0);
       setDepthZ("");
+
+      setDiamSextStr("");
+      setDiamBarraStr("");
+      setDiamFresaStr("");
+      setQuebraCantosStr("");
+      setSpindleStr("");
+      setFeedStr("");
     }
   };
 
@@ -71,20 +86,82 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
   const currentConstant = polyType === "quadrado" ? CONST_SQR : CONST_HEX;
 
   // Bidirectional calculations
-  const handleSextChange = (val: number) => {
-    setDiamSext(val);
-    setDiamBarra(Number((val * currentConstant).toFixed(2)));
+  const handleSextInputChange = (valStr: string) => {
+    setDiamSextStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const val = parseFloat(normalized);
+    if (!isNaN(val)) {
+      setDiamSext(val);
+      const calculatedBar = Number((val * currentConstant).toFixed(2));
+      setDiamBarra(calculatedBar);
+      setDiamBarraStr(calculatedBar.toString());
+    } else {
+      setDiamSext(0);
+    }
   };
 
-  const handleBarraChange = (val: number) => {
-    setDiamBarra(val);
-    setDiamSext(Number((val / currentConstant).toFixed(2)));
+  const handleBarraInputChange = (valStr: string) => {
+    setDiamBarraStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const val = parseFloat(normalized);
+    if (!isNaN(val)) {
+      setDiamBarra(val);
+      const calculatedSext = Number((val / currentConstant).toFixed(2));
+      setDiamSext(calculatedSext);
+      setDiamSextStr(calculatedSext.toString());
+    } else {
+      setDiamBarra(0);
+    }
+  };
+
+  const handleFresaInputChange = (valStr: string) => {
+    setDiamFresaStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const val = parseFloat(normalized);
+    if (!isNaN(val)) {
+      setDiamFresa(val);
+    } else {
+      setDiamFresa(0);
+    }
+  };
+
+  const handleQuebraCantosInputChange = (valStr: string) => {
+    setQuebraCantosStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const val = parseFloat(normalized);
+    if (!isNaN(val)) {
+      setQuebraCantos(val);
+    } else {
+      setQuebraCantos(0);
+    }
+  };
+
+  const handleSpindleInputChange = (valStr: string) => {
+    setSpindleStr(valStr);
+    const val = parseInt(valStr);
+    if (!isNaN(val)) {
+      setSpindle(val);
+    } else {
+      setSpindle(0);
+    }
+  };
+
+  const handleFeedInputChange = (valStr: string) => {
+    setFeedStr(valStr);
+    const val = parseInt(valStr);
+    if (!isNaN(val)) {
+      setFeed(val);
+    } else {
+      setFeed(0);
+    }
   };
 
   // Sync values on type change
   useEffect(() => {
     // Keep flat size and recalculate bar size
-    setDiamBarra(Number((diamSext * currentConstant).toFixed(2)));
+    const calculatedBar = Number((diamSext * currentConstant).toFixed(2));
+    setDiamBarra(calculatedBar);
+    setDiamBarraStr(calculatedBar.toString());
   }, [polyType]);
 
   // Geometric math for coordinates
@@ -519,10 +596,10 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
                   <span className="font-bold text-[#00f3ff]">{diamSext}mm</span>
                 </div>
                 <input
-                  type="number"
-                  step="0.1"
-                  value={diamSext}
-                  onChange={(e) => handleSextChange(parseFloat(e.target.value) || 0)}
+                  type="text"
+                  value={diamSextStr}
+                  onChange={(e) => handleSextInputChange(e.target.value)}
+                  placeholder="Ex: 31.2"
                   className={`text-xs px-3 py-2 rounded font-mono ${
                     isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#181820] border border-zinc-800 text-white focus:border-[#00f3ff]/50"
                   }`}
@@ -543,10 +620,10 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
                   <span className="font-bold text-cyan-400">{diamBarra}mm</span>
                 </div>
                 <input
-                  type="number"
-                  step="0.1"
-                  value={diamBarra}
-                  onChange={(e) => handleBarraChange(parseFloat(e.target.value) || 0)}
+                  type="text"
+                  value={diamBarraStr}
+                  onChange={(e) => handleBarraInputChange(e.target.value)}
+                  placeholder="Ex: 36.0"
                   className={`text-xs px-3 py-2 rounded font-mono ${
                     isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#181820] border border-zinc-800 text-white focus:border-[#00f3ff]/50"
                   }`}
@@ -557,26 +634,26 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
             {/* Cutter & Corners */}
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono uppercase text-zinc-400">Diâm. da Fresa</label>
+                <label className="text-[10px] font-mono uppercase text-zinc-400 font-bold">Diâm. da Fresa</label>
                 <input
-                  type="number"
-                  step="1"
-                  value={diamFresa}
-                  onChange={(e) => setDiamFresa(parseFloat(e.target.value) || 0)}
+                  type="text"
+                  value={diamFresaStr}
+                  onChange={(e) => handleFresaInputChange(e.target.value)}
+                  placeholder="Ex: 16.0"
                   className={`text-xs px-3 py-2 rounded font-mono ${
-                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white"
+                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white focus:border-[#00f3ff]/50"
                   }`}
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono uppercase text-zinc-400">Arredondamento (,R)</label>
+                <label className="text-[10px] font-mono uppercase text-zinc-400 font-bold">Arredondamento (,R)</label>
                 <input
-                  type="number"
-                  step="0.5"
-                  value={quebraCantos}
-                  onChange={(e) => setQuebraCantos(parseFloat(e.target.value) || 0)}
+                  type="text"
+                  value={quebraCantosStr}
+                  onChange={(e) => handleQuebraCantosInputChange(e.target.value)}
+                  placeholder="Ex: 2.0"
                   className={`text-xs px-3 py-2 rounded font-mono ${
-                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white"
+                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white focus:border-[#00f3ff]/50"
                   }`}
                 />
               </div>
@@ -600,22 +677,24 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
               <div className="flex flex-col gap-1">
                 <label className="text-[9px] font-mono uppercase text-zinc-400 font-bold text-yellow-500">Rotação (S) RPM</label>
                 <input
-                  type="number"
-                  value={spindle}
-                  onChange={(e) => setSpindle(parseInt(e.target.value) || 0)}
+                  type="text"
+                  value={spindleStr}
+                  onChange={(e) => handleSpindleInputChange(e.target.value)}
+                  placeholder="Ex: 4000"
                   className={`text-xs px-2.5 py-1.5 rounded font-mono ${
-                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white"
+                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white focus:border-[#00f3ff]/50"
                   }`}
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[9px] font-mono uppercase text-zinc-400">Avanço F mm/min</label>
+                <label className="text-[9px] font-mono uppercase text-zinc-400 font-bold">Avanço F mm/min</label>
                 <input
-                  type="number"
-                  value={feed}
-                  onChange={(e) => setFeed(parseInt(e.target.value) || 0)}
+                  type="text"
+                  value={feedStr}
+                  onChange={(e) => handleFeedInputChange(e.target.value)}
+                  placeholder="Ex: 400"
                   className={`text-xs px-2.5 py-1.5 rounded font-mono ${
-                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white"
+                    isHighContrast ? "bg-zinc-100 border border-zinc-300" : "bg-[#14141a] border border-zinc-850 text-white focus:border-[#00f3ff]/50"
                   }`}
                 />
               </div>

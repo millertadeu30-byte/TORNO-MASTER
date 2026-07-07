@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { User, Plus, Trash2, Edit2, Calendar, Phone, RefreshCw, Check, Key } from "lucide-react";
 import { ClientToken } from "../types";
+import { getClients, saveClients, getGlobalSupportPhone } from "../lib/licensing";
 
 interface AdminPanelProps {
   onClose: () => void;
@@ -38,60 +39,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   // Fetch client roster
   const fetchRoster = () => {
     setLoading(true);
-    fetch("/api/admin/clients")
-      .then((res) => res.json())
-      .then((data) => {
-        const fetchedClients = data.clients || [];
-        setClients(fetchedClients);
-        setGlobalSupport(data.globalSupportPhone || "");
-        setLoading(false);
-
-        // Auto-healing sync logic: restore license tokens to server if it restarted
-        try {
-          const cachedStr = localStorage.getItem("cnc_master_clients_roster");
-          if (cachedStr) {
-            const cached: ClientToken[] = JSON.parse(cachedStr);
-            // Find tokens that exist in local cache but are missing from fetched list
-            const missingInFetched = cached.filter(
-              (c1) => !fetchedClients.some((c2: any) => c2.token === c1.token)
-            );
-
-            if (missingInFetched.length > 0) {
-              console.log("Restaurando licenças do cache local para o servidor:", missingInFetched);
-              // Send each missing client back to the server to restore them
-              Promise.all(
-                missingInFetched.map((mc) =>
-                  fetch("/api/admin/clients", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(mc),
-                  })
-                )
-              ).then(() => {
-                // Fetch final roster from server after auto-restoration
-                fetch("/api/admin/clients")
-                  .then((r) => r.json())
-                  .then((d2) => {
-                    const finalClients = d2.clients || [];
-                    setClients(finalClients);
-                    localStorage.setItem("cnc_master_clients_roster", JSON.stringify(finalClients));
-                  });
-              });
-            } else {
-              // Server is complete, keep local copy updated
-              localStorage.setItem("cnc_master_clients_roster", JSON.stringify(fetchedClients));
-            }
-          } else {
-            // Store initial roster copy
-            localStorage.setItem("cnc_master_clients_roster", JSON.stringify(fetchedClients));
-          }
-        } catch (err) {
-          console.error("Erro no auto-healing sync das licenças:", err);
-        }
-      })
-      .catch(() => {
-        setLoading(false);
-      });
+    const fetchedClients = getClients();
+    setClients(fetchedClients);
+    setGlobalSupport(getGlobalSupportPhone());
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -101,13 +52,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   }, [isAuthenticated]);
 
   const handleResetSessions = () => {
-    fetch("/api/admin/reset-sessions", { method: "POST" })
-      .then((res) => res.json())
-      .then((data) => {
-        setActionMsg("✅ Todas as sessões online foram limpas!");
-      fetchRoster();
-        setTimeout(() => setActionMsg(""), 3000);
-      });
+    setActionMsg("✅ Todas as sessões online foram limpas!");
+    fetchRoster();
+    setTimeout(() => setActionMsg(""), 3000);
   };
 
   const handleSaveClient = (e: React.FormEvent) => {
@@ -118,63 +65,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     }
     setFormError("");
 
-    const payload = {
+    const clientData: ClientToken = {
       name: editName,
-      email: editEmail || null,
-      password: editPassword || null,
+      email: editEmail || undefined,
+      password: editPassword || undefined,
       token: editToken,
       expirationDate: editExpDate || null,
       supportPhone: editSupport || globalSupport,
       subscriptionType: editSubscriptionType,
     };
 
-    // Update local cache first so it doesn't get treated as missing or outdated
-    try {
-      const cachedStr = localStorage.getItem("cnc_master_clients_roster");
-      if (cachedStr) {
-        const cached: ClientToken[] = JSON.parse(cachedStr);
-        const index = cached.findIndex(c => c.token === editToken);
-        const clientData: ClientToken = {
-          name: editName,
-          email: editEmail || undefined,
-          password: editPassword || undefined,
-          token: editToken,
-          expirationDate: editExpDate || null,
-          supportPhone: editSupport || globalSupport,
-          subscriptionType: editSubscriptionType,
-        };
-        if (index !== -1) {
-          cached[index] = clientData;
-        } else {
-          cached.push(clientData);
-        }
-        localStorage.setItem("cnc_master_clients_roster", JSON.stringify(cached));
-      }
-    } catch (err) {
-      console.error("Erro ao sincronizar cache local antes de salvar:", err);
+    let currentClients = getClients();
+    const existingIdx = currentClients.findIndex(c => c.token === editToken);
+
+    if (existingIdx !== -1) {
+      currentClients[existingIdx] = clientData;
+    } else {
+      currentClients.push(clientData);
     }
 
-    fetch("/api/admin/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        setActionMsg(`✅ Licença "${editToken}" salva com sucesso!`);
-        fetchRoster();
-        setIsEditing(false);
-        // Reset states
-        setEditName("");
-        setEditEmail("");
-        setEditPassword("");
-        setEditToken("");
-        setEditExpDate("");
-        setEditSupport("");
-        setEditSubscriptionType("demo");
-        setFormError("");
-        setTimeout(() => setActionMsg(""), 3000);
-      });
+    saveClients(currentClients);
+    setActionMsg(`✅ Licença "${editToken}" salva com sucesso!`);
+    fetchRoster();
+    setIsEditing(false);
+    // Reset states
+    setEditName("");
+    setEditEmail("");
+    setEditPassword("");
+    setEditToken("");
+    setEditExpDate("");
+    setEditSupport("");
+    setEditSubscriptionType("demo");
+    setFormError("");
+    setTimeout(() => setActionMsg(""), 3000);
   };
 
   const handleDeleteClient = (token: string) => {
@@ -186,25 +109,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   };
 
   const executeDeleteClient = (token: string) => {
-    // Update local cache first so auto-heal doesn't restore it
-    try {
-      const cachedStr = localStorage.getItem("cnc_master_clients_roster");
-      if (cachedStr) {
-        const cached: ClientToken[] = JSON.parse(cachedStr);
-        const filtered = cached.filter(c => c.token !== token);
-        localStorage.setItem("cnc_master_clients_roster", JSON.stringify(filtered));
-      }
-    } catch (err) {
-      console.error("Erro ao sincronizar cache local antes de excluir:", err);
-    }
-
-    fetch(`/api/admin/clients/${token}`, { method: "DELETE" })
-      .then((res) => res.json())
-      .then((data) => {
-        setActionMsg("✅ Token excluído com sucesso!");
-        fetchRoster();
-        setTimeout(() => setActionMsg(""), 3000);
-      });
+    const filtered = getClients().filter(c => c.token !== token);
+    saveClients(filtered);
+    setActionMsg("✅ Token excluído com sucesso!");
+    fetchRoster();
+    setTimeout(() => setActionMsg(""), 3000);
   };
 
   const startEdit = (c: ClientToken) => {

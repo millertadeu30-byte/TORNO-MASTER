@@ -17,6 +17,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   const [feedRate, setFeedRate] = useState<number>(0.2); // f (mm/rot)
   const [rpmVal, setRpmVal] = useState<number>(1145); // N (RPM)
   const [linearFeed, setLinearFeed] = useState<number>(229); // Vf (mm/min)
+
+  const [feedRateInput, setFeedRateInput] = useState<string>("0.2");
+  const [rpmInput, setRpmInput] = useState<string>("1145");
+  const [linearFeedInput, setLinearFeedInput] = useState<string>("229");
   
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -25,6 +29,9 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
       setFeedRate(0);
       setRpmVal(0);
       setLinearFeed(0);
+      setFeedRateInput("");
+      setRpmInput("");
+      setLinearFeedInput("");
     }
   };
 
@@ -32,9 +39,12 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   useEffect(() => {
     if (calcMode === "vf") {
       if (feedRate > 0 && rpmVal > 0) {
-        setLinearFeed(Math.round(feedRate * rpmVal));
+        const calculated = Math.round(feedRate * rpmVal);
+        setLinearFeed(calculated);
+        setLinearFeedInput(calculated.toString());
       } else {
         setLinearFeed(0);
+        setLinearFeedInput("");
       }
     }
   }, [feedRate, rpmVal, calcMode]);
@@ -42,12 +52,48 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   useEffect(() => {
     if (calcMode === "f") {
       if (linearFeed > 0 && rpmVal > 0) {
-        setFeedRate(parseFloat((linearFeed / rpmVal).toFixed(4)));
+        const calculated = parseFloat((linearFeed / rpmVal).toFixed(4));
+        setFeedRate(calculated);
+        setFeedRateInput(calculated.toString());
       } else {
         setFeedRate(0);
+        setFeedRateInput("");
       }
     }
   }, [linearFeed, rpmVal, calcMode]);
+
+  const handleFeedRateChange = (valStr: string) => {
+    setFeedRateInput(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setFeedRate(parsed);
+    } else {
+      setFeedRate(0);
+    }
+  };
+
+  const handleLinearFeedChange = (valStr: string) => {
+    setLinearFeedInput(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setLinearFeed(parsed);
+    } else {
+      setLinearFeed(0);
+    }
+  };
+
+  const handleRpmChange = (valStr: string) => {
+    setRpmInput(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setRpmVal(parsed);
+    } else {
+      setRpmVal(0);
+    }
+  };
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -122,12 +168,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
                     <span className="text-[10px] font-mono text-[#39ff14] font-bold">{feedRate.toFixed(3)} mm/rot</span>
                   </div>
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0.001"
-                    max="10.0"
-                    value={feedRate}
-                    onChange={(e) => setFeedRate(Math.max(0.001, parseFloat(e.target.value) || 0))}
+                    type="text"
+                    value={feedRateInput}
+                    onChange={(e) => handleFeedRateChange(e.target.value)}
+                    placeholder="Ex: 0,2"
                     className="w-full bg-[#121216] border border-zinc-800 focus:border-[#39ff14] rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                   />
                 </div>
@@ -139,12 +183,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
                     <span className="text-[10px] font-mono text-[#39ff14] font-bold">{linearFeed} mm/min</span>
                   </div>
                   <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    max="20000"
-                    value={linearFeed}
-                    onChange={(e) => setLinearFeed(Math.max(1, parseInt(e.target.value) || 0))}
+                    type="text"
+                    value={linearFeedInput}
+                    onChange={(e) => handleLinearFeedChange(e.target.value)}
+                    placeholder="Ex: 200"
                     className="w-full bg-[#121216] border border-zinc-800 focus:border-[#39ff14] rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                   />
                 </div>
@@ -157,9 +199,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
                   <span className="text-[10px] font-mono text-emerald-400 font-bold">{rpmVal} RPM</span>
                 </div>
                 <input
-                  type="number"
-                  value={rpmVal}
-                  onChange={(e) => setRpmVal(Math.max(1, parseInt(e.target.value) || 0))}
+                  type="text"
+                  value={rpmInput}
+                  onChange={(e) => handleRpmChange(e.target.value)}
+                  placeholder="Ex: 1200"
                   className="w-full bg-[#121216] border border-zinc-800 focus:border-[#39ff14] rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                 />
               </div>

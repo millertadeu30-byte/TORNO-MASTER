@@ -10,6 +10,7 @@ interface CNCEditorProps {
   isActive: boolean;
   onSetFocus: () => void;
   isHighContrast: boolean;
+  fileName?: string;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -21,6 +22,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   isActive,
   onSetFocus,
   isHighContrast,
+  fileName,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -245,7 +247,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${isActive ? "bg-cyan-400 animate-pulse" : "bg-zinc-600"}`} />
           <span className={`text-xs tracking-wider uppercase ${isHighContrast ? 'text-black font-bold' : isActive ? "text-cyan-400" : "text-zinc-400"}`}>
-            Editor {paneIndex + 1} {isActive && "(Ativo)"}
+            Editor {paneIndex + 1} {fileName ? `(${fileName})` : ""} {isActive && "(Ativo)"}
           </span>
         </div>
         <div className="flex items-center gap-2">

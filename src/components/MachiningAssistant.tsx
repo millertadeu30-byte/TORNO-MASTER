@@ -260,10 +260,10 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   diagnosticError,
   onOpenCalculator,
 }) => {
-  const [tables, setTables] = useState<TableData[]>([]);
+  const [tables, setTables] = useState<TableData[]>(STATIC_FALLBACK_TABLES);
   const [activeTab, setActiveTab] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState<string>(" ");
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [selectedDiagnostic, setSelectedDiagnostic] = useState<GCodeDiagnosticError | null>(null);
 
   // Advanced CNC G-code diagnostics
@@ -564,21 +564,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const activeDiagnostics = getGCodeDiagnostics();
 
   // Library & Chat States
-  const [activeMode, setActiveMode] = useState<"tables" | "library" | "senai-book">("senai-book");
+  const [activeMode, setActiveMode] = useState<"tables" | "senai-book">("tables");
   const [bookSearchQuery, setBookSearchQuery] = useState<string>("");
   const [selectedTopicId, setSelectedTopicId] = useState<string>("head");
-  const [manuals, setManuals] = useState<ManualFile[]>(PRELOADED_MANUALS);
-  const [selectedManualId, setSelectedManualId] = useState<string>("m1");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      sender: "ia",
-      text: "Olá! Sou o **Torno Master IA**. \n\nSelecione um dos manuais técnicos ao lado como referência. Posso responder qualquer dúvida técnica, decodificar ciclos (como G71, G75, G76), ajudar a corrigir erros nos seus programas e ensinar as sintaxes corretas baseadas nos manuais e PDFs de engenharia!\n\n*Como posso ajudar você hoje?*",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]);
-  const [userPrompt, setUserPrompt] = useState<string>("");
-  const [chatLoading, setChatLoading] = useState<boolean>(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Calculator states
   const [calcType, setCalcType] = useState<"rpm" | "feed" | "thread">("rpm");
@@ -613,28 +601,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [outputThreadHeight, setOutputThreadHeight] = useState<number>(0);
   const [outputThreadRoot, setOutputThreadRoot] = useState<number>(0);
 
-  // Auto-scroll chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages, chatLoading]);
-
   // Fetch tables on mount
   useEffect(() => {
     setSearchQuery("");
-    fetch("/api/tables")
-      .then((res) => {
-        if (!res.ok) throw new Error();
-        return res.json();
-      })
-      .then((data) => {
-        setTables(data);
-        setLoading(false);
-      })
-      .catch(() => {
-        // Fallback static data if backend offline
-        setTables(STATIC_FALLBACK_TABLES);
-        setLoading(false);
-      });
   }, []);
 
   // Compute RPM
@@ -782,85 +751,6 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     setTimeout(() => setCopiedText(false), 2000);
   };
 
-  const handleUploadManual = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const file = files[0];
-    const extension = file.name.split(".").pop()?.toLowerCase();
-    const type = ["pdf", "ppt", "pptx", "doc", "docx", "txt"].includes(extension || "")
-      ? (extension?.startsWith("ppt") ? "ppt" : (extension?.startsWith("doc") ? "docx" : (extension === "pdf" ? "pdf" : "txt"))) as any
-      : "pdf";
-
-    const newManual: ManualFile = {
-      id: "uploaded-" + Date.now(),
-      name: file.name,
-      type: type,
-      size: (file.size / (1024 * 1024)).toFixed(1) + " MB",
-      source: "Upload Manual",
-      summary: `Manual técnico carregado pelo usuário: ${file.name}. Contém informações de usinagem, parâmetros, códigos G e ciclos específicos.`
-    };
-
-    setManuals(prev => [...prev, newManual]);
-    setSelectedManualId(newManual.id);
-  };
-
-  const handleSendChatMessage = (textToSend?: string) => {
-    const promptText = textToSend || userPrompt;
-    if (!promptText.trim()) return;
-
-    if (!textToSend) {
-      setUserPrompt("");
-    }
-
-    // Add user message
-    const newMsg: ChatMessage = {
-      sender: "user",
-      text: promptText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    setChatMessages(prev => [...prev, newMsg]);
-    setChatLoading(true);
-
-    const activeManual = manuals.find(m => m.id === selectedManualId);
-    const documentContext = activeManual ? `${activeManual.name} (Resumo Técnico: ${activeManual.summary})` : "";
-
-    fetch("/api/gemini/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: promptText,
-        documentContext: documentContext,
-        activeGCode: activeGCode || ""
-      })
-    })
-      .then(res => res.json())
-      .then(data => {
-        setChatLoading(false);
-        if (data.sucesso) {
-          setChatMessages(prev => [...prev, {
-            sender: "ia",
-            text: data.text,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }]);
-        } else {
-          setChatMessages(prev => [...prev, {
-            sender: "ia",
-            text: `⚠️ Erro na resposta: ${data.msg || "Erro desconhecido."}\n\n*Dica: Certifique-se de configurar a chave GEMINI_API_KEY no painel de Secrets.*`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }]);
-        }
-      })
-      .catch(() => {
-        setChatLoading(false);
-        setChatMessages(prev => [...prev, {
-          sender: "ia",
-          text: `⚠️ Erro de rede ou servidor ao conectar com o serviço de IA. Use o token de demonstração correto ou verifique o log do servidor.`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }]);
-      });
-  };
-
   const activeTable = tables[activeTab];
 
   return (
@@ -959,42 +849,6 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
           {/* Left Sidebar Menu */}
           <div className="w-64 border-r border-zinc-800 bg-[#16161c] p-4 overflow-y-auto flex flex-col gap-4">
             
-            {/* Manuais & Consultas */}
-            <div>
-              <h4 className="text-xs font-bold text-cyan-400 tracking-wider mb-2 uppercase flex items-center gap-1.5">
-                <BookOpen className="w-3.5 h-3.5" />
-                Manuais & Consultas
-              </h4>
-              <div className="flex flex-col gap-1.5">
-                <button
-                  onClick={() => {
-                    setActiveMode("senai-book");
-                    setBookSearchQuery("");
-                    setSelectedTopicId("head");
-                  }}
-                  className={`w-full text-left text-xs p-2.5 rounded-lg border transition font-bold flex items-center gap-2 ${
-                    activeMode === "senai-book"
-                      ? "bg-[#00f3ff]/10 text-[#00f3ff] border-[#00f3ff]/40 shadow-sm font-black"
-                      : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  📖 Livro de Consulta SENAI
-                </button>
-                <button
-                  onClick={() => {
-                    setActiveMode("library");
-                  }}
-                  className={`w-full text-left text-xs p-2.5 rounded-lg border transition font-bold flex items-center gap-2 ${
-                    activeMode === "library"
-                      ? "bg-purple-950/20 text-purple-400 border-purple-500/30 font-black"
-                      : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  💬 Conversar com a IA
-                </button>
-              </div>
-            </div>
-
             {/* References list */}
             <div>
               <h4 className="text-xs font-bold text-zinc-500 tracking-wider mb-2 uppercase">
@@ -1110,6 +964,28 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                 >
                   <Hexagon className="w-3.5 h-3.5 text-[#00f3ff]" />
                   Calculadora Polígono (G12.1)
+                </button>
+              </div>
+            </div>
+
+            {/* Guia de Programação */}
+            <div>
+              <h4 className="text-xs font-bold text-zinc-500 tracking-wider mb-2 uppercase">
+                Guia de Programação
+              </h4>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  onClick={() => {
+                    setActiveMode("senai-book");
+                  }}
+                  className={`text-left text-xs p-2.5 rounded-lg border transition font-medium flex items-center gap-2 ${
+                    activeMode === "senai-book"
+                      ? "bg-cyan-950/20 text-cyan-400 border-cyan-400/40 font-bold"
+                      : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Livro de Consulta SENAI
                 </button>
               </div>
             </div>
@@ -1763,170 +1639,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                   )}
                 </div>
               </>
-            ) : (
-              /* PDF & PowerPoint Document Library View */
-              <div className="flex-1 flex flex-col md:flex-row gap-4 overflow-hidden h-full">
-                
-                {/* Left Column: List of manuals and folder instructions */}
-                <div className="w-full md:w-[280px] shrink-0 flex flex-col gap-3 h-full overflow-y-auto">
-                  {/* Instructions on where to place actual files */}
-                  <div className="bg-[#1e1e24]/70 p-3.5 rounded-xl border border-dashed border-zinc-700 text-[11px] text-zinc-400">
-                    <h5 className="font-bold text-[#00f3ff] uppercase text-[10px] tracking-wider mb-1 flex items-center gap-1">
-                      <span>📁 Onde Colocar Seus Arquivos?</span>
-                    </h5>
-                    <p className="leading-relaxed">
-                      Para que seus manuais e apresentações em <strong className="text-white">PDF</strong> ou <strong className="text-white">PowerPoint (.pptx)</strong> fiquem salvos permanentemente na base de conhecimento, coloque os arquivos na pasta do projeto:
-                    </p>
-                    <div className="bg-[#0c0c0f] p-1.5 rounded font-mono text-[9px] text-emerald-400 my-1.5 border border-zinc-800 break-all select-all">
-                      /public/manuais/
-                    </div>
-                    <p className="leading-relaxed">
-                      Eles serão indexados de forma definitiva e lidos pelo assistente de Inteligência Artificial para conferência e validação de ciclos de torneamento.
-                    </p>
-                  </div>
-
-                  {/* Manual selector */}
-                  <div className="bg-[#131318] p-3 rounded-xl border border-zinc-800 flex flex-col gap-2 flex-1">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
-                        Biblioteca Ativa ({manuals.length})
-                      </span>
-                      <label className="text-[10px] font-semibold text-[#00f3ff] hover:text-cyan-300 cursor-pointer flex items-center gap-1">
-                        <UploadCloud className="w-3.5 h-3.5" />
-                        Carregar Novo
-                        <input
-                          type="file"
-                          accept=".pdf,.ppt,.pptx,.doc,.docx,.txt"
-                          className="hidden"
-                          onChange={handleUploadManual}
-                        />
-                      </label>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5 overflow-y-auto max-h-[160px] md:max-h-none flex-1">
-                      {manuals.map(m => (
-                        <button
-                          key={m.id}
-                          onClick={() => setSelectedManualId(m.id)}
-                          className={`text-left p-2.5 rounded-lg border text-[11px] transition flex flex-col gap-1 relative overflow-hidden group ${
-                            selectedManualId === m.id
-                              ? "bg-cyan-950/25 border-cyan-400/50 text-zinc-100"
-                              : "bg-[#1e1e24] border-zinc-800/80 text-zinc-400 hover:text-zinc-200"
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 font-semibold">
-                            <FileText className={`w-3.5 h-3.5 shrink-0 ${selectedManualId === m.id ? "text-[#00f3ff]" : "text-zinc-500"}`} />
-                            <span className="truncate pr-4">{m.name}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-[9px] text-zinc-500 font-mono mt-0.5">
-                            <span>{m.size}</span>
-                            <span className="bg-zinc-800 px-1 rounded text-zinc-400">{m.source}</span>
-                          </div>
-                          {m.source !== "Pré-carregado" && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setManuals(prev => prev.filter(x => x.id !== m.id));
-                                if (selectedManualId === m.id) setSelectedManualId("m1");
-                              }}
-                              className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 hover:bg-zinc-800 rounded transition text-red-400 hover:text-red-300"
-                              title="Remover documento"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Column: AI Manual Copilot Console */}
-                <div className="flex-1 flex flex-col bg-[#131318] border border-zinc-800 rounded-xl overflow-hidden h-full">
-                  {/* Chat header */}
-                  <div className="bg-[#1b1b21] px-4 py-2 border-b border-zinc-800 flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-2 w-2 rounded-full bg-[#39ff14] animate-pulse" />
-                      <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                        Assistente Técnico de Ciclos IA (Torno Master)
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono text-zinc-500 truncate max-w-[200px]">
-                      Lendo: {manuals.find(m => m.id === selectedManualId)?.name}
-                    </span>
-                  </div>
-
-                  {/* Messages log */}
-                  <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 font-mono text-xs min-h-0">
-                    {chatMessages.map((msg, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex flex-col max-w-[90%] rounded-xl p-3 leading-relaxed whitespace-pre-wrap ${
-                          msg.sender === "user"
-                            ? "bg-cyan-950/20 border border-cyan-800/40 text-zinc-100 self-end ml-12"
-                            : "bg-zinc-900 border border-zinc-800 text-zinc-300 self-start mr-12"
-                        }`}
-                      >
-                        <div className="text-[9px] text-zinc-500 font-bold mb-1 uppercase tracking-wider">
-                          {msg.sender === "user" ? "👤 Operador CNC" : "🤖 Torno Master IA"} • {msg.timestamp}
-                        </div>
-                        <div className="text-[11px] leading-relaxed select-text">{msg.text}</div>
-                      </div>
-                    ))}
-                    {chatLoading && (
-                      <div className="bg-zinc-900 border border-zinc-800 text-zinc-400 self-start mr-12 rounded-xl p-3 flex items-center gap-2 animate-pulse">
-                        <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce delay-75" />
-                        <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce delay-150" />
-                        <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-400 animate-bounce delay-300" />
-                        <span className="text-[10px]">Torno Master IA decodificando manuais...</span>
-                      </div>
-                    )}
-                    <div ref={chatEndRef} />
-                  </div>
-
-                  {/* Quick-select prompts */}
-                  <div className="px-4 py-2 border-t border-zinc-900/60 flex flex-wrap gap-1.5 bg-[#0b0b0f] select-none">
-                    {[
-                      { label: "❓ Ciclo G76", text: "Como programar o ciclo de roscagem múltipla G76 com o manual selecionado?" },
-                      { label: "❓ Erros G71", text: "Quais os erros mais comuns na furação interna com G71?" },
-                      { label: "❓ Parâmetros AISI 1045", text: "Quais velocidades de corte recomendadas para desbaste de AISI 1045?" }
-                    ].map((s, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => handleSendChatMessage(s.text)}
-                        className="text-[10px] bg-zinc-800 hover:bg-zinc-700 border border-zinc-800 text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded transition"
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Input form */}
-                  <div className="p-3 bg-[#17171e] border-t border-zinc-800 flex gap-2">
-                    <textarea
-                      value={userPrompt}
-                      onChange={(e) => setUserPrompt(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendChatMessage();
-                        }
-                      }}
-                      placeholder="Digite sua dúvida de G-Code ou ciclos técnicos... Ex: Como usar o G75 pica-pau?"
-                      className="flex-1 bg-[#0b0b0d] border border-zinc-800 focus:border-cyan-500 rounded-lg p-2 text-[11px] text-zinc-100 placeholder-zinc-600 outline-none resize-none h-11"
-                    />
-                    <button
-                      onClick={() => handleSendChatMessage()}
-                      disabled={!userPrompt.trim() || chatLoading}
-                      className="bg-[#00f3ff] hover:bg-[#00f3ff]/90 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-950 font-bold px-4 rounded-lg transition flex items-center justify-center text-xs"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

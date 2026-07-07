@@ -20,6 +20,10 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
   const [diaInput, setDiaInput] = useState<number>(50);
   const [rpmInput, setRpmInput] = useState<number>(1145);
 
+  const [vcInputStr, setVcInputStr] = useState<string>("180");
+  const [diaInputStr, setDiaInputStr] = useState<string>("50");
+  const [rpmInputStr, setRpmInputStr] = useState<string>("1145");
+
   // Outputs
   const [resultRpm, setResultRpm] = useState<number>(0);
   const [resultVc, setResultVc] = useState<number>(0);
@@ -31,12 +35,44 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
       setVcInput(0);
       setDiaInput(0);
       setRpmInput(0);
-      setG50Limit(0);
+      setVcInputStr("");
+      setDiaInputStr("");
+      setRpmInputStr("");
     }
   };
 
-  // Spindle maximum clamp speed limit (G50 / G92 S)
-  const [g50Limit, setG50Limit] = useState<number>(3000);
+  const handleVcChange = (valStr: string) => {
+    setVcInputStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setVcInput(parsed);
+    } else {
+      setVcInput(0);
+    }
+  };
+
+  const handleDiaChange = (valStr: string) => {
+    setDiaInputStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setDiaInput(parsed);
+    } else {
+      setDiaInput(0);
+    }
+  };
+
+  const handleRpmChange = (valStr: string) => {
+    setRpmInputStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      setRpmInput(parsed);
+    } else {
+      setRpmInput(0);
+    }
+  };
 
   // Recalculate values
   useEffect(() => {
@@ -75,7 +111,6 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
 
     let lines: string[] = [];
     lines.push(`; CALCULADORA RPM: Ø ${d}mm | Vc ${vc}m/min`);
-    lines.push(`G50 S${g50Limit}; (Limitar rotação máxima do cabeçote em ${g50Limit} RPM)`);
     if (mode === "calc_rpm") {
       lines.push(`G96 S${vc} M03; (Ativar velocidade de corte constante Vc = ${vc} m/min)`);
     } else {
@@ -138,9 +173,10 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
                   <span className="text-[10px] font-mono text-cyan-400 font-bold">{diaInput} mm</span>
                 </div>
                 <input
-                  type="number"
-                  value={diaInput}
-                  onChange={(e) => setDiaInput(Math.max(1, parseFloat(e.target.value) || 0))}
+                  type="text"
+                  value={diaInputStr}
+                  onChange={(e) => handleDiaChange(e.target.value)}
+                  placeholder="Ex: 50"
                   className="w-full bg-[#121216] border border-zinc-800 focus:border-emerald-400 rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                 />
               </div>
@@ -153,9 +189,10 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
                     <span className="text-[10px] font-mono text-amber-400 font-bold">{vcInput} m/min</span>
                   </div>
                   <input
-                    type="number"
-                    value={vcInput}
-                    onChange={(e) => setVcInput(Math.max(1, parseFloat(e.target.value) || 0))}
+                    type="text"
+                    value={vcInputStr}
+                    onChange={(e) => handleVcChange(e.target.value)}
+                    placeholder="Ex: 180"
                     className="w-full bg-[#121216] border border-zinc-800 focus:border-emerald-400 rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                   />
                 </div>
@@ -166,27 +203,14 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
                     <span className="text-[10px] font-mono text-emerald-400 font-bold">{rpmInput} RPM</span>
                   </div>
                   <input
-                    type="number"
-                    value={rpmInput}
-                    onChange={(e) => setRpmInput(Math.max(1, parseFloat(e.target.value) || 0))}
+                    type="text"
+                    value={rpmInputStr}
+                    onChange={(e) => handleRpmChange(e.target.value)}
+                    placeholder="Ex: 1100"
                     className="w-full bg-[#121216] border border-zinc-800 focus:border-emerald-400 rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
                   />
                 </div>
               )}
-
-              {/* G50 Spindle Clamp speed limit */}
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-mono uppercase text-zinc-400">Rotação Máxima do Spindle (G50 Limit)</span>
-                  <span className="text-[10px] font-mono text-red-400 font-bold">{g50Limit} RPM</span>
-                </div>
-                <input
-                  type="number"
-                  value={g50Limit}
-                  onChange={(e) => setG50Limit(Math.max(100, parseInt(e.target.value) || 3000))}
-                  className="w-full bg-[#121216] border border-zinc-800 focus:border-emerald-400 rounded-lg px-3 py-2 text-sm font-mono outline-none transition"
-                />
-              </div>
             </div>
 
             {/* Calculations results block */}

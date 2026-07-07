@@ -42,6 +42,7 @@ import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
+import { localLogin, localRegister } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -100,12 +101,29 @@ export default function App() {
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [isHighContrast, setIsHighContrast] = useState<boolean>(false);
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
-  const [editorTexts, setEditorTexts] = useState<string[]>([
-    CNC_TEMPLATES[0].code, // Eixo Completo G71/G75/G76
-    CNC_TEMPLATES[2].code, // Desbaste Interno Boring G71
-    CNC_TEMPLATES[4].code, // Rosca G76 M30x2.0
-  ]);
+  const [editorTexts, setEditorTexts] = useState<string[]>(() => {
+    const saved = localStorage.getItem("cnc_autoSaveTexts");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 3) {
+          return parsed;
+        }
+      } catch (e) {
+        // Fallback
+      }
+    }
+    return [
+      CNC_TEMPLATES[0].code, // Eixo Completo G71/G75/G76
+      CNC_TEMPLATES[2].code, // Desbaste Interno Boring G71
+      CNC_TEMPLATES[4].code, // Rosca G76 M30x2.0
+    ];
+  });
   const [activeLine, setActiveLine] = useState<number>(0);
+  const [isAutoSaveActive, setIsAutoSaveActive] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_autoSaveActive") === "true";
+  });
+  const [lastAutoSaveTime, setLastAutoSaveTime] = useState<string>("");
 
   // Modals
   const [showAssistant, setShowAssistant] = useState<boolean>(false);
@@ -124,7 +142,7 @@ export default function App() {
   const [simMode, setSimMode] = useState<"tv" | "fixed" | "off">("tv");
   const [showLibraries, setShowLibraries] = useState<boolean>(false);
   const [hasTut, setHasTut] = useState<boolean>(false);
-  const [fileHandles, setFileHandles] = useState<any[]>([null, null, null]);
+  const [fileNames, setFileNames] = useState<string[]>(["", "", ""]);
   const [simPos, setSimPos] = useState({ x: 700, y: 140 });
   const [isDraggingSim, setIsDraggingSim] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -224,73 +242,45 @@ export default function App() {
     }
   };
 
-  // Perform backend login (Email/Password or Token)
+  // Perform local login (Email/Password or Token)
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setLoading(true);
     setLoginError("");
 
-    const payload: any = { sessionId: SESSION_ID };
+    let res;
     if (authMode === "token") {
       if (!tokenInput.trim()) {
         setLoginError("Por favor, digite seu token de acesso.");
         setLoading(false);
         return;
       }
-      payload.token = tokenInput.trim();
+      res = localLogin(tokenInput.trim());
     } else {
       if (!loginEmail.trim() || !loginPassword.trim()) {
         setLoginError("E-mail e senha são obrigatórios.");
         setLoading(false);
         return;
       }
-      payload.email = loginEmail.trim();
-      payload.password = loginPassword.trim();
+      res = localLogin(undefined, loginEmail.trim(), loginPassword.trim());
     }
 
-    fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then(err => { throw new Error(err.msg || "Erro ao autenticar") });
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setLoading(false);
-        if (data.sucesso) {
-          setToken(data.token);
-          setClientName(data.clientName);
-          setSupportPhone(data.supportPhone);
-          setSubscriptionType(data.subscriptionType || "demo");
-          setDaysLeft(data.daysLeft !== undefined ? data.daysLeft : null);
-          setIsAdmin(data.isAdmin || false);
-          setIsAuthenticated(true);
-          setOnlineSessionCount(data.activeSessions || 1);
-        } else {
-          setLoginError(data.msg);
-        }
-      })
-      .catch((err) => {
-        setLoading(false);
-        // Fallback for token input offline mode
-        if (authMode === "token" && tokenInput.toUpperCase().startsWith("CNC")) {
-          setToken(tokenInput);
-          setClientName("Operador Demonstrativo (Offline)");
-          setSubscriptionType("demo");
-          setDaysLeft(30);
-          setIsAdmin(false);
-          setIsAuthenticated(true);
-        } else {
-          setLoginError(err.message || "Erro na conexão com o servidor.");
-        }
-      });
+    setLoading(false);
+    if (res.sucesso) {
+      setToken(res.token || "");
+      setClientName(res.clientName || "");
+      setSupportPhone(res.supportPhone || "");
+      setSubscriptionType(res.subscriptionType || "demo");
+      setDaysLeft(res.daysLeft !== undefined ? res.daysLeft : null);
+      setIsAdmin(res.isAdmin || false);
+      setIsAuthenticated(true);
+      setOnlineSessionCount(1);
+    } else {
+      setLoginError(res.msg);
+    }
   };
 
-  // Perform backend user registration
+  // Perform local user registration
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     if (!regName.trim() || !regEmail.trim() || !regPassword.trim()) {
@@ -301,80 +291,84 @@ export default function App() {
     setLoading(true);
     setLoginError("");
 
-    fetch("/api/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: regName.trim(),
-        email: regEmail.trim(),
-        password: regPassword.trim(),
-      }),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then(err => { throw new Error(err.msg || "Erro ao registrar usuário") });
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setLoading(false);
-        if (data.sucesso) {
-          setToken(data.token);
-          setClientName(data.clientName);
-          setSupportPhone(data.supportPhone);
-          setSubscriptionType(data.subscriptionType || "demo");
-          setDaysLeft(30);
-          setIsAdmin(data.isAdmin || false);
-          setIsAuthenticated(true);
-          setOnlineSessionCount(1);
-          alert("🎉 Cadastro realizado com sucesso! Sua versão Demo de 30 dias grátis foi ativada!");
-        } else {
-          setLoginError(data.msg);
-        }
-      })
-      .catch((err) => {
-        setLoading(false);
-        setLoginError(err.message || "Erro na conexão com o servidor.");
-      });
+    const res = localRegister(regName.trim(), regEmail.trim(), regPassword.trim());
+
+    setLoading(false);
+    if (res.sucesso) {
+      setToken(res.token || "");
+      setClientName(res.clientName || "");
+      setSupportPhone(res.supportPhone || "");
+      setSubscriptionType(res.subscriptionType || "demo");
+      setDaysLeft(res.daysLeft !== undefined ? res.daysLeft : 30);
+      setIsAdmin(res.isAdmin || false);
+      setIsAuthenticated(true);
+      setOnlineSessionCount(1);
+      alert("🎉 Cadastro realizado com sucesso! Sua versão Demo de 30 dias grátis foi ativada!");
+    } else {
+      setLoginError(res.msg);
+    }
   };
 
-  // Monitor Keepalive (antifraud tracker)
+  // Monitor Keepalive (local and silent)
   useEffect(() => {
     if (!isAuthenticated || !token) return;
 
+    setOnlineSessionCount(1);
+    setHasFraudWarning(false);
+  }, [isAuthenticated, token]);
+
+  // Keep ref of latest editor texts for stable auto-save interval
+  const editorTextsRef = useRef<string[]>(editorTexts);
+  useEffect(() => {
+    editorTextsRef.current = editorTexts;
+  }, [editorTexts]);
+
+  // Auto-save timer effect (every 40 seconds)
+  useEffect(() => {
+    if (!isAutoSaveActive) return;
+
     const interval = setInterval(() => {
-      fetch("/api/keepalive", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, sessionId: SESSION_ID }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.sucesso) {
-            setOnlineSessionCount(data.activeSessions);
-            if (data.activeSessions > 1) {
-              setHasFraudWarning(true);
-            } else {
-              setHasFraudWarning(false);
-            }
-          }
-        })
-        .catch(() => {
-          // Ignore network glitch offline
-        });
-    }, 25000); // Check every 25 seconds
+      const currentTexts = editorTextsRef.current;
+      const hasContent = currentTexts.some((text) => text && text.trim().length > 0);
+      if (hasContent) {
+        localStorage.setItem("cnc_autoSaveTexts", JSON.stringify(currentTexts));
+        const now = new Date();
+        setLastAutoSaveTime(
+          now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " (Backup Local)"
+        );
+      }
+    }, 40000);
 
     return () => clearInterval(interval);
-  }, [isAuthenticated, token]);
+  }, [isAutoSaveActive]);
+
+  const handleToggleAutoSave = (checked: boolean) => {
+    setIsAutoSaveActive(checked);
+    localStorage.setItem("cnc_autoSaveActive", String(checked));
+    if (checked) {
+      const currentTexts = editorTextsRef.current;
+      const hasContent = currentTexts.some((text) => text && text.trim().length > 0);
+      if (hasContent) {
+        localStorage.setItem("cnc_autoSaveTexts", JSON.stringify(currentTexts));
+        const now = new Date();
+        setLastAutoSaveTime(
+          now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " (Backup Local)"
+        );
+      }
+    }
+  };
 
   const handleSaveLocal = () => {
     const code = editorTexts[activePaneIdx];
-    if (!code) return;
+    if (code === undefined) return;
+
+    // Classic Fallback
     const blob = new Blob([code], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `PROG_CNC_ED${activePaneIdx + 1}.nc`;
+    const name = fileNames[activePaneIdx] || `PROG_CNC_ED${activePaneIdx + 1}.nc`;
+    link.download = name;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -392,6 +386,11 @@ export default function App() {
       const text = event.target?.result as string;
       if (text) {
         updateEditorText(text, activePaneIdx);
+        setFileNames((prev) => {
+          const updated = [...prev];
+          updated[activePaneIdx] = file.name;
+          return updated;
+        });
       }
     };
     reader.readAsText(file);
@@ -712,7 +711,7 @@ export default function App() {
                 className="bg-cyan-950/20 hover:bg-cyan-950/40 border border-[#00f3ff]/40 text-[#00f3ff] text-xs font-bold py-2 px-3.5 rounded-lg transition flex items-center gap-2 shadow"
               >
                 <Wrench className="w-4 h-4" />
-                Programador Virtual
+                Programador Virtual & Tabelas
               </button>
 
               {isAdmin && token === "CNC-MASTER-2026" && (
@@ -912,6 +911,7 @@ export default function App() {
                   isActive={activePaneIdx === idx}
                   onSetFocus={() => setActivePaneIdx(idx)}
                   isHighContrast={isHighContrast}
+                  fileName={fileNames[idx]}
                 />
               ))}
             </div>
@@ -984,7 +984,7 @@ export default function App() {
           {showAssistant && (
             <FloatingWindow
               id="assistant"
-              title="Programador Virtual - Torno Master"
+              title="Programador Virtual & Tabelas - Torno Master"
               onClose={() => setShowAssistant(false)}
               activeWindowId={activeWindowId}
               onFocus={setActiveWindowId}

@@ -276,7 +276,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
         if (cmd.mode === 2 || cmd.mode === 3) {
           plotList.push({
-            type: "arc", x1: cx, z1: cz, x2: tx, z2: tz, radius: cmd.r || 5, isG3: cmd.mode === 3,
+            type: "arc", x1: cx, z1: cz, x2: tx, z2: tz, radius: cmd.r || 5, isG3: simInvertZ ? (cmd.mode === 2) : (cmd.mode === 3),
             color: forceColor || "#00f3ff", linhaId: cmd.linhaOriginal + idOffset,
           });
         } else {
