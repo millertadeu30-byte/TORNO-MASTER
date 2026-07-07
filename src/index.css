@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Space Grotesk", sans-serif;
+}
+
+/* Custom glow effects for Master CNC theme */
+.neon-glow-blue {
+  box-shadow: 0 0 15px rgba(0, 243, 255, 0.25);
+  border-color: #00f3ff;
+}
+
+.neon-glow-green {
+  box-shadow: 0 0 15px rgba(57, 255, 20, 0.25);
+  border-color: #39ff14;
+}
+
+.neon-glow-orange {
+  box-shadow: 0 0 15px rgba(255, 94, 0, 0.25);
+  border-color: #ff5e00;
+}
+
+/* Scrollbar styling for high-tech editor look */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d0d11;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1f1f29;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a38;
+}
+
+textarea::selection {
+  background-color: rgba(0, 243, 255, 0.3) !important;
+  color: transparent !important;
+}

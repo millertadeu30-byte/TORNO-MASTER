@@ -1,0 +1,6 @@
+{
+  "name": "Torno Master",
+  "description": "Ambiente completo de programação de tornos CNC com simulador 2D interativo, suporte a ciclos de desbaste G71, canais G75, furação e canal facial G74, roscas G76 e assistente de usinagem.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

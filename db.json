@@ -1,0 +1,39 @@
+{
+  "clients": [
+    {
+      "name": "Suporte Técnico",
+      "token": "CNC-MASTER-2026",
+      "expirationDate": "2030-12-31",
+      "supportPhone": "(18) 99999-9999",
+      "subscriptionType": "semestral"
+    },
+    {
+      "name": "Licença Demonstração",
+      "email": "demo@demo.com",
+      "password": "demo",
+      "token": "CNC-TRIAL-FREE",
+      "expirationDate": "2026-10-30",
+      "supportPhone": "(18) 99999-8888",
+      "subscriptionType": "demo"
+    },
+    {
+      "name": "Cliente Licença Expirada",
+      "email": "expirado@demo.com",
+      "password": "demo",
+      "token": "CNC-EXPIRADO",
+      "expirationDate": "2025-01-01",
+      "supportPhone": "(18) 99999-7777",
+      "subscriptionType": "demo"
+    },
+    {
+      "name": "Acesso Vitalício",
+      "email": "vitalicio@demo.com",
+      "password": "demo",
+      "token": "CNC-LIFETIME",
+      "expirationDate": null,
+      "supportPhone": "(18) 99999-6666",
+      "subscriptionType": "semestral"
+    }
+  ],
+  "supportPhone": "(18) 99999-5555"
+}
