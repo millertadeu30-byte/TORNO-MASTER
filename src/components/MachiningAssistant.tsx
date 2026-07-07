@@ -251,6 +251,14 @@ export const SENAI_MANUAL_TOPICS: SenaiTopic[] = [
   }
 ];
 
+const parseLocaleFloat = (val: string | number | undefined | null): number => {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === "number") return val;
+  const normalized = val.toString().replace(",", ".");
+  const parsed = parseFloat(normalized);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
 export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   onClose,
   onInsertCode,
@@ -608,8 +616,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   // Compute RPM
   useEffect(() => {
-    const vc = parseFloat(calcVc) || 0;
-    const dia = parseFloat(calcDia) || 0;
+    const vc = parseLocaleFloat(calcVc);
+    const dia = parseLocaleFloat(calcDia);
     if (vc > 0 && dia > 0) {
       const rpm = Math.round((vc * 1000) / (Math.PI * dia));
       setOutputRpm(rpm);
@@ -620,8 +628,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   // Compute Feed Speed
   useEffect(() => {
-    const f = parseFloat(calcFeed) || 0;
-    const rpm = parseFloat(calcRpm) || 0;
+    const f = parseLocaleFloat(calcFeed);
+    const rpm = parseLocaleFloat(calcRpm);
     if (f > 0 && rpm > 0) {
       setOutputVf(Math.round(f * rpm));
     } else {
@@ -631,8 +639,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   // Compute Thread Depth
   useEffect(() => {
-    const p = parseFloat(calcPitch) || 0;
-    const dia = parseFloat(calcDia) || 0;
+    const p = parseLocaleFloat(calcPitch);
+    const dia = parseLocaleFloat(calcDia);
     if (p > 0) {
       let multiplier = 0.65;
       if (threadProfile === "whitworth") {
@@ -659,8 +667,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   // Compute VC from RPM
   useEffect(() => {
-    const rpm = parseFloat(calcRpm) || 0;
-    const dia = parseFloat(calcDia) || 0;
+    const rpm = parseLocaleFloat(calcRpm);
+    const dia = parseLocaleFloat(calcDia);
     if (rpm > 0 && dia > 0) {
       const vc = Math.round((Math.PI * dia * rpm) / 1000);
       setOutputVc(vc);
@@ -670,10 +678,10 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   }, [calcRpm, calcDia]);
 
   const generateG76GCode = () => {
-    const pitch = parseFloat(calcPitch) || 0;
-    const dia = parseFloat(calcDia) || 0;
-    const z_start = parseFloat(zStart) || 0;
-    const z_end = parseFloat(zEnd) || 0;
+    const pitch = parseLocaleFloat(calcPitch);
+    const dia = parseLocaleFloat(calcDia);
+    const z_start = parseLocaleFloat(zStart);
+    const z_end = parseLocaleFloat(zEnd);
     
     if (pitch <= 0 || dia <= 0) return "; Insira dados válidos de Passo e Diâmetro";
 
@@ -1207,7 +1215,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                                 Vel. de Corte Vc (m/min)
                               </label>
                               <input
-                                type="number"
+                                type="text"
                                 value={calcVc}
                                 onChange={(e) => setCalcVc(e.target.value)}
                                 className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
@@ -1218,7 +1226,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                                 Diâmetro Ø da Peça (mm)
                               </label>
                               <input
-                                type="number"
+                                type="text"
                                 value={calcDia}
                                 onChange={(e) => setCalcDia(e.target.value)}
                                 className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
@@ -1254,7 +1262,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                                 Rotações N (RPM)
                               </label>
                               <input
-                                type="number"
+                                type="text"
                                 value={calcRpm}
                                 onChange={(e) => setCalcRpm(e.target.value)}
                                 className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
@@ -1265,7 +1273,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                                 Diâmetro Ø da Peça (mm)
                               </label>
                               <input
-                                type="number"
+                                type="text"
                                 value={calcDia}
                                 onChange={(e) => setCalcDia(e.target.value)}
                                 className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
@@ -1298,8 +1306,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           Avanço f (mm/rot)
                         </label>
                         <input
-                          type="number"
-                          step="0.01"
+                          type="text"
                           value={calcFeed}
                           onChange={(e) => setCalcFeed(e.target.value)}
                           className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400"
@@ -1310,7 +1317,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           Rotações N (RPM)
                         </label>
                         <input
-                          type="number"
+                          type="text"
                           value={calcRpm}
                           onChange={(e) => setCalcRpm(e.target.value)}
                           className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400"
@@ -1418,8 +1425,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             Passo P (mm)
                           </label>
                           <input
-                            type="number"
-                            step="0.05"
+                            type="text"
                             value={calcPitch}
                             onChange={(e) => setCalcPitch(e.target.value)}
                             className="w-full bg-[#0d0d11] text-zinc-100 px-2.5 py-1.5 rounded border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono"
@@ -1431,8 +1437,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             Diâmetro Nominal Ø (mm)
                           </label>
                           <input
-                            type="number"
-                            step="0.1"
+                            type="text"
                             value={calcDia}
                             onChange={(e) => setCalcDia(e.target.value)}
                             className="w-full bg-[#0d0d11] text-zinc-100 px-2.5 py-1.5 rounded border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono"
@@ -1444,8 +1449,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             Z Aproximação (Inicial)
                           </label>
                           <input
-                            type="number"
-                            step="0.5"
+                            type="text"
                             value={zStart}
                             onChange={(e) => setZStart(e.target.value)}
                             className="w-full bg-[#0d0d11] text-zinc-100 px-2.5 py-1.5 rounded border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono"
@@ -1457,8 +1461,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             Z Final da Rosca
                           </label>
                           <input
-                            type="number"
-                            step="0.5"
+                            type="text"
                             value={zEnd}
                             onChange={(e) => setZEnd(e.target.value)}
                             className="w-full bg-[#0d0d11] text-zinc-100 px-2.5 py-1.5 rounded border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono"
@@ -1534,8 +1537,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             Passe Acab. R (mm)
                           </label>
                           <input
-                            type="number"
-                            step="0.01"
+                            type="text"
                             value={g76_r_fin}
                             onChange={(e) => setG76_RFin(e.target.value)}
                             className="w-full bg-[#0d0d11] text-zinc-300 px-2.5 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400"

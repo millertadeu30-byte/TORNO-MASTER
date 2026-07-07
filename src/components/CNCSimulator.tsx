@@ -951,7 +951,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const mx = (x1 + x2) / 2;
       const my = (y1 + y2) / 2;
       const h = Math.sqrt(radius * radius - (dist / 2) * (dist / 2));
-      const nx = -dy / dist;
+      const nx = (-dy / dist) * zDirSign;
       const ny = dx / dist;
 
       // Center coords of the circle
