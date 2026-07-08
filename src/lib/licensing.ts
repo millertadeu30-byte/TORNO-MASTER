@@ -55,6 +55,12 @@ export function getClients(): ClientToken[] {
 export function saveClients(clients: ClientToken[]) {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(clients));
+    // Sincroniza com o servidor de forma assíncrona
+    fetch("/api/clients", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(clients)
+    }).catch(err => console.error("Erro ao sincronizar clientes com o servidor:", err));
   } catch (e) {
     console.error("Erro ao salvar clientes no localStorage", e);
   }
@@ -66,6 +72,42 @@ export function getGlobalSupportPhone(): string {
 
 export function saveGlobalSupportPhone(phone: string) {
   localStorage.setItem(SUPPORT_PHONE_KEY, phone);
+  // Sincroniza com o servidor de forma assíncrona
+  fetch("/api/support-phone", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ supportPhone: phone })
+  }).catch(err => console.error("Erro ao sincronizar telefone de suporte com o servidor:", err));
+}
+
+export async function syncLicensingWithServer(): Promise<boolean> {
+  let success = false;
+  try {
+    const res = await fetch("/api/clients");
+    if (res.ok) {
+      const serverClients = await res.json();
+      if (Array.isArray(serverClients) && serverClients.length > 0) {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(serverClients));
+        success = true;
+      }
+    }
+  } catch (err) {
+    console.error("Erro ao carregar clientes do servidor:", err);
+  }
+
+  try {
+    const res = await fetch("/api/support-phone");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.supportPhone) {
+        localStorage.setItem(SUPPORT_PHONE_KEY, data.supportPhone);
+      }
+    }
+  } catch (err) {
+    console.error("Erro ao carregar telefone de suporte do servidor:", err);
+  }
+
+  return success;
 }
 
 export interface AuthResponse {

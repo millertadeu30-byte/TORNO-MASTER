@@ -23,6 +23,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const [editEmail, setEditEmail] = useState<string>("");
   const [editPassword, setEditPassword] = useState<string>("");
   const [editToken, setEditToken] = useState<string>("");
+  const [originalToken, setOriginalToken] = useState<string>("");
   const [editExpDate, setEditExpDate] = useState<string>("");
   const [editSupport, setEditSupport] = useState<string>("");
   const [editSubscriptionType, setEditSubscriptionType] = useState<"demo" | "mensal" | "semestral">("demo");
@@ -76,7 +77,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     };
 
     let currentClients = getClients();
-    const existingIdx = currentClients.findIndex(c => c.token === editToken);
+    const existingIdx = originalToken 
+      ? currentClients.findIndex(c => c.token === originalToken)
+      : currentClients.findIndex(c => c.token === editToken);
 
     if (existingIdx !== -1) {
       currentClients[existingIdx] = clientData;
@@ -93,6 +96,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditEmail("");
     setEditPassword("");
     setEditToken("");
+    setOriginalToken("");
     setEditExpDate("");
     setEditSupport("");
     setEditSubscriptionType("demo");
@@ -121,6 +125,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditEmail(c.email || "");
     setEditPassword(c.password || "");
     setEditToken(c.token);
+    setOriginalToken(c.token);
     setEditExpDate(c.expirationDate || "");
     setEditSupport(c.supportPhone || globalSupport);
     setEditSubscriptionType(c.subscriptionType || "demo");
@@ -216,6 +221,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                   setEditEmail("");
                   setEditPassword("");
                   setEditToken(""); // Start empty so the admin can type their custom password/token
+                  setOriginalToken("");
                   setEditExpDate("");
                   setEditSupport(globalSupport);
                   setEditSubscriptionType("demo");

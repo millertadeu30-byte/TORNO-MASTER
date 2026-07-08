@@ -42,7 +42,7 @@ import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
-import { localLogin, localRegister } from "./lib/licensing";
+import { localLogin, localRegister, syncLicensingWithServer } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -146,6 +146,13 @@ export default function App() {
   const [simPos, setSimPos] = useState({ x: 700, y: 140 });
   const [isDraggingSim, setIsDraggingSim] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Sincronizar licenças com o banco de dados do servidor ao abrir o app
+  useEffect(() => {
+    syncLicensingWithServer().catch(err => {
+      console.error("Erro na sincronização inicial das licenças:", err);
+    });
+  }, []);
 
   // Initial positioning from viewport dimensions
   useEffect(() => {
