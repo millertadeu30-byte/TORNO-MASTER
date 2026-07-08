@@ -94,7 +94,9 @@ export async function saveLicensingToCloud(clients: ClientToken[], supportPhone?
     if (supportPhone) {
       payload.supportPhone = supportPhone;
     }
-    await setDoc(docRef, payload, { merge: true });
+    // Cleanly strip any undefined fields using JSON serialization/deserialization
+    const sanitizedPayload = JSON.parse(JSON.stringify(payload));
+    await setDoc(docRef, sanitizedPayload, { merge: true });
     return true;
   } catch (err) {
     console.error("Erro ao persistir licenças no Firebase Firestore:", err);
