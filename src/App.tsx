@@ -49,7 +49,7 @@ const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
 
 export default function App() {
   // Auth State
-  const [authMode, setAuthMode] = useState<"login" | "register" | "token">("login");
+  const [authMode, setAuthMode] = useState<"login" | "register" | "token">("token");
   const [regName, setRegName] = useState<string>("");
   const [regEmail, setRegEmail] = useState<string>("");
   const [regPassword, setRegPassword] = useState<string>("");
@@ -456,180 +456,43 @@ export default function App() {
               <h2 className="font-display font-black text-2xl tracking-tight text-white mb-1">
                 TORNO <span className="text-cyan-400">MASTER</span>
               </h2>
-              <p className="text-[11px] text-zinc-400 mb-5 max-w-xs mx-auto">
-                Cadastre-se para obter uma versão Demo de 30 dias grátis, ou faça login com seu e-mail e senha.
+              <p className="text-[11px] text-zinc-400 mb-6 max-w-xs mx-auto">
+                Insira sua Senha / Token de Acesso para liberar o sistema.
               </p>
 
-              {/* Navigation Tabs */}
-              <div className="flex border-b border-zinc-800 mb-5 text-xs">
+              <div className="flex flex-col gap-3 text-left">
+                <div className="relative">
+                  <span className="absolute left-3 top-3.5 text-zinc-500">
+                    <Lock className="w-4 h-4 text-cyan-400" />
+                  </span>
+                  <input
+                    type="password"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleLogin();
+                    }}
+                    placeholder="Sua Senha / Token"
+                    className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl font-mono text-center tracking-widest text-sm outline-none focus:border-cyan-400 transition"
+                    autoFocus
+                  />
+                </div>
+
                 <button
-                  type="button"
-                  onClick={() => { setAuthMode("login"); setLoginError(""); }}
-                  className={`flex-1 pb-2 font-bold border-b-2 transition-all ${
-                    authMode === "login"
-                      ? "text-cyan-400 border-cyan-400"
-                      : "text-zinc-500 border-transparent hover:text-zinc-300"
-                  }`}
+                  onClick={() => handleLogin()}
+                  disabled={loading}
+                  className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-1"
                 >
-                  Entrar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setAuthMode("register"); setLoginError(""); }}
-                  className={`flex-1 pb-2 font-bold border-b-2 transition-all ${
-                    authMode === "register"
-                      ? "text-cyan-400 border-cyan-400"
-                      : "text-zinc-500 border-transparent hover:text-zinc-300"
-                  }`}
-                >
-                  Cadastrar-se
+                  {loading ? (
+                    <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      Entrar no Sistema
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
-
-              {/* Form Content */}
-              {authMode === "login" && (
-                <form onSubmit={handleLogin} className="flex flex-col gap-3 text-left">
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <Mail className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="email"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="Seu E-mail"
-                      required
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <Lock className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="Sua Senha"
-                      required
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-1"
-                  >
-                    {loading ? (
-                      <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        Acessar Sistema
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </form>
-              )}
-
-              {authMode === "register" && (
-                <form onSubmit={handleRegister} className="flex flex-col gap-3 text-left">
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <User className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="text"
-                      value={regName}
-                      onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Nome Completo"
-                      required
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <Mail className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="email"
-                      value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="Seu melhor E-mail"
-                      required
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <Lock className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="password"
-                      value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
-                      placeholder="Crie uma Senha"
-                      required
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-
-                  <div className="text-[10px] text-zinc-400 bg-cyan-950/25 border border-cyan-500/15 p-3 rounded-lg leading-relaxed flex items-start gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0 mt-0.5" />
-                    <span>Ao se cadastrar, você ativa a versão <strong>Demo Grátis de 30 dias</strong>. Após o período, o plano mensal custa R$ 11,90 ou R$ 49,90 semestral.</span>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-1"
-                  >
-                    {loading ? (
-                      <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        Criar Conta e Ativar Demo
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </form>
-              )}
-
-              {authMode === "token" && (
-                <div className="flex flex-col gap-3 text-left">
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-zinc-500">
-                      <Lock className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="password"
-                      value={tokenInput}
-                      onChange={(e) => setTokenInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleLogin();
-                      }}
-                      placeholder="Token de Licença"
-                      className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-9 pr-4 py-2.5 rounded-xl font-mono text-center tracking-widest text-xs outline-none focus:border-cyan-400 transition"
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => handleLogin()}
-                    disabled={loading}
-                    className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    {loading ? (
-                      <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        Entrar com Token
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
 
               {/* Login Error Msg */}
               {loginError && (
@@ -670,16 +533,16 @@ export default function App() {
                   <span>|</span>
                   <span className="font-sans font-semibold text-zinc-200">{clientName}</span>
                   <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                    isAdmin || token === "CNC-MASTER-2026" ? 'bg-[#00f3ff]/25 text-[#00f3ff] border border-[#00f3ff]/30 font-black uppercase' :
+                    isAdmin ? 'bg-[#00f3ff]/25 text-[#00f3ff] border border-[#00f3ff]/30 font-black uppercase' :
                     subscriptionType === 'semestral' ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/30' :
                     subscriptionType === 'mensal' ? 'bg-amber-500/25 text-amber-300 border border-amber-500/30' :
                     'bg-zinc-800 text-zinc-400'
                   }`}>
-                    {isAdmin || token === "CNC-MASTER-2026" ? 'Administrador' :
+                    {isAdmin ? 'Administrador' :
                      subscriptionType === 'semestral' ? 'Semestral' :
                      subscriptionType === 'mensal' ? 'Mensal' : 'Demo'}
                   </span>
-                  {(isAdmin || token === "CNC-MASTER-2026") ? (
+                  {isAdmin ? (
                     <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/35">
                       Acesso Vitalício
                     </span>
@@ -714,7 +577,7 @@ export default function App() {
                 Programador Virtual & Tabelas
               </button>
 
-              {isAdmin && token === "CNC-MASTER-2026" && (
+              {isAdmin && (
                 <button
                   onClick={() => { setShowAdmin(true); setActiveWindowId("admin"); }}
                   className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 text-xs font-bold py-2 px-3 rounded-lg transition flex items-center gap-1.5"

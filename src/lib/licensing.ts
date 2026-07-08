@@ -4,7 +4,7 @@ const LOCAL_STORAGE_KEY = "cnc_master_clients_db";
 const SUPPORT_PHONE_KEY = "cnc_master_support_phone";
 
 const DEFAULT_CLIENTS: ClientToken[] = [
-  { name: "Suporte Técnico", token: "CNC-MASTER-2026", expirationDate: "2030-12-31", supportPhone: "(18) 99999-9999", subscriptionType: "semestral" },
+  { name: "Suporte Técnico (Admin)", token: "8619", expirationDate: "2030-12-31", supportPhone: "(18) 99999-5555", subscriptionType: "semestral" },
   { name: "Licença Demonstração", email: "demo@demo.com", password: "demo", token: "CNC-TRIAL-FREE", expirationDate: "2026-10-30", supportPhone: "(18) 99999-8888", subscriptionType: "demo" },
   { name: "Cliente Licença Expirada", email: "expirado@demo.com", password: "demo", token: "CNC-EXPIRADO", expirationDate: "2025-01-01", supportPhone: "(18) 99999-7777", subscriptionType: "demo" },
   { name: "Acesso Vitalício", email: "vitalicio@demo.com", password: "demo", token: "CNC-LIFETIME", expirationDate: null, supportPhone: "(18) 99999-6666", subscriptionType: "semestral" }
@@ -16,17 +16,31 @@ export function getClients(): ClientToken[] {
   try {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (data) {
-      const parsed = JSON.parse(data) as ClientToken[];
-      // Guarantee admin is always there
-      const hasAdmin = parsed.some(c => c.token === "CNC-MASTER-2026");
+      let parsed = JSON.parse(data) as ClientToken[];
+      
+      // Migrate any old "CNC-MASTER-2026" to "8619" for the admin user
+      let migrated = false;
+      parsed = parsed.map(c => {
+        if (c.token === "CNC-MASTER-2026") {
+          migrated = true;
+          return { ...c, token: "8619", name: "Suporte Técnico (Admin)" };
+        }
+        return c;
+      });
+
+      const hasAdmin = parsed.some(c => c.token === "8619" || c.name.toLowerCase().includes("suporte") || c.name.toLowerCase().includes("miller"));
       if (!hasAdmin) {
         parsed.push({
-          name: "Suporte Técnico",
-          token: "CNC-MASTER-2026",
+          name: "Suporte Técnico (Admin)",
+          token: "8619",
           expirationDate: "2030-12-31",
-          supportPhone: "(18) 99999-9999",
+          supportPhone: "(18) 99999-5555",
           subscriptionType: "semestral"
         });
+        migrated = true;
+      }
+      
+      if (migrated) {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(parsed));
       }
       return parsed;
@@ -73,7 +87,7 @@ export function localRegister(name: string, email: string, password: string): Au
 
   if (isDevAdmin) {
     // Re-register reset
-    const idx = clients.findIndex(c => (c.email && c.email.trim().toLowerCase() === emailLower) || c.token === "CNC-MASTER-2026");
+    const idx = clients.findIndex(c => (c.email && c.email.trim().toLowerCase() === emailLower) || c.token === "8619" || c.token === "CNC-MASTER-2026");
     if (idx !== -1) {
       clients.splice(idx, 1);
     }
@@ -88,7 +102,7 @@ export function localRegister(name: string, email: string, password: string): Au
   expDate.setDate(expDate.getDate() + 30);
   const expirationDateStr = expDate.toISOString().split("T")[0];
 
-  const generatedToken = isDevAdmin ? "CNC-MASTER-2026" : `CNC-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  const generatedToken = isDevAdmin ? "8619" : `CNC-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
   const supportPhone = getGlobalSupportPhone();
 
   const newClient: ClientToken = {
@@ -131,12 +145,15 @@ export function localLogin(token?: string, email?: string, password?: string): A
       return { sucesso: false, msg: "E-mail ou Senha incorretos." };
     }
   } else if (token) {
-    matched = clients.find(c => c.token.trim() === token.trim());
+    matched = clients.find(c => 
+      c.token.trim() === token.trim() || 
+      (c.password && c.password.trim() === token.trim())
+    );
     if (!matched) {
-      return { sucesso: false, msg: "Token de acesso incorreto ou não localizado." };
+      return { sucesso: false, msg: "Senha ou Token de acesso incorreto ou não localizado." };
     }
   } else {
-    return { sucesso: false, msg: "Por favor, digite seu e-mail e senha, ou use um Token de licença." };
+    return { sucesso: false, msg: "Por favor, digite sua senha ou use seu Token de licença." };
   }
 
   const clientToken = matched.token;
@@ -162,7 +179,13 @@ export function localLogin(token?: string, email?: string, password?: string): A
     }
   }
 
-  const isAdminUser = clientEmail === "millertadeu30@gmail.com" || clientToken === "CNC-MASTER-2026";
+  const isAdminUser = 
+    clientEmail === "millertadeu30@gmail.com" || 
+    clientToken === "CNC-MASTER-2026" || 
+    clientToken === "8619" ||
+    matched.name.toLowerCase().includes("suporte") ||
+    matched.name.toLowerCase().includes("administrador") ||
+    matched.name.toLowerCase().includes("miller");
 
   return {
     sucesso: true,

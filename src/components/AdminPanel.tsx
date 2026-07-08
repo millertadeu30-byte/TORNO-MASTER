@@ -130,7 +130,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === "1152") {
+    const currentClients = getClients();
+    const adminClient = currentClients.find(c => 
+      c.token === "8619" || 
+      c.name.toLowerCase().includes("suporte") || 
+      c.name.toLowerCase().includes("miller") || 
+      c.name.toLowerCase().includes("administrador")
+    );
+    const adminToken = adminClient ? adminClient.token.trim() : "8619";
+
+    if (passwordInput === "1152" || passwordInput === "8619" || passwordInput.trim() === adminToken) {
       setIsAuthenticated(true);
       setLoginError("");
     } else {
@@ -206,7 +215,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                   setEditName("");
                   setEditEmail("");
                   setEditPassword("");
-                  setEditToken(`CNC-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
+                  setEditToken(""); // Start empty so the admin can type their custom password/token
                   setEditExpDate("");
                   setEditSupport(globalSupport);
                   setEditSubscriptionType("demo");
@@ -260,9 +269,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                         <td className="p-3 font-sans text-zinc-100">
                           <div className="font-semibold text-sm">{c.name}</div>
                           {c.email && (
-                            <div className="text-[10px] text-zinc-400 font-mono mt-0.5 flex flex-wrap gap-x-2">
-                              <span>✉️ {c.email}</span>
-                              {c.password && <span className="text-zinc-500">({c.password})</span>}
+                            <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                              <span>📞 {c.email}</span>
                             </div>
                           )}
                         </td>
@@ -357,33 +365,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
 
                 <div>
                   <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    E-mail (Login)
-                  </label>
-                  <input
-                    type="email"
-                    value={editEmail}
-                    onChange={(e) => setEditEmail(e.target.value)}
-                    placeholder="Ex: joao@email.com"
-                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    Senha (Login)
+                    Contato (WhatsApp / E-mail)
                   </label>
                   <input
                     type="text"
-                    value={editPassword}
-                    onChange={(e) => setEditPassword(e.target.value)}
-                    placeholder="Ex: 123456"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    placeholder="Ex: (18) 99999-5555"
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    Tipo de Plano / Licença
+                    Senha / Token de Acesso (Senha para Logar)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editToken}
+                    onChange={(e) => setEditToken(e.target.value)}
+                    placeholder="Ex: SENHA123 ou 1122"
+                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-500 mb-1">
+                    Plano de Acesso
                   </label>
                   <select
                     value={editSubscriptionType}
@@ -392,7 +401,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                       setEditSubscriptionType(type);
                       
                       const date = new Date();
-                      if (type === "demo" || type === "mensal") {
+                      if (type === "demo") {
+                        date.setDate(date.getDate() + 30);
+                        setEditExpDate(date.toISOString().split("T")[0]);
+                      } else if (type === "mensal") {
                         date.setDate(date.getDate() + 30);
                         setEditExpDate(date.toISOString().split("T")[0]);
                       } else if (type === "semestral") {
@@ -402,24 +414,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                     }}
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
                   >
-                    <option value="demo">Demonstração (30 dias trial)</option>
-                    <option value="mensal">Mensal (R$ 11,90)</option>
-                    <option value="semestral">Semestral (R$ 49,90)</option>
+                    <option value="demo">Demonstração (30 dias)</option>
+                    <option value="mensal">Mensal (R$ 11,90) - Soma 30 Dias</option>
+                    <option value="semestral">Semestral (R$ 49,90) - Soma 180 Dias</option>
                   </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    Token de Acesso (Único)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={editToken}
-                    onChange={(e) => setEditToken(e.target.value.toUpperCase())}
-                    placeholder="Ex: CNC-TOKEN-XYZ"
-                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-mono"
-                  />
                 </div>
 
                 <div>
@@ -433,7 +431,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-mono"
                   />
                   <span className="text-[10px] text-zinc-500 mt-1 block">
-                    Preenchido automaticamente ao alterar o plano, ou deixe vazio para licença vitalícia (Lifetime).
+                    Soma automaticamente o período do plano ao escolher. Apague para deixar vitalício (Sem expiração).
                   </span>
                 </div>
 

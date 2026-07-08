@@ -996,16 +996,24 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       }
 
       ctx.beginPath();
-      ctx.strokeStyle = item.color;
+      
+      // Normalize neon colors to professional, eye-friendly engineering colors
+      let drawColor = item.color;
+      if (item.color === "#ff2a2a") {
+        drawColor = "#ef4444"; // Clean, high-contrast Red for Rapid G00 positioning
+      } else if (item.color === "#39ff14") {
+        drawColor = "#22c55e"; // Professional Green for G01/Feed cutting paths
+      } else if (item.color === "#00f3ff") {
+        drawColor = "#0ea5e9"; // Eye-safe Sky Blue for Arcs/Helper indicators
+      } else if (item.color === "#ff8c00") {
+        drawColor = "#f59e0b"; // Standard Amber/Orange for threading passes
+      }
+      
+      ctx.strokeStyle = drawColor;
       ctx.lineWidth = Math.floor(item.linhaId) === Math.floor(activeLine) ? 3.5 : 2;
 
-      // Highlighting glowing effect on active selected toolpath line!
-      if (Math.floor(item.linhaId) === Math.floor(activeLine)) {
-        ctx.shadowColor = item.color;
-        ctx.shadowBlur = 8;
-      } else {
-        ctx.shadowBlur = 0;
-      }
+      // Keep shadow blur disabled for professional, razor-sharp vector lines
+      ctx.shadowBlur = 0;
 
       if (item.type === "line" || item.type === "thread") {
         ctx.moveTo(startPlotX, startPlotY);
