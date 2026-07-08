@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "ClientToken": {
+      "title": "ClientToken",
+      "description": "Client token configuration for licensing and access control",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "expirationDate": {
+          "type": "string"
+        },
+        "supportPhone": {
+          "type": "string"
+        },
+        "subscriptionType": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "token"]
+    },
+    "LicensingConfig": {
+      "title": "LicensingConfig",
+      "description": "The root document storing clients lists and global support phone settings",
+      "type": "object",
+      "properties": {
+        "clients": {
+          "type": "array"
+        },
+        "supportPhone": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/licensing/{docId}": {
+      "schema": "LicensingConfig",
+      "description": "Configuration document for licensing clients list"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { ClientToken } from "../types";
+import { fetchLicensingFromCloud, saveLicensingToCloud } from "./firebase";
 
 const LOCAL_STORAGE_KEY = "cnc_master_clients_db";
 const SUPPORT_PHONE_KEY = "cnc_master_support_phone";
@@ -55,12 +56,17 @@ export function getClients(): ClientToken[] {
 export function saveClients(clients: ClientToken[]) {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(clients));
-    // Sincroniza com o servidor de forma assíncrona
+    
+    // Salva no Firestore em nuvem para que fique disponível em qualquer navegador e dispositivo!
+    saveLicensingToCloud(clients, getGlobalSupportPhone())
+      .catch(err => console.error("Erro ao salvar no Firestore:", err));
+
+    // Sincroniza também com o servidor local de forma assíncrona (como fallback secundário)
     fetch("/api/clients", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(clients)
-    }).catch(err => console.error("Erro ao sincronizar clientes com o servidor:", err));
+    }).catch(err => console.error("Erro ao sincronizar clientes com o servidor local:", err));
   } catch (e) {
     console.error("Erro ao salvar clientes no localStorage", e);
   }
@@ -72,39 +78,69 @@ export function getGlobalSupportPhone(): string {
 
 export function saveGlobalSupportPhone(phone: string) {
   localStorage.setItem(SUPPORT_PHONE_KEY, phone);
-  // Sincroniza com o servidor de forma assíncrona
+  
+  // Salva no Firestore em nuvem
+  saveLicensingToCloud(getClients(), phone)
+    .catch(err => console.error("Erro ao salvar no Firestore:", err));
+
+  // Sincroniza também com o servidor local de forma assíncrona (como fallback secundário)
   fetch("/api/support-phone", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ supportPhone: phone })
-  }).catch(err => console.error("Erro ao sincronizar telefone de suporte com o servidor:", err));
+  }).catch(err => console.error("Erro ao sincronizar telefone de suporte com o servidor local:", err));
 }
 
 export async function syncLicensingWithServer(): Promise<boolean> {
   let success = false;
+  
+  // 1. Prioridade máxima: Buscar do Firebase Firestore (Nuvem Persistente Global)
+  try {
+    const cloudData = await fetchLicensingFromCloud();
+    if (cloudData) {
+      if (Array.isArray(cloudData.clients) && cloudData.clients.length > 0) {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cloudData.clients));
+        success = true;
+      }
+      if (cloudData.supportPhone) {
+        localStorage.setItem(SUPPORT_PHONE_KEY, cloudData.supportPhone);
+      }
+      console.log("Sincronização bem-sucedida via Firebase Firestore!");
+    } else {
+      // Se não houver dados no Firestore (ex: primeira execução), inicializa a nuvem com os dados locais
+      const localClients = getClients();
+      const localSupport = getGlobalSupportPhone();
+      await saveLicensingToCloud(localClients, localSupport);
+      console.log("Firestore inicializado com dados locais padrão.");
+    }
+  } catch (err) {
+    console.error("Erro ao sincronizar com Firebase Firestore:", err);
+  }
+
+  // 2. Fallback: Sincroniza também com a API local
   try {
     const res = await fetch("/api/clients");
     if (res.ok) {
       const serverClients = await res.json();
-      if (Array.isArray(serverClients) && serverClients.length > 0) {
+      if (Array.isArray(serverClients) && serverClients.length > 0 && !success) {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(serverClients));
         success = true;
       }
     }
   } catch (err) {
-    console.error("Erro ao carregar clientes do servidor:", err);
+    console.error("Erro ao carregar clientes do servidor local:", err);
   }
 
   try {
     const res = await fetch("/api/support-phone");
     if (res.ok) {
       const data = await res.json();
-      if (data.supportPhone) {
+      if (data.supportPhone && !localStorage.getItem(SUPPORT_PHONE_KEY)) {
         localStorage.setItem(SUPPORT_PHONE_KEY, data.supportPhone);
       }
     }
   } catch (err) {
-    console.error("Erro ao carregar telefone de suporte do servidor:", err);
+    console.error("Erro ao carregar telefone de suporte do servidor local:", err);
   }
 
   return success;
