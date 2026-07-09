@@ -311,13 +311,31 @@ export function localLogin(token?: string, email?: string, password?: string): A
   };
 }
 
-export async function registerSessionHeartbeat(token: string, sessionId: string): Promise<void> {
-  if (!token) return;
+export function getOrCreateDeviceId(): string {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return "server-id";
+  }
+  let deviceId = localStorage.getItem("cnc_device_id");
+  if (!deviceId) {
+    deviceId = "DEV_" + Math.random().toString(36).substring(2, 12).toUpperCase();
+    localStorage.setItem("cnc_device_id", deviceId);
+  }
+  return deviceId;
+}
+
+export async function registerSessionHeartbeat(
+  token: string,
+  sessionId: string,
+  deviceId: string
+): Promise<{ success: boolean; activeDevices: number; blocked: boolean }> {
+  if (!token) return { success: false, activeDevices: 0, blocked: false };
   try {
     const cloudData = await fetchLicensingFromCloud();
     let currentClients = cloudData ? cloudData.clients : getClients();
     const now = Date.now();
     let updated = false;
+    let isBlocked = false;
+    let totalActiveDevices = 0;
 
     currentClients = currentClients.map(client => {
       if (client.token.trim() === token.trim()) {
@@ -325,27 +343,59 @@ export async function registerSessionHeartbeat(token: string, sessionId: string)
         // Keep only active sessions from the last 2 minutes (120,000ms)
         sessions = sessions.filter(s => (now - s.lastActive) < 120000);
 
+        // Get unique devices currently active (excluding the current session if it doesn't exist yet)
+        const activeDevices = Array.from(new Set(sessions.map(s => s.deviceId)));
+        
+        // Find if this specific session is already registered
         const sessionIdx = sessions.findIndex(s => s.sessionId === sessionId);
-        if (sessionIdx !== -1) {
-          sessions[sessionIdx].lastActive = now;
+        
+        // If this is a new session/tab
+        if (sessionIdx === -1) {
+          // Check if the device is already in the list of active devices
+          const isDeviceActive = activeDevices.includes(deviceId);
+          
+          // If the device is NOT active, and we already reached the limit of 3 distinct active devices
+          if (!isDeviceActive && activeDevices.length >= 3) {
+            isBlocked = true;
+          } else {
+            sessions.push({ sessionId, deviceId, lastActive: now });
+            if (!isDeviceActive) {
+              activeDevices.push(deviceId);
+            }
+          }
         } else {
-          sessions.push({ sessionId, lastActive: now });
+          // If already registered, update its heartbeat
+          sessions[sessionIdx].lastActive = now;
+          // Ensure it has the deviceId associated with it
+          sessions[sessionIdx].deviceId = deviceId;
         }
 
-        client.sessions = sessions;
-        client.activeSessionsCount = sessions.length;
-        client.isOnline = sessions.length > 0;
-        updated = true;
+        if (!isBlocked) {
+          client.sessions = sessions;
+          client.activeSessionsCount = activeDevices.length; // Record active devices as active count!
+          client.isOnline = activeDevices.length > 0;
+          totalActiveDevices = activeDevices.length;
+          updated = true;
+        } else {
+          totalActiveDevices = activeDevices.length;
+        }
       }
       return client;
     });
 
-    if (updated) {
+    if (updated && !isBlocked) {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentClients));
       await saveLicensingToCloud(currentClients, getGlobalSupportPhone());
     }
+
+    return {
+      success: !isBlocked,
+      activeDevices: totalActiveDevices,
+      blocked: isBlocked
+    };
   } catch (err) {
     console.error("Erro no heartbeat da sessão:", err);
+    return { success: true, activeDevices: 1, blocked: false };
   }
 }
 

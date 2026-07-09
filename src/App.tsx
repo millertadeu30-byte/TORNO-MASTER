@@ -44,7 +44,7 @@ import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
-import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone, registerSessionHeartbeat } from "./lib/licensing";
+import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone, registerSessionHeartbeat, getOrCreateDeviceId } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -97,6 +97,7 @@ export default function App() {
   // Monitor online status & antifraud
   const [onlineSessionCount, setOnlineSessionCount] = useState<number>(1);
   const [hasFraudWarning, setHasFraudWarning] = useState<boolean>(false);
+  const [isBlockedByDeviceLimit, setIsBlockedByDeviceLimit] = useState<boolean>(false);
 
   // Editors & Workspace Layout State
   const [layoutCount, setLayoutCount] = useState<number>(1); // 1, 2, or 3 panes
@@ -161,17 +162,28 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
 
+    const deviceId = getOrCreateDeviceId();
+
+    const checkHeartbeat = async () => {
+      try {
+        const result = await registerSessionHeartbeat(token, SESSION_ID, deviceId);
+        if (result.blocked) {
+          setIsBlockedByDeviceLimit(true);
+        } else {
+          setIsBlockedByDeviceLimit(false);
+          setOnlineSessionCount(result.activeDevices);
+          setHasFraudWarning(result.activeDevices > 1);
+        }
+      } catch (err) {
+        console.error("Erro no heartbeat:", err);
+      }
+    };
+
     // Executa imediatamente na inicialização/login
-    registerSessionHeartbeat(token, SESSION_ID).catch(err => {
-      console.error("Erro no heartbeat inicial:", err);
-    });
+    checkHeartbeat();
 
     // E depois a cada 30 segundos
-    const interval = setInterval(() => {
-      registerSessionHeartbeat(token, SESSION_ID).catch(err => {
-        console.error("Erro no heartbeat periódico:", err);
-      });
-    }, 30000);
+    const interval = setInterval(checkHeartbeat, 30000);
 
     return () => clearInterval(interval);
   }, [token]);
@@ -1043,6 +1055,78 @@ export default function App() {
               />
             </FloatingWindow>
           )}
+        </div>
+      )}
+
+      {/* Device Limit Block Overlay */}
+      {isBlockedByDeviceLimit && (
+        <div className="fixed inset-0 bg-[#0d0d11]/95 backdrop-blur-md z-[9999] flex flex-col items-center justify-center p-6 text-center">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="max-w-md w-full bg-[#16161c] border border-red-500/35 rounded-2xl p-8 shadow-2xl shadow-black"
+          >
+            <div className="w-16 h-16 bg-red-500/10 border border-red-500/30 rounded-full flex items-center justify-center mx-auto mb-6">
+              <ShieldAlert className="w-8 h-8 text-red-500 animate-pulse" />
+            </div>
+
+            <h2 className="text-xl font-black text-white font-display mb-3 uppercase tracking-tight">
+              Limite de Dispositivos Excedido
+            </h2>
+            
+            <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
+              Esta licença (<span className="text-cyan-400 font-mono font-bold">{token}</span>) já está sendo utilizada em <span className="text-red-400 font-bold">3 ou mais computadores/celulares</span> simultaneamente neste momento.
+            </p>
+
+            <div className="bg-red-500/5 border border-red-500/10 rounded-xl p-4 mb-6 text-left text-xs text-zinc-400 space-y-2">
+              <p className="font-semibold text-red-400">Como resolver isso?</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Feche as abas ou o navegador nos seus outros computadores ou celulares.</li>
+                <li>Aguarde até 2 minutos para o sistema liberar o acesso automaticamente.</li>
+                <li>Se você for o administrador, você pode limpar todas as sessões ativas no painel.</li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={async () => {
+                  setLoading(true);
+                  try {
+                    const deviceId = getOrCreateDeviceId();
+                    const result = await registerSessionHeartbeat(token, SESSION_ID, deviceId);
+                    if (!result.blocked) {
+                      setIsBlockedByDeviceLimit(false);
+                      setOnlineSessionCount(result.activeDevices);
+                      setHasFraudWarning(result.activeDevices > 1);
+                    }
+                  } catch (e) {
+                    console.error(e);
+                  }
+                  setLoading(false);
+                }}
+                className="w-full bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {loading ? (
+                  <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  "Tentar Novamente / Atualizar"
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsAuthenticated(false);
+                  setToken("");
+                  setClientName("");
+                  setIsAdmin(false);
+                  setIsBlockedByDeviceLimit(false);
+                }}
+                className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-300 font-bold text-xs py-3 rounded-xl transition flex items-center justify-center gap-1.5"
+              >
+                Voltar ao Login / Sair
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
     </div>
