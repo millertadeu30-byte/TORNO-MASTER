@@ -924,12 +924,36 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           const startZ = cz;
           const endZ = threadLen;
 
-          const passesCount = 5; // Simplified visualization passes
+          let passesCount = 5; // Simplified visualization passes
+
+          // Try to extract from P and Q of the G76 line (second block)
+          if (cmd.p && cmd.q) {
+            const calculatedPasses = Math.round(Math.pow(cmd.p / cmd.q, 2));
+            if (calculatedPasses > 0 && calculatedPasses < 100) {
+              passesCount = calculatedPasses;
+            }
+          }
+
+          // Also scan comments in a small window around the command to check if "Passadas: " is specified
+          for (let j = Math.max(0, i - 4); j <= Math.min(commands.length - 1, i + 4); j++) {
+            const text = commands[j].text || "";
+            const passMatch = text.match(/Passadas:\s*(\d+)/i);
+            if (passMatch) {
+              const pVal = parseInt(passMatch[1], 10);
+              if (pVal > 0 && pVal < 100) {
+                passesCount = pVal;
+                break;
+              }
+            }
+          }
+
           const depthPerPass = threadHeight / passesCount;
           const stepId = cmd.linhaOriginal;
 
           for (let p = 1; p <= passesCount; p++) {
-            const passRadius = isInternal ? crestRadius + (p * depthPerPass) : crestRadius - (p * depthPerPass);
+            // Fanuc G76 constant volume formula: depth = threadHeight * sqrt(p / passesCount)
+            const passDepth = threadHeight * Math.sqrt(p / passesCount);
+            const passRadius = isInternal ? crestRadius + passDepth : crestRadius - passDepth;
             const passId = stepId + p * 0.01;
 
             // Rapid to pass radius

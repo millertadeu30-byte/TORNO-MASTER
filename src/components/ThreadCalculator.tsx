@@ -46,6 +46,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [calcDiaStr, setCalcDiaStr] = useState<string>("20.0");
   const [threadPassesStr, setThreadPassesStr] = useState<string>("10");
   const [g76_r_finStr, setG76_RFinStr] = useState<string>("0.02");
+  const [g76_q_minStr, setG76_QMinStr] = useState<string>("100");
 
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
@@ -67,6 +68,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       setCalcDiaStr("");
       setThreadPassesStr("");
       setG76_RFinStr("");
+      setG76_QMinStr("");
     }
   };
 
@@ -155,6 +157,22 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       setG76_RFin(parsed);
     } else {
       setG76_RFin(0);
+    }
+  };
+
+  const handleQMinChange = (valStr: string) => {
+    setG76_QMinStr(valStr);
+    const normalized = valStr.replace(",", ".");
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      // If user inputs a millimeter value (e.g. 0.01, 0.1, 0.05 or with a decimal point), convert to microns
+      if (parsed < 1.0 || valStr.includes(".") || valStr.includes(",")) {
+        setG76_QMin(Math.round(parsed * 1000));
+      } else {
+        setG76_QMin(Math.round(parsed));
+      }
+    } else {
+      setG76_QMin(0);
     }
   };
 
@@ -464,6 +482,17 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
                   value={g76_r_finStr}
                   onChange={(e) => handleRFinChange(e.target.value)}
                   placeholder="Ex: 0.02"
+                  className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1 font-bold">Prof. Mínima Q (mm ou μ)</label>
+                <input
+                  type="text"
+                  value={g76_q_minStr}
+                  onChange={(e) => handleQMinChange(e.target.value)}
+                  placeholder="Ex: 100 ou 0.1"
                   className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400"
                 />
               </div>
