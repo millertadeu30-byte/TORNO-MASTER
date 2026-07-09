@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { User, Plus, Trash2, Edit2, Calendar, Phone, RefreshCw, Check, Key } from "lucide-react";
 import { ClientToken } from "../types";
-import { getClients, saveClients, getGlobalSupportPhone } from "../lib/licensing";
+import { getClients, saveClients, getGlobalSupportPhone, clearAllSessions, syncLicensingWithServer } from "../lib/licensing";
 
 interface AdminPanelProps {
   onClose: () => void;
@@ -38,8 +38,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   }, [isAdmin]);
 
   // Fetch client roster
-  const fetchRoster = () => {
+  const fetchRoster = async () => {
     setLoading(true);
+    try {
+      await syncLicensingWithServer();
+    } catch (e) {
+      console.error("Erro ao sincronizar com Firestore:", e);
+    }
     const fetchedClients = getClients();
     setClients(fetchedClients);
     setGlobalSupport(getGlobalSupportPhone());
@@ -52,9 +57,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     }
   }, [isAuthenticated]);
 
-  const handleResetSessions = () => {
-    setActionMsg("✅ Todas as sessões online foram limpas!");
-    fetchRoster();
+  const handleResetSessions = async () => {
+    setLoading(true);
+    try {
+      await clearAllSessions();
+      setActionMsg("✅ Todas as sessões online foram limpas no banco de dados!");
+    } catch (err) {
+      console.error(err);
+      setActionMsg("❌ Erro ao limpar as sessões.");
+    }
+    await fetchRoster();
     setTimeout(() => setActionMsg(""), 3000);
   };
 
@@ -309,10 +321,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                         </td>
                         <td className="p-3 text-center">
                           {c.isOnline ? (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#39ff14] animate-ping" />
-                              Sim ({c.activeSessionsCount})
-                            </span>
+                            c.activeSessionsCount && c.activeSessionsCount > 1 ? (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-red-500/15 text-red-400 border border-red-500/30 font-bold" title="Compartilhamento de token detectado! Mesma licença aberta em múltiplos dispositivos simultaneamente.">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                Compartilhado ({c.activeSessionsCount} Disp.)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#39ff14] animate-ping" />
+                                Sim ({c.activeSessionsCount})
+                              </span>
+                            )
                           ) : (
                             <span className="text-zinc-600 text-[10px]">Não</span>
                           )}

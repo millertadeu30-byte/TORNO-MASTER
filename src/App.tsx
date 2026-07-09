@@ -44,7 +44,7 @@ import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
-import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone } from "./lib/licensing";
+import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone, registerSessionHeartbeat } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -156,6 +156,25 @@ export default function App() {
       console.error("Erro na sincronização inicial das licenças:", err);
     });
   }, []);
+
+  // Enviar heartbeat periódico da sessão para o Firestore (controle antifraude e visualização de quem está online)
+  useEffect(() => {
+    if (!token) return;
+
+    // Executa imediatamente na inicialização/login
+    registerSessionHeartbeat(token, SESSION_ID).catch(err => {
+      console.error("Erro no heartbeat inicial:", err);
+    });
+
+    // E depois a cada 30 segundos
+    const interval = setInterval(() => {
+      registerSessionHeartbeat(token, SESSION_ID).catch(err => {
+        console.error("Erro no heartbeat periódico:", err);
+      });
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [token]);
 
   // Initial positioning from viewport dimensions
   useEffect(() => {

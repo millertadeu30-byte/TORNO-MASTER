@@ -245,7 +245,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
     // First, pass to gather clean commands
     lines.forEach((lineText, idx) => {
-      let clean = lineText.replace(/\(.*?\)/g, "").trim(); // Remove brackets comments
+      let trimmed = lineText.trim();
+      if (trimmed.startsWith(";")) return; // Skip complete comment lines starting with semicolon
+      let clean = trimmed.replace(/\(.*?\)/g, "").trim(); // Remove brackets comments
       if (!clean) return;
 
       const gMatches = clean.match(/G\s*(\d+)/g);

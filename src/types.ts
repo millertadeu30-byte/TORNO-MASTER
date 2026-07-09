@@ -9,6 +9,7 @@ export interface ClientToken {
   isOnline?: boolean;
   subscriptionType?: "demo" | "mensal" | "semestral";
   registrationDate?: string;
+  sessions?: { sessionId: string; lastActive: number }[];
 }
 
 export interface GCodeCommand {

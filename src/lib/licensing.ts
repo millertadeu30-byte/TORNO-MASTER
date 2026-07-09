@@ -310,3 +310,60 @@ export function localLogin(token?: string, email?: string, password?: string): A
     isAdmin: isAdminUser
   };
 }
+
+export async function registerSessionHeartbeat(token: string, sessionId: string): Promise<void> {
+  if (!token) return;
+  try {
+    const cloudData = await fetchLicensingFromCloud();
+    let currentClients = cloudData ? cloudData.clients : getClients();
+    const now = Date.now();
+    let updated = false;
+
+    currentClients = currentClients.map(client => {
+      if (client.token.trim() === token.trim()) {
+        let sessions = client.sessions || [];
+        // Keep only active sessions from the last 2 minutes (120,000ms)
+        sessions = sessions.filter(s => (now - s.lastActive) < 120000);
+
+        const sessionIdx = sessions.findIndex(s => s.sessionId === sessionId);
+        if (sessionIdx !== -1) {
+          sessions[sessionIdx].lastActive = now;
+        } else {
+          sessions.push({ sessionId, lastActive: now });
+        }
+
+        client.sessions = sessions;
+        client.activeSessionsCount = sessions.length;
+        client.isOnline = sessions.length > 0;
+        updated = true;
+      }
+      return client;
+    });
+
+    if (updated) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentClients));
+      await saveLicensingToCloud(currentClients, getGlobalSupportPhone());
+    }
+  } catch (err) {
+    console.error("Erro no heartbeat da sessão:", err);
+  }
+}
+
+export async function clearAllSessions(): Promise<void> {
+  try {
+    const cloudData = await fetchLicensingFromCloud();
+    let currentClients = cloudData ? cloudData.clients : getClients();
+
+    currentClients = currentClients.map(client => {
+      client.sessions = [];
+      client.activeSessionsCount = 0;
+      client.isOnline = false;
+      return client;
+    });
+
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentClients));
+    await saveLicensingToCloud(currentClients, getGlobalSupportPhone());
+  } catch (err) {
+    console.error("Erro ao resetar todas as sessões:", err);
+  }
+}

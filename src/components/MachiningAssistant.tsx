@@ -284,7 +284,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     let lastG74_Line1Index: number | null = null;
 
     lines.forEach((lineText, idx) => {
-      const clean = lineText.replace(/\(.*?\)/g, "").trim();
+      let trimmed = lineText.trim();
+      if (trimmed.startsWith(";")) return;
+      const clean = trimmed.replace(/\(.*?\)/g, "").trim();
       if (!clean) return;
 
       // G71 Checks
