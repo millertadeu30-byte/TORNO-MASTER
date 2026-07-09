@@ -231,6 +231,26 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     handleScroll();
   }, [text]);
 
+  // Scroll to active line when it changes
+  useEffect(() => {
+    if (activeLine >= 0 && textareaRef.current) {
+      const textarea = textareaRef.current;
+      const lineHeight = 24; // line height is 24px as defined in editor CSS/elements
+      
+      const currentScrollTop = textarea.scrollTop;
+      const viewHeight = textarea.clientHeight;
+      const lineY = Math.floor(activeLine) * lineHeight;
+      
+      // If line is near or outside the visible viewport range, scroll it to the middle
+      if (lineY < currentScrollTop + 48 || lineY > currentScrollTop + viewHeight - 48) {
+        const targetScrollTop = Math.floor(activeLine) * lineHeight - viewHeight / 2;
+        textarea.scrollTop = Math.max(0, targetScrollTop);
+        // Sync custom highlight layover scroll position
+        handleScroll();
+      }
+    }
+  }, [activeLine, isActive]);
+
   return (
     <div
       onClick={onSetFocus}

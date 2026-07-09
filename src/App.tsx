@@ -28,7 +28,9 @@ import {
   Mail,
   UserPlus,
   LogOut,
-  Trash2
+  Trash2,
+  Maximize2,
+  Minimize2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
@@ -145,6 +147,7 @@ export default function App() {
   const [fileNames, setFileNames] = useState<string[]>(["", "", ""]);
   const [simPos, setSimPos] = useState({ x: 700, y: 140 });
   const [isDraggingSim, setIsDraggingSim] = useState<boolean>(false);
+  const [isSimMaximized, setIsSimMaximized] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Sincronizar licenças com o banco de dados do servidor ao abrir o app
@@ -789,8 +792,12 @@ export default function App() {
             {/* Floating Simulator (Mini-TV Panel) */}
             {simMode === 'tv' && (
               <div
-                className="absolute bg-[#14141a]/95 border border-zinc-700 rounded-xl shadow-2xl shadow-cyan-950/40 overflow-hidden flex flex-col z-[40]"
-                style={{
+                className={`bg-[#14141a]/95 border border-zinc-700 shadow-2xl overflow-hidden flex flex-col ${
+                  isDraggingSim ? "transition-none" : "transition-all duration-300"
+                } ${
+                  isSimMaximized ? "fixed inset-4 rounded-2xl z-[100] shadow-cyan-950/60" : "absolute rounded-xl shadow-cyan-950/40 z-[40]"
+                }`}
+                style={isSimMaximized ? {} : {
                   top: `${simPos.y}px`,
                   left: `${simPos.x}px`,
                   width: "480px",
@@ -799,23 +806,34 @@ export default function App() {
                   minWidth: "320px",
                   minHeight: "280px",
                 }}
-                onPointerDown={handleSimPointerDown}
-                onPointerMove={handleSimPointerMove}
-                onPointerUp={handleSimPointerUp}
+                onPointerDown={isSimMaximized ? undefined : handleSimPointerDown}
+                onPointerMove={isSimMaximized ? undefined : handleSimPointerMove}
+                onPointerUp={isSimMaximized ? undefined : handleSimPointerUp}
               >
                 {/* Custom drag handle bar */}
-                <div className="sim-drag-handle flex items-center justify-between bg-[#1d1d24] border-b border-zinc-800 px-3 py-1.5 cursor-move select-none text-[9px] text-zinc-500 font-mono">
+                <div className={`sim-drag-handle flex items-center justify-between bg-[#1d1d24] border-b border-zinc-800 px-3 py-1.5 select-none text-[9px] text-zinc-500 font-mono ${
+                  isSimMaximized ? "cursor-default" : "cursor-move"
+                }`}>
                   <span className="flex items-center gap-1">
                     <span className="inline-block w-1.5 h-1.5 bg-[#00f3ff] rounded-full animate-ping" />
-                    ✥ ARRASTE PARA MOVER | 🎚 ARRASTE O CANTO P/ REDIMENSIONAR
+                    {isSimMaximized ? "📺 MODO FLUTUANTE (TELA CHEIA)" : "✥ ARRASTE PARA MOVER | ARRASTE O CANTO P/ REDIMENSIONAR"}
                   </span>
-                  <button
-                    onClick={() => setSimMode('off')}
-                    className="text-zinc-500 hover:text-red-400 font-bold px-1 transition"
-                    title="Fixar na lateral"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsSimMaximized(!isSimMaximized)}
+                      className="text-zinc-400 hover:text-cyan-400 p-0.5 rounded transition flex items-center justify-center"
+                      title={isSimMaximized ? "Restaurar tamanho reduzido" : "Maximizar para tela cheia"}
+                    >
+                      {isSimMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                    </button>
+                    <button
+                      onClick={() => setSimMode('off')}
+                      className="text-zinc-500 hover:text-red-400 font-bold px-1 transition text-[11px]"
+                      title="Ocultar simulador"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div className="flex-1 min-h-0">
                   <CNCSimulator

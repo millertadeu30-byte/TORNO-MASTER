@@ -35,6 +35,17 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
   const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
 
+  // High precision mouse hover / snap coordinate tracking ("Mirinha")
+  interface HoveredPointInfo {
+    canvasX: number;
+    canvasY: number;
+    latheX: number;
+    latheZ: number;
+    gcodeLine: number;
+    gcodeText: string;
+  }
+  const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
+
   // Playback Driver State
   const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
   const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
@@ -80,10 +91,102 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
   };
 
+  const getDistanceToSegment = (mx: number, my: number, x1: number, y1: number, x2: number, y2: number) => {
+    const A = mx - x1;
+    const B = my - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+    if (lenSq !== 0) {
+      param = dot / lenSq;
+    }
+
+    let xx, yy;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = mx - xx;
+    const dy = my - yy;
+    return {
+      distance: Math.sqrt(dx * dx + dy * dy),
+      x: xx,
+      y: yy
+    };
+  };
+
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning) {
       setPanX(e.clientX - dragStart.x);
       setPanY(e.clientY - dragStart.y);
+      setHoveredPoint(null);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const zDirSign = simInvertZ ? -1 : 1;
+    const originX = canvas.width / 2 + 50 + panX;
+    const originY = canvas.height / 2 + 50 + panY;
+
+    let closestItem: any = null;
+    let minDistance = 35; // Snapping radius of 35px
+    let closestPoint = { x: 0, y: 0 };
+
+    plotList.forEach((item) => {
+      // Future simulation items should not be snapable if we are paused/stopped in the middle of playback
+      if (driverTick !== -2 && driverTick !== -1 && item.linhaId > driverTick) {
+        return;
+      }
+
+      const x1 = originX + item.z1 * zoom * zDirSign;
+      const y1 = originY - item.x1 * zoom;
+      const x2 = originX + item.z2 * zoom * zDirSign;
+      const y2 = originY - item.x2 * zoom;
+
+      const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
+      if (res.distance < minDistance) {
+        minDistance = res.distance;
+        closestItem = item;
+        closestPoint = { x: res.x, y: res.y };
+      }
+    });
+
+    if (closestItem) {
+      // Calculate lathe coordinate of the exact snapped point
+      const latheZ = (closestPoint.x - originX) / (zoom * zDirSign);
+      const latheRadius = -(closestPoint.y - originY) / zoom;
+      const latheX = latheRadius * 2; // Diameter
+
+      // Find original line text
+      const lines = gcodeText.split("\n");
+      const lineIdx = Math.floor(closestItem.linhaId);
+      const rawText = lines[lineIdx] || "";
+
+      setHoveredPoint({
+        canvasX: closestPoint.x,
+        canvasY: closestPoint.y,
+        latheX,
+        latheZ,
+        gcodeLine: lineIdx,
+        gcodeText: rawText.trim()
+      });
+    } else {
+      setHoveredPoint(null);
     }
   };
 
@@ -1074,6 +1177,50 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.stroke();
     }
 
+    // Draw Hover/Snap Target ("Mirinha")
+    if (hoveredPoint) {
+      ctx.save();
+      ctx.strokeStyle = isThemeDark ? "rgba(0, 243, 255, 0.4)" : "rgba(0, 150, 200, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+
+      // Horizontal line back to Z-axis
+      ctx.beginPath();
+      ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY);
+      ctx.lineTo(originX, hoveredPoint.canvasY);
+      ctx.stroke();
+
+      // Vertical line back to X-axis
+      ctx.beginPath();
+      ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY);
+      ctx.lineTo(hoveredPoint.canvasX, originY);
+      ctx.stroke();
+
+      // Draw the reticle circle
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#00f3ff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, 7, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Crosshairs inside reticle
+      ctx.beginPath();
+      ctx.moveTo(hoveredPoint.canvasX - 12, hoveredPoint.canvasY);
+      ctx.lineTo(hoveredPoint.canvasX + 12, hoveredPoint.canvasY);
+      ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY - 12);
+      ctx.lineTo(hoveredPoint.canvasX, hoveredPoint.canvasY + 12);
+      ctx.stroke();
+
+      // A small glowing center dot
+      ctx.fillStyle = "#39ff14";
+      ctx.beginPath();
+      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
     // Save actual lathe coordinates in state for HUD
     // Use setTimeout to avoid state updates during render or ResizeObserver layout callbacks
     const newX = currentAnimationX * 2;
@@ -1090,16 +1237,21 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
     const observer = new ResizeObserver(() => {
       canvas.width = canvas.parentElement?.clientWidth || 500;
-      canvas.height = Math.max(200, (canvas.parentElement?.clientHeight || 450) - 100);
+      canvas.height = canvas.parentElement?.clientHeight || 450;
       drawSimulation();
     });
 
     observer.observe(canvas.parentElement);
     return () => observer.disconnect();
-  }, [gcodeText, zoom, panX, panY, simInvertZ, driverTick, activeLine, isThemeDark]);
+  }, [gcodeText, zoom, panX, panY, simInvertZ, driverTick, activeLine, isThemeDark, hoveredPoint]);
 
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (hoveredPoint) {
+      onLineChange(hoveredPoint.gcodeLine);
+      return;
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1316,9 +1468,34 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={() => setHoveredPoint(null)}
           onClick={handleCanvasClick}
           className="w-full h-full block"
         />
+
+        {/* Precise Snapping Target Tooltip */}
+        {hoveredPoint && (
+          <div
+            className="absolute pointer-events-none bg-[#111116]/95 border border-cyan-400 rounded-lg p-2.5 font-mono text-[11px] shadow-2xl z-30 select-none max-w-[260px] transition-all duration-75 flex flex-col gap-1 text-left"
+            style={{
+              left: `${hoveredPoint.canvasX + 15}px`,
+              top: `${hoveredPoint.canvasY + 15}px`,
+              transform: hoveredPoint.canvasX + 280 > (canvasRef.current?.width || 0) ? 'translateX(-115%)' : '',
+            }}
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-1 text-zinc-500 font-bold text-[9px] tracking-wider">
+              <span>LINHA {hoveredPoint.gcodeLine + 1}</span>
+              <span className="text-cyan-400">MIRINHA</span>
+            </div>
+            <div className="text-zinc-200 font-sans font-bold py-0.5 truncate max-w-[230px]">
+              {hoveredPoint.gcodeText}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] mt-1 border-t border-zinc-800/50 pt-1 text-zinc-400">
+              <div>X: <span className="text-[#39ff14] font-bold">Ø {hoveredPoint.latheX.toFixed(3)}</span></div>
+              <div>Z: <span className="text-orange-400 font-bold">{hoveredPoint.latheZ.toFixed(3)}</span></div>
+            </div>
+          </div>
+        )}
 
         {/* Real-time coordinates HUD overlays */}
         <div className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
@@ -1339,52 +1516,52 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       </div>
 
       {/* CNC Driver Controls panel */}
-      <div className={`p-4 border-t flex flex-col sm:flex-row items-center justify-between gap-4 transition-colors duration-300 ${
-        isThemeDark ? "bg-[#18181f] border-zinc-800" : "bg-zinc-50 border-zinc-200"
+      <div className={`py-1.5 px-3 border-t flex items-center justify-between gap-3 transition-colors duration-300 ${
+        isThemeDark ? "bg-[#101014] border-zinc-900" : "bg-zinc-100 border-zinc-200"
       }`}>
         {/* Playback Buttons */}
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
           <button
             onClick={togglePlay}
-            className={`w-10 h-10 rounded-lg flex items-center justify-center transition border ${
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition border ${
               isDriverActive
-                ? "bg-amber-950/20 text-amber-400 border-amber-500/50"
-                : "bg-[#25252f] hover:bg-zinc-800 text-[#39ff14] border-zinc-700 hover:border-[#39ff14]"
+                ? "bg-amber-950/20 text-amber-400 border-amber-500/30"
+                : "bg-[#1e1e24] hover:bg-zinc-800 text-[#39ff14] border-zinc-850 hover:border-[#39ff14]"
             }`}
             title="Executar Simulação Automática"
           >
-            {isDriverActive ? <Pause className="w-5 h-5 fill-amber-400" /> : <Play className="w-5 h-5 fill-[#39ff14]" />}
+            {isDriverActive ? <Pause className="w-3.5 h-3.5 fill-amber-400" /> : <Play className="w-3.5 h-3.5 fill-[#39ff14]" />}
           </button>
           
           <button
             onClick={handleStop}
-            className="w-10 h-10 bg-[#25252f] hover:bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg flex items-center justify-center transition"
+            className="w-7 h-7 bg-[#1e1e24] hover:bg-zinc-800 border border-zinc-850 text-zinc-400 hover:text-zinc-200 rounded-md flex items-center justify-center transition"
             title="Parar e Retornar ao Início"
           >
-            <Square className="w-4 h-4 fill-zinc-300" />
+            <Square className="w-3 h-3 fill-zinc-400" />
           </button>
 
           <button
             onClick={handleStepForward}
-            className="w-10 h-10 bg-[#25252f] hover:bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg flex items-center justify-center transition"
+            className="w-7 h-7 bg-[#1e1e24] hover:bg-zinc-800 border border-zinc-850 text-zinc-400 hover:text-zinc-200 rounded-md flex items-center justify-center transition"
             title="Executar Bloco a Bloco (Single Block)"
           >
-            <SkipForward className="w-4 h-4" />
+            <SkipForward className="w-3 h-3" />
           </button>
         </div>
 
         {/* Playback speed dial */}
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <span className="text-xs font-mono text-zinc-500">POTENCIÔMETRO VEL:</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-zinc-500 tracking-tight">POTENCIÔMETRO:</span>
           <input
             type="range"
             min="0"
             max="100"
             value={driverSpeed}
             onChange={(e) => setDriverSpeed(parseInt(e.target.value, 10))}
-            className="flex-1 sm:w-32 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
+            className="w-20 md:w-28 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
           />
-          <span className="text-xs font-mono font-bold text-[#00f3ff] w-12 text-right">
+          <span className="text-[10px] font-mono font-bold text-[#00f3ff] w-8 text-right">
             {driverSpeed}%
           </span>
         </div>
