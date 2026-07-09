@@ -50,7 +50,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
   const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
   const [linesWithDrawing, setLinesWithDrawing] = useState<number[]>([]);
-  const [toolPos, setToolPos] = useState<Point2D>({ x: 0, y: 0 }); // In absolute lathe coords (Radius, Z)
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 500, height: 450 });
 
   // Zoom on scroll wheel
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -136,8 +136,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
+    const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
 
     const zDirSign = simInvertZ ? -1 : 1;
     const originX = canvas.width / 2 + 50 + panX;
@@ -978,6 +978,20 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   const { plotList, activeLineIndexes, error: parseError } = parseGCode();
 
+  // Dynamic tool position calculation for the HUD overlay (Diameter, Z)
+  let toolX = 0;
+  let toolZ = 0;
+  if (plotList.length > 0) {
+    toolX = plotList[0].x1;
+    toolZ = plotList[0].z1;
+    for (const item of plotList) {
+      if (driverTick === -1 || item.linhaId <= driverTick) {
+        toolX = item.x2;
+        toolZ = item.z2;
+      }
+    }
+  }
+
   useEffect(() => {
     if (onError && parseError) {
       onError(parseError);
@@ -1221,13 +1235,6 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.restore();
     }
 
-    // Save actual lathe coordinates in state for HUD
-    // Use setTimeout to avoid state updates during render or ResizeObserver layout callbacks
-    const newX = currentAnimationX * 2;
-    const newZ = currentAnimationZ;
-    setTimeout(() => {
-      setToolPos({ x: newX, y: newZ });
-    }, 0);
   };
 
   // Resize listener using ResizeObserver to handle container-specific resizing
@@ -1235,15 +1242,24 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const canvas = canvasRef.current;
     if (!canvas || !canvas.parentElement) return;
 
-    const observer = new ResizeObserver(() => {
-      canvas.width = canvas.parentElement?.clientWidth || 500;
-      canvas.height = canvas.parentElement?.clientHeight || 450;
-      drawSimulation();
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setCanvasSize({
+          width: entry.contentRect.width || 500,
+          height: entry.contentRect.height || 450,
+        });
+      }
     });
 
     observer.observe(canvas.parentElement);
     return () => observer.disconnect();
-  }, [gcodeText, zoom, panX, panY, simInvertZ, driverTick, activeLine, isThemeDark, hoveredPoint]);
+  }, []);
+
+  // Redraw whenever canvas size or any simulation variables change
+  useEffect(() => {
+    drawSimulation();
+  }, [canvasSize, gcodeText, zoom, panX, panY, simInvertZ, driverTick, activeLine, isThemeDark, hoveredPoint]);
 
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1464,6 +1480,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         )}
         <canvas
           ref={canvasRef}
+          width={canvasSize.width}
+          height={canvasSize.height}
           onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -1501,11 +1519,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         <div className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
           <div className="flex justify-between gap-4">
             <span>DIÂMETRO X:</span>
-            <span className="text-[#39ff14] font-bold">Ø {toolPos.x.toFixed(3)} mm</span>
+            <span className="text-[#39ff14] font-bold">Ø {(toolX * 2).toFixed(3)} mm</span>
           </div>
           <div className="flex justify-between gap-4">
             <span>POSIÇÃO Z:</span>
-            <span className="text-orange-400 font-bold">Z {toolPos.y.toFixed(3)} mm</span>
+            <span className="text-orange-400 font-bold">Z {toolZ.toFixed(3)} mm</span>
           </div>
         </div>
 

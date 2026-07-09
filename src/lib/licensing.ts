@@ -5,13 +5,13 @@ const LOCAL_STORAGE_KEY = "cnc_master_clients_db";
 const SUPPORT_PHONE_KEY = "cnc_master_support_phone";
 
 const DEFAULT_CLIENTS: ClientToken[] = [
-  { name: "Suporte Técnico (Admin)", token: "8619", expirationDate: "2030-12-31", supportPhone: "(18) 99999-5555", subscriptionType: "semestral" },
+  { name: "Suporte Técnico (Admin)", token: "8619", expirationDate: "2030-12-31", supportPhone: "17982129547", subscriptionType: "semestral" },
   { name: "Licença Demonstração", email: "demo@demo.com", password: "demo", token: "CNC-TRIAL-FREE", expirationDate: "2026-10-30", supportPhone: "(18) 99999-8888", subscriptionType: "demo" },
   { name: "Cliente Licença Expirada", email: "expirado@demo.com", password: "demo", token: "CNC-EXPIRADO", expirationDate: "2025-01-01", supportPhone: "(18) 99999-7777", subscriptionType: "demo" },
   { name: "Acesso Vitalício", email: "vitalicio@demo.com", password: "demo", token: "CNC-LIFETIME", expirationDate: null, supportPhone: "(18) 99999-6666", subscriptionType: "semestral" }
 ];
 
-const DEFAULT_SUPPORT_PHONE = "(18) 99999-5555";
+const DEFAULT_SUPPORT_PHONE = "(17) 98212-9547";
 
 export function getClients(): ClientToken[] {
   try {
@@ -35,7 +35,7 @@ export function getClients(): ClientToken[] {
           name: "Suporte Técnico (Admin)",
           token: "8619",
           expirationDate: "2030-12-31",
-          supportPhone: "(18) 99999-5555",
+          supportPhone: "17982129547",
           subscriptionType: "semestral"
         });
         migrated = true;
@@ -73,7 +73,40 @@ export function saveClients(clients: ClientToken[]) {
 }
 
 export function getGlobalSupportPhone(): string {
-  return localStorage.getItem(SUPPORT_PHONE_KEY) || DEFAULT_SUPPORT_PHONE;
+  try {
+    const clients = getClients();
+    const adminClient = clients.find(c => 
+      c.token === "8619" || 
+      c.name.toLowerCase().includes("suporte") || 
+      c.name.toLowerCase().includes("miller") || 
+      c.name.toLowerCase().includes("administrador")
+    );
+    if (adminClient && adminClient.supportPhone) {
+      const phone = adminClient.supportPhone;
+      const cleaned = phone.replace(/\D/g, "");
+      if (cleaned.length === 11) {
+        return `(${cleaned.substring(0, 2)}) ${cleaned.substring(2, 7)}-${cleaned.substring(7)}`;
+      } else if (cleaned.length === 10) {
+        return `(${cleaned.substring(0, 2)}) ${cleaned.substring(2, 6)}-${cleaned.substring(6)}`;
+      }
+      return phone;
+    }
+  } catch (e) {
+    console.error("Erro ao buscar número do ADM no banco de dados:", e);
+  }
+
+  const saved = localStorage.getItem(SUPPORT_PHONE_KEY);
+  if (saved) {
+    const cleaned = saved.replace(/\D/g, "");
+    if (cleaned.length === 11) {
+      return `(${cleaned.substring(0, 2)}) ${cleaned.substring(2, 7)}-${cleaned.substring(7)}`;
+    } else if (cleaned.length === 10) {
+      return `(${cleaned.substring(0, 2)}) ${cleaned.substring(2, 6)}-${cleaned.substring(6)}`;
+    }
+    return saved;
+  }
+
+  return DEFAULT_SUPPORT_PHONE;
 }
 
 export function saveGlobalSupportPhone(phone: string) {

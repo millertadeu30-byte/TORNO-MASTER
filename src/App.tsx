@@ -44,7 +44,7 @@ import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
-import { localLogin, localRegister, syncLicensingWithServer } from "./lib/licensing";
+import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -61,7 +61,7 @@ export default function App() {
   const [tokenInput, setTokenInput] = useState<string>("");
   const [token, setToken] = useState<string>(() => localStorage.getItem("cnc_token") || "");
   const [clientName, setClientName] = useState<string>(() => localStorage.getItem("cnc_clientName") || "");
-  const [supportPhone, setSupportPhone] = useState<string>(() => localStorage.getItem("cnc_supportPhone") || "(18) 99999-5555");
+  const [supportPhone, setSupportPhone] = useState<string>(() => getGlobalSupportPhone());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => localStorage.getItem("cnc_isAuthenticated") === "true");
   const [loginError, setLoginError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);

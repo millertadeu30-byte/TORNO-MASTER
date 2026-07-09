@@ -377,7 +377,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                     type="text"
                     value={editEmail}
                     onChange={(e) => setEditEmail(e.target.value)}
-                    placeholder="Ex: (18) 99999-5555"
+                    placeholder="Ex: (17) 98212-9547"
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
                   />
                 </div>
