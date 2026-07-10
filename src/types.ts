@@ -1,6 +1,7 @@
 export interface ClientToken {
   name: string;
   email?: string;
+  phone?: string;
   password?: string;
   token: string;
   expirationDate: string | null;

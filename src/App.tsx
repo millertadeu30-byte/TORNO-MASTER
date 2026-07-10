@@ -30,7 +30,9 @@ import {
   LogOut,
   Trash2,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Copy,
+  Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
@@ -51,14 +53,18 @@ const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
 
 export default function App() {
   // Auth State
-  const [authMode, setAuthMode] = useState<"login" | "register" | "token">("token");
+  const [authTab, setAuthTab] = useState<"login" | "register">("login");
   const [regName, setRegName] = useState<string>("");
   const [regEmail, setRegEmail] = useState<string>("");
-  const [regPassword, setRegPassword] = useState<string>("");
-  const [loginEmail, setLoginEmail] = useState<string>("");
-  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [regPhone, setRegPhone] = useState<string>("");
+  const [registeredCode, setRegisteredCode] = useState<string | null>(null);
+  const [registeredEmail, setRegisteredEmail] = useState<string | null>(null);
   
   const [tokenInput, setTokenInput] = useState<string>("");
+  const [loginEmail, setLoginEmail] = useState<string>("");
+  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [loginMethod, setLoginMethod] = useState<"token" | "email">("token");
+  const [copied, setCopied] = useState<boolean>(false);
   const [token, setToken] = useState<string>(() => localStorage.getItem("cnc_token") || "");
   const [clientName, setClientName] = useState<string>(() => localStorage.getItem("cnc_clientName") || "");
   const [supportPhone, setSupportPhone] = useState<string>(() => getGlobalSupportPhone());
@@ -290,9 +296,9 @@ export default function App() {
     setLoginError("");
 
     let res;
-    if (authMode === "token") {
+    if (loginMethod === "token") {
       if (!tokenInput.trim()) {
-        setLoginError("Por favor, digite seu token de acesso.");
+        setLoginError("Por favor, digite seu token ou senha de acesso.");
         setLoading(false);
         return;
       }
@@ -324,7 +330,7 @@ export default function App() {
   // Perform local user registration
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName.trim() || !regEmail.trim() || !regPassword.trim()) {
+    if (!regName.trim() || !regEmail.trim() || !regPhone.trim()) {
       setLoginError("Por favor, preencha todos os campos do cadastro.");
       return;
     }
@@ -332,21 +338,38 @@ export default function App() {
     setLoading(true);
     setLoginError("");
 
-    const res = localRegister(regName.trim(), regEmail.trim(), regPassword.trim());
+    const res = localRegister(regName.trim(), regEmail.trim(), regPhone.trim());
 
     setLoading(false);
     if (res.sucesso) {
+      // Store generated details to show success modal
+      setRegisteredCode(res.token || "");
+      setRegisteredEmail(regEmail.trim());
+
+      // Prepare login states
       setToken(res.token || "");
       setClientName(res.clientName || "");
       setSupportPhone(res.supportPhone || "");
       setSubscriptionType(res.subscriptionType || "demo");
       setDaysLeft(res.daysLeft !== undefined ? res.daysLeft : 30);
       setIsAdmin(res.isAdmin || false);
-      setIsAuthenticated(true);
-      setOnlineSessionCount(1);
-      alert("🎉 Cadastro realizado com sucesso! Sua versão Demo de 30 dias grátis foi ativada!");
     } else {
       setLoginError(res.msg);
+    }
+  };
+
+  const handleConfirmAccess = () => {
+    setIsAuthenticated(true);
+    setOnlineSessionCount(1);
+    setRegisteredCode(null);
+    setRegisteredEmail(null);
+  };
+
+  const handleCopyToClipboard = () => {
+    if (registeredCode) {
+      navigator.clipboard.writeText(registeredCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -483,7 +506,7 @@ export default function App() {
             <motion.div
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
-              className="bg-[#1e1e24] w-full max-w-md p-8 rounded-2xl border-2 border-cyan-400/50 shadow-2xl shadow-cyan-950/20 relative overflow-hidden flex flex-col text-center"
+              className="bg-[#1e1e24] w-full max-w-md p-8 rounded-2xl border-2 border-cyan-400/50 shadow-2xl shadow-cyan-950/20 relative overflow-hidden flex flex-col"
             >
               {/* Glow accent */}
               <div className="absolute -top-10 -right-10 w-24 h-24 bg-cyan-400 rounded-full filter blur-[50px] opacity-25" />
@@ -494,48 +517,275 @@ export default function App() {
                 </div>
               </div>
 
-              <h2 className="font-display font-black text-2xl tracking-tight text-white mb-1">
+              <h2 className="font-display font-black text-2xl tracking-tight text-white mb-1 text-center">
                 TORNO <span className="text-cyan-400">MASTER</span>
               </h2>
-              <p className="text-[11px] text-zinc-400 mb-6 max-w-xs mx-auto">
-                Insira sua Senha / Token de Acesso para liberar o sistema.
-              </p>
 
-              <div className="flex flex-col gap-3 text-left">
-                <div className="relative">
-                  <span className="absolute left-3 top-3.5 text-zinc-500">
-                    <Lock className="w-4 h-4 text-cyan-400" />
-                  </span>
-                  <input
-                    type="password"
-                    value={tokenInput}
-                    onChange={(e) => setTokenInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleLogin();
-                    }}
-                    placeholder="Sua Senha / Token"
-                    className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl font-mono text-center tracking-widest text-sm outline-none focus:border-cyan-400 transition"
-                    autoFocus
-                  />
+              {registeredCode ? (
+                /* SUCCESS REGISTRATION MODE */
+                <div className="flex flex-col text-center mt-4">
+                  <div className="flex justify-center mb-3">
+                    <div className="bg-emerald-950/40 border border-emerald-500/30 p-2 rounded-full">
+                      <Sparkles className="w-8 h-8 text-emerald-400 animate-pulse" />
+                    </div>
+                  </div>
+                  <h3 className="text-emerald-400 font-extrabold text-lg mb-2">
+                    Cadastro Concluído!
+                  </h3>
+                  <p className="text-xs text-zinc-300 mb-5 leading-relaxed">
+                    Sua conta grátis de 30 dias foi criada com sucesso! 
+                    Use a senha gerada abaixo para fazer login no sistema sempre que precisar.
+                  </p>
+
+                  <div className="bg-[#0d0d11] border border-zinc-800 rounded-xl p-4 mb-5 relative flex flex-col items-center">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1">
+                      Sua Senha / Token de Acesso:
+                    </span>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="font-mono text-xl font-black tracking-widest text-cyan-400">
+                        {registeredCode}
+                      </span>
+                      <button
+                        onClick={handleCopyToClipboard}
+                        className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white p-2 rounded-lg transition border border-zinc-700 flex items-center gap-1 text-xs cursor-pointer"
+                        title="Copiar código"
+                      >
+                        {copied ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                        <span className="font-sans font-medium text-[10px]">
+                          {copied ? "Copiado!" : "Copiar"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="text-left text-xs bg-[#16161c] border border-zinc-800 rounded-lg p-3 mb-6 text-zinc-400 space-y-1">
+                    <div>• <strong>Nome</strong>: {clientName}</div>
+                    <div>• <strong>E-mail</strong>: {registeredEmail}</div>
+                    <div className="text-[10px] text-zinc-500 mt-2 font-medium">
+                      * Anote esta senha em local seguro. Enviamos uma cópia para o seu e-mail cadastrado.
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleConfirmAccess}
+                    className="bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer w-full shadow-lg shadow-cyan-500/10"
+                  >
+                    Entrar no Sistema
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
                 </div>
+              ) : (
+                /* REGULAR LOGIN & REGISTER TABS */
+                <>
+                  {/* Tabs Selector */}
+                  <div className="flex border-b border-zinc-800 mb-6 mt-4">
+                    <button
+                      onClick={() => { setAuthTab("login"); setLoginError(""); }}
+                      className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition relative ${
+                        authTab === "login" ? "text-cyan-400" : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Entrar
+                      {authTab === "login" && (
+                        <motion.div
+                          layoutId="activeAuthTab"
+                          className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-400"
+                        />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => { setAuthTab("register"); setLoginError(""); }}
+                      className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition relative ${
+                        authTab === "register" ? "text-cyan-400" : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Criar Conta
+                      {authTab === "register" && (
+                        <motion.div
+                          layoutId="activeAuthTab"
+                          className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-400"
+                        />
+                      )}
+                    </button>
+                  </div>
 
-                <button
-                  onClick={() => handleLogin()}
-                  disabled={loading}
-                  className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-1"
-                >
-                  {loading ? (
-                    <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                  {authTab === "login" ? (
+                    /* LOGIN TAB */
+                    <div className="flex flex-col text-left">
+                      <p className="text-[11px] text-zinc-400 mb-5 text-center leading-relaxed">
+                        Selecione a forma de entrada para liberar o sistema.
+                      </p>
+
+                      {/* Login Method Toggle */}
+                      <div className="grid grid-cols-2 bg-[#0d0d11] border border-zinc-800 rounded-xl p-1 mb-5">
+                        <button
+                          type="button"
+                          onClick={() => { setLoginMethod("token"); setLoginError(""); }}
+                          className={`py-2 text-[10px] font-bold rounded-lg uppercase tracking-wider transition ${
+                            loginMethod === "token"
+                              ? "bg-cyan-500/10 text-cyan-400 border border-cyan-400/25"
+                              : "text-zinc-500 hover:text-zinc-300 border border-transparent"
+                          }`}
+                        >
+                          Senha / Token
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setLoginMethod("email"); setLoginError(""); }}
+                          className={`py-2 text-[10px] font-bold rounded-lg uppercase tracking-wider transition ${
+                            loginMethod === "email"
+                              ? "bg-cyan-500/10 text-cyan-400 border border-cyan-400/25"
+                              : "text-zinc-500 hover:text-zinc-300 border border-transparent"
+                          }`}
+                        >
+                          E-mail + Senha
+                        </button>
+                      </div>
+
+                      {loginMethod === "token" ? (
+                        /* TOKEN/PASSWORD FIELD */
+                        <div className="space-y-4">
+                          <div className="relative">
+                            <span className="absolute left-3 top-3.5 text-zinc-500">
+                              <Lock className="w-4 h-4 text-cyan-400" />
+                            </span>
+                            <input
+                              type="password"
+                              value={tokenInput}
+                              onChange={(e) => setTokenInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleLogin();
+                              }}
+                              placeholder="Sua Senha / Token"
+                              className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl font-mono text-center tracking-widest text-sm outline-none focus:border-cyan-400 transition"
+                              autoFocus
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        /* EMAIL + PASSWORD FIELDS */
+                        <div className="space-y-3">
+                          <div className="relative">
+                            <span className="absolute left-3 top-3.5 text-zinc-500">
+                              <Mail className="w-4 h-4 text-cyan-400" />
+                            </span>
+                            <input
+                              type="email"
+                              value={loginEmail}
+                              onChange={(e) => setLoginEmail(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleLogin();
+                              }}
+                              placeholder="Seu E-mail"
+                              className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
+                            />
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-3 top-3.5 text-zinc-500">
+                              <Lock className="w-4 h-4 text-cyan-400" />
+                            </span>
+                            <input
+                              type="password"
+                              value={loginPassword}
+                              onChange={(e) => setLoginPassword(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleLogin();
+                              }}
+                              placeholder="Sua Senha"
+                              className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => handleLogin()}
+                        disabled={loading}
+                        className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-4 w-full"
+                      >
+                        {loading ? (
+                          <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            Entrar no Sistema
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    </div>
                   ) : (
-                    <>
-                      Entrar no Sistema
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </div>
+                    /* REGISTER TAB */
+                    <form onSubmit={handleRegister} className="flex flex-col text-left space-y-3">
+                      <p className="text-[11px] text-zinc-400 mb-3 text-center leading-relaxed">
+                        Cadastre-se para obter um acesso de teste de <strong>30 dias grátis</strong>.
+                      </p>
 
-              {/* Login Error Msg */}
+                      <div className="relative">
+                        <span className="absolute left-3 top-3.5 text-zinc-500">
+                          <User className="w-4 h-4 text-cyan-400" />
+                        </span>
+                        <input
+                          type="text"
+                          value={regName}
+                          onChange={(e) => setRegName(e.target.value)}
+                          placeholder="Nome Completo"
+                          className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
+                          required
+                        />
+                      </div>
+
+                      <div className="relative">
+                        <span className="absolute left-3 top-3.5 text-zinc-500">
+                          <Mail className="w-4 h-4 text-cyan-400" />
+                        </span>
+                        <input
+                          type="email"
+                          value={regEmail}
+                          onChange={(e) => setRegEmail(e.target.value)}
+                          placeholder="Seu Melhor E-mail"
+                          className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
+                          required
+                        />
+                      </div>
+
+                      <div className="relative">
+                        <span className="absolute left-3 top-3.5 text-zinc-500">
+                          <Phone className="w-4 h-4 text-cyan-400" />
+                        </span>
+                        <input
+                          type="tel"
+                          value={regPhone}
+                          onChange={(e) => setRegPhone(e.target.value)}
+                          placeholder="WhatsApp / Celular com DDD"
+                          className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
+                          required
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950 text-zinc-950 font-extrabold text-xs tracking-wider uppercase py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer mt-4 w-full"
+                      >
+                        {loading ? (
+                          <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            Solicitar Teste Grátis
+                            <UserPlus className="w-4 h-4 text-zinc-950" />
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  )}
+                </>
+              )}
+
+              {/* Login/Register Error Msg */}
               {loginError && (
                 <div 
                   className="mt-4 p-3 rounded-xl bg-red-950/35 border border-red-500/20 text-xs text-red-400 font-medium leading-relaxed"

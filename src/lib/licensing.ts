@@ -191,7 +191,7 @@ export interface AuthResponse {
   isAdmin?: boolean;
 }
 
-export function localRegister(name: string, email: string, password: string): AuthResponse {
+export function localRegister(name: string, email: string, phone: string): AuthResponse {
   const clients = getClients();
   const emailLower = email.trim().toLowerCase();
   const isDevAdmin = emailLower === "millertadeu30@gmail.com";
@@ -205,7 +205,10 @@ export function localRegister(name: string, email: string, password: string): Au
   } else {
     const existing = clients.find(c => c.email && c.email.trim().toLowerCase() === emailLower);
     if (existing) {
-      return { sucesso: false, msg: "Este e-mail já está cadastrado. Por favor, faça login." };
+      return { 
+        sucesso: false, 
+        msg: `O e-mail <strong>${emailLower}</strong> já está cadastrado com o código de acesso <strong>${existing.token}</strong>. Se você esqueceu, entre em contato.` 
+      };
     }
   }
 
@@ -213,13 +216,15 @@ export function localRegister(name: string, email: string, password: string): Au
   expDate.setDate(expDate.getDate() + 30);
   const expirationDateStr = expDate.toISOString().split("T")[0];
 
-  const generatedToken = isDevAdmin ? "8619" : `CNC-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  // Generate a random 5-digit numerical code/password
+  const generatedToken = isDevAdmin ? "8619" : Math.floor(10000 + Math.random() * 90000).toString();
   const supportPhone = getGlobalSupportPhone();
 
   const newClient: ClientToken = {
     name: name.trim(),
     email: emailLower,
-    password: password.trim(),
+    phone: phone.trim(),
+    password: generatedToken,
     token: generatedToken,
     expirationDate: isDevAdmin ? null : expirationDateStr,
     supportPhone: supportPhone,
@@ -232,7 +237,7 @@ export function localRegister(name: string, email: string, password: string): Au
 
   return {
     sucesso: true,
-    msg: "Cadastro realizado com sucesso! Seus 30 dias de teste grátis começaram.",
+    msg: "Cadastro realizado com sucesso!",
     clientName: newClient.name,
     token: newClient.token,
     supportPhone: newClient.supportPhone,

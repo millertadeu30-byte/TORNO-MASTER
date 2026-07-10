@@ -21,6 +21,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editName, setEditName] = useState<string>("");
   const [editEmail, setEditEmail] = useState<string>("");
+  const [editPhone, setEditPhone] = useState<string>("");
   const [editPassword, setEditPassword] = useState<string>("");
   const [editToken, setEditToken] = useState<string>("");
   const [originalToken, setOriginalToken] = useState<string>("");
@@ -73,7 +74,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const handleSaveClient = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editName || !editToken) {
-      setFormError("Nome e Token são obrigatórios.");
+      setFormError("Nome e Senha de Acesso são obrigatórios.");
       return;
     }
     setFormError("");
@@ -81,7 +82,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     const clientData: ClientToken = {
       name: editName,
       email: editEmail || undefined,
-      password: editPassword || undefined,
+      phone: editPhone || undefined,
+      password: editPassword || editToken,
       token: editToken,
       expirationDate: editExpDate || null,
       supportPhone: editSupport || globalSupport,
@@ -106,6 +108,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     // Reset states
     setEditName("");
     setEditEmail("");
+    setEditPhone("");
     setEditPassword("");
     setEditToken("");
     setOriginalToken("");
@@ -135,6 +138,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const startEdit = (c: ClientToken) => {
     setEditName(c.name);
     setEditEmail(c.email || "");
+    setEditPhone(c.phone || "");
     setEditPassword(c.password || "");
     setEditToken(c.token);
     setOriginalToken(c.token);
@@ -231,6 +235,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                 onClick={() => {
                   setEditName("");
                   setEditEmail("");
+                  setEditPhone("");
                   setEditPassword("");
                   setEditToken(""); // Start empty so the admin can type their custom password/token
                   setOriginalToken("");
@@ -288,7 +293,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                           <div className="font-semibold text-sm">{c.name}</div>
                           {c.email && (
                             <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                              <span>📞 {c.email}</span>
+                              <span>📧 {c.email}</span>
+                            </div>
+                          )}
+                          {c.phone && (
+                            <div className="text-[10px] text-cyan-400 font-mono mt-0.5">
+                              <span>📞 {c.phone}</span>
                             </div>
                           )}
                         </td>
@@ -390,28 +400,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
 
                 <div>
                   <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    Contato (WhatsApp / E-mail)
+                    E-mail do Cliente
                   </label>
                   <input
-                    type="text"
+                    type="email"
                     value={editEmail}
                     onChange={(e) => setEditEmail(e.target.value)}
-                    placeholder="Ex: (17) 98212-9547"
+                    placeholder="Ex: joao@gmail.com"
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-zinc-500 mb-1">
-                    Senha / Token de Acesso (Senha para Logar)
+                    Celular / WhatsApp do Cliente
                   </label>
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="Ex: (17) 98212-9547"
+                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-sans"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-[10px] font-bold text-zinc-500">
+                      Senha / Código de Acesso
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const code = Math.floor(10000 + Math.random() * 90000).toString();
+                        setEditToken(code);
+                        setEditPassword(code);
+                      }}
+                      className="text-[9px] bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-400 px-2 py-0.5 rounded border border-cyan-500/20 font-sans font-bold transition-all"
+                      title="Gerar código aleatório de 5 dígitos"
+                    >
+                      🎲 Gerar 5 Dígitos
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
                     value={editToken}
-                    onChange={(e) => setEditToken(e.target.value)}
-                    placeholder="Ex: SENHA123 ou 1122"
-                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-mono"
+                    onChange={(e) => {
+                      setEditToken(e.target.value);
+                      setEditPassword(e.target.value);
+                    }}
+                    placeholder="Ex: 83724"
+                    className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400 font-mono text-center font-bold tracking-widest text-sm"
                   />
                 </div>
 
