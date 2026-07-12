@@ -214,23 +214,20 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
 
             {/* Calculations results block */}
             <div className="mt-3 p-4 rounded-xl bg-[#111115] border border-zinc-800 flex flex-col gap-2.5">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider font-mono">
+              <span className="text-[10px] font-bold text-[#39ff14] uppercase tracking-wider font-mono">
                 {calcMode === "vf" ? "Resultado Avanço Linear" : "Resultado Avanço por Volta"}
               </span>
-              <div className="bg-[#0b0b0e] p-4 rounded-lg border border-zinc-850 text-center">
-                <span className="text-[9px] text-zinc-400 uppercase font-sans">
+              <div className="bg-[#0b0b0e] p-4 rounded-lg border border-zinc-850 text-center flex flex-col items-center justify-center min-h-[70px]">
+                <span className="text-[9px] text-zinc-400 uppercase font-sans mb-1">
                   {calcMode === "vf" ? "Avanço Linear da Mesa (Vf)" : "Avanço por Volta Calculado (f)"}
                 </span>
-                <div className="text-[#39ff14] font-mono font-black text-xl md:text-2xl mt-0.5">
-                  {calcMode === "vf" ? (
-                    <>
-                      {linearFeed} <span className="text-xs">mm/min</span>
-                    </>
-                  ) : (
-                    <>
-                      {feedRate.toFixed(4)} <span className="text-xs">mm/rot</span>
-                    </>
-                  )}
+                <div className="text-[#39ff14] font-mono font-black text-xl md:text-2xl mt-0.5 flex items-baseline justify-center gap-1.5">
+                  <span className="transition-all duration-150">
+                    {calcMode === "vf" ? linearFeed : feedRate.toFixed(4)}
+                  </span>
+                  <span className="text-xs font-normal text-zinc-400">
+                    {calcMode === "vf" ? "mm/min" : "mm/rot"}
+                  </span>
                 </div>
               </div>
               <div className="text-[10px] text-zinc-400 italic mt-1 leading-snug font-sans">
