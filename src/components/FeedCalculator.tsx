@@ -63,8 +63,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   }, [linearFeed, rpmVal, calcMode]);
 
   const handleFeedRateChange = (valStr: string) => {
-    setFeedRateInput(valStr);
-    const normalized = valStr.replace(",", ".");
+    // Only allow digits, one dot or one comma
+    const sanitized = valStr.replace(/[^0-9.,]/g, "");
+    setFeedRateInput(sanitized);
+    const normalized = sanitized.replace(",", ".");
     const parsed = parseFloat(normalized);
     if (!isNaN(parsed)) {
       setFeedRate(parsed);
@@ -74,9 +76,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   };
 
   const handleLinearFeedChange = (valStr: string) => {
-    setLinearFeedInput(valStr);
-    const normalized = valStr.replace(",", ".");
-    const parsed = parseFloat(normalized);
+    // Only allow digits for linear feed integer
+    const sanitized = valStr.replace(/[^0-9]/g, "");
+    setLinearFeedInput(sanitized);
+    const parsed = parseInt(sanitized, 10);
     if (!isNaN(parsed)) {
       setLinearFeed(parsed);
     } else {
@@ -85,9 +88,10 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   };
 
   const handleRpmChange = (valStr: string) => {
-    setRpmInput(valStr);
-    const normalized = valStr.replace(",", ".");
-    const parsed = parseFloat(normalized);
+    // Only allow digits for RPM integer
+    const sanitized = valStr.replace(/[^0-9]/g, "");
+    setRpmInput(sanitized);
+    const parsed = parseInt(sanitized, 10);
     if (!isNaN(parsed)) {
       setRpmVal(parsed);
     } else {
