@@ -14,88 +14,82 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
 }) => {
   // Inputs & Mode
   const [calcMode, setCalcMode] = useState<"vf" | "f">("vf");
-  const [feedRate, setFeedRate] = useState<number>(0.2); // f (mm/rot)
-  const [rpmVal, setRpmVal] = useState<number>(1145); // N (RPM)
-  const [linearFeed, setLinearFeed] = useState<number>(229); // Vf (mm/min)
-
   const [feedRateInput, setFeedRateInput] = useState<string>("0.2");
   const [rpmInput, setRpmInput] = useState<string>("1145");
   const [linearFeedInput, setLinearFeedInput] = useState<string>("229");
-  
   const [copied, setCopied] = useState<boolean>(false);
+
+  // Parse values on-the-fly using useMemo for absolute state correctness
+  const rpmVal = React.useMemo(() => {
+    const val = parseInt(rpmInput, 10);
+    return isNaN(val) ? 0 : val;
+  }, [rpmInput]);
+
+  const feedRate = React.useMemo(() => {
+    if (calcMode === "vf") {
+      const normalized = feedRateInput.replace(",", ".");
+      const val = parseFloat(normalized);
+      return isNaN(val) ? 0 : val;
+    } else {
+      const lf = parseInt(linearFeedInput, 10) || 0;
+      if (lf > 0 && rpmVal > 0) {
+        return parseFloat((lf / rpmVal).toFixed(4));
+      }
+      return 0;
+    }
+  }, [calcMode, feedRateInput, linearFeedInput, rpmVal]);
+
+  const linearFeed = React.useMemo(() => {
+    if (calcMode === "vf") {
+      const fr = parseFloat(feedRateInput.replace(",", ".")) || 0;
+      if (fr > 0 && rpmVal > 0) {
+        return Math.round(fr * rpmVal);
+      }
+      return 0;
+    } else {
+      const val = parseInt(linearFeedInput, 10);
+      return isNaN(val) ? 0 : val;
+    }
+  }, [calcMode, feedRateInput, linearFeedInput, rpmVal]);
 
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setFeedRate(0);
-      setRpmVal(0);
-      setLinearFeed(0);
       setFeedRateInput("");
       setRpmInput("");
       setLinearFeedInput("");
     }
   };
 
-  // Recalculate values based on mode
-  useEffect(() => {
-    if (calcMode === "vf") {
-      if (feedRate > 0 && rpmVal > 0) {
-        const calculated = Math.round(feedRate * rpmVal);
-        setLinearFeed(calculated);
-        setLinearFeedInput(calculated.toString());
-      } else {
-        setLinearFeed(0);
-        setLinearFeedInput("");
-      }
-    }
-  }, [feedRate, rpmVal, calcMode]);
-
-  useEffect(() => {
-    if (calcMode === "f") {
-      if (linearFeed > 0 && rpmVal > 0) {
-        const calculated = parseFloat((linearFeed / rpmVal).toFixed(4));
-        setFeedRate(calculated);
-        setFeedRateInput(calculated.toString());
-      } else {
-        setFeedRate(0);
-        setFeedRateInput("");
-      }
-    }
-  }, [linearFeed, rpmVal, calcMode]);
-
   const handleFeedRateChange = (valStr: string) => {
-    // Only allow digits, one dot or one comma
     const sanitized = valStr.replace(/[^0-9.,]/g, "");
     setFeedRateInput(sanitized);
-    const normalized = sanitized.replace(",", ".");
-    const parsed = parseFloat(normalized);
-    if (!isNaN(parsed)) {
-      setFeedRate(parsed);
-    } else {
-      setFeedRate(0);
-    }
   };
 
   const handleLinearFeedChange = (valStr: string) => {
-    // Only allow digits for linear feed integer
     const sanitized = valStr.replace(/[^0-9]/g, "");
     setLinearFeedInput(sanitized);
-    const parsed = parseInt(sanitized, 10);
-    if (!isNaN(parsed)) {
-      setLinearFeed(parsed);
-    } else {
-      setLinearFeed(0);
-    }
   };
 
   const handleRpmChange = (valStr: string) => {
-    // Only allow digits for RPM integer
     const sanitized = valStr.replace(/[^0-9]/g, "");
     setRpmInput(sanitized);
-    const parsed = parseInt(sanitized, 10);
-    if (!isNaN(parsed)) {
-      setRpmVal(parsed);
+  };
+
+  // Sync inputs smoothly when changing modes to keep user workflow fluid
+  const handleSetMode = (mode: "vf" | "f") => {
+    setCalcMode(mode);
+    if (mode === "f") {
+      // Sync calculated feedRate to input
+      const currentFr = feedRate;
+      if (currentFr > 0) {
+        setFeedRateInput(currentFr.toFixed(4));
+      }
     } else {
-      setRpmVal(0);
+      // Sync calculated linearFeed to input
+      const currentLf = linearFeed;
+      if (currentLf > 0) {
+        setLinearFeedInput(currentLf.toString());
+      }
     }
   };
 
@@ -140,7 +134,7 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
             <div className="flex gap-2 p-1 bg-[#121216] border border-zinc-850 rounded-lg">
               <button
                 type="button"
-                onClick={() => setCalcMode("vf")}
+                onClick={() => handleSetMode("vf")}
                 className={`flex-1 py-1.5 px-2 rounded-md text-[11px] font-mono font-bold transition-all cursor-pointer text-center ${
                   calcMode === "vf"
                     ? "bg-[#39ff14]/15 text-[#39ff14] border border-[#39ff14]/30"
@@ -151,7 +145,7 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setCalcMode("f")}
+                onClick={() => handleSetMode("f")}
                 className={`flex-1 py-1.5 px-2 rounded-md text-[11px] font-mono font-bold transition-all cursor-pointer text-center ${
                   calcMode === "f"
                     ? "bg-[#39ff14]/15 text-[#39ff14] border border-[#39ff14]/30"

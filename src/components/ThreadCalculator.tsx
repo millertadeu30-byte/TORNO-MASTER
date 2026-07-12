@@ -16,31 +16,11 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [threadProfile, setThreadProfile] = useState<"metrica" | "whitworth" | "npt" | "unf_unc">("metrica");
   const [threadDirection, setThreadDirection] = useState<"externa" | "interna">("externa");
   const [threadTaper, setThreadTaper] = useState<"paralela" | "conica">("paralela");
-  const [threadStarts, setThreadStarts] = useState<number>(1);
-  const [threadPasses, setThreadPasses] = useState<number>(10);
 
   // Unit and TPI (Threads Per Inch)
   const [tpi, setTpi] = useState<string>("11");
 
-  // Geometry
-  const [calcPitch, setCalcPitch] = useState<number>(1.5); // Passo P (mm)
-  const [calcDia, setCalcDia] = useState<number>(20.0);   // Diâmetro Nominal Ø (mm)
-  const [zStart, setZStart] = useState<string>("5.0");      // Z Aproximação
-  const [zEnd, setZEnd] = useState<string>("-20.0");       // Z Final
-
-  // Fine parameters
-  const [g76_m, setG76_M] = useState<string>("01");      // Passes de mola
-  const [g76_s, setG76_S] = useState<string>("10");      // Saída angular
-  const [g76_a, setG76_A] = useState<string>("60");      // Ângulo filete
-  const [g76_q_min, setG76_QMin] = useState<number>(100); // Passo mínimo em mícrons
-  const [g76_r_fin, setG76_RFin] = useState<number>(0.02); // Passe de acabamento em mm
-
-  // Calculated Outputs
-  const [outputThreadHeight, setOutputThreadHeight] = useState<number>(0); // microns
-  const [outputThreadRoot, setOutputThreadRoot] = useState<number>(0);   // mm
-  const [copied, setCopied] = useState<boolean>(false);
-
-  // Auxiliary string states for fluid text input
+  // Geometry string inputs for fluid, unrestricted typing
   const [threadStartsStr, setThreadStartsStr] = useState<string>("1");
   const [calcPitchStr, setCalcPitchStr] = useState<string>("1.5");
   const [calcDiaStr, setCalcDiaStr] = useState<string>("20.0");
@@ -48,20 +28,94 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [g76_r_finStr, setG76_RFinStr] = useState<string>("0.02");
   const [g76_q_minStr, setG76_QMinStr] = useState<string>("100");
 
+  const [zStart, setZStart] = useState<string>("5.0");      // Z Aproximação
+  const [zEnd, setZEnd] = useState<string>("-20.0");       // Z Final
+
+  // Fine parameters
+  const [g76_m, setG76_M] = useState<string>("01");      // Passes de mola
+  const [g76_s, setG76_S] = useState<string>("10");      // Saída angular
+  const [g76_a, setG76_A] = useState<string>("60");      // Ângulo filete
+
+  const [copied, setCopied] = useState<boolean>(false);
+
+  // Parse values on-the-fly via useMemo for instant, synchronous calculations
+  const threadStarts = React.useMemo(() => {
+    const val = parseInt(threadStartsStr, 10);
+    return isNaN(val) ? 1 : Math.max(1, val);
+  }, [threadStartsStr]);
+
+  const threadPasses = React.useMemo(() => {
+    const val = parseInt(threadPassesStr, 10);
+    return isNaN(val) ? 10 : Math.max(1, val);
+  }, [threadPassesStr]);
+
+  const calcPitch = React.useMemo(() => {
+    if (threadProfile !== "metrica") {
+      const parsedTpi = parseFloat(tpi.replace(",", ".")) || 0;
+      if (parsedTpi > 0) {
+        return parseFloat((25.4 / parsedTpi).toFixed(4));
+      }
+    }
+    const val = parseFloat(calcPitchStr.replace(",", "."));
+    return isNaN(val) ? 0 : val;
+  }, [threadProfile, tpi, calcPitchStr]);
+
+  const calcDia = React.useMemo(() => {
+    const val = parseFloat(calcDiaStr.replace(",", "."));
+    return isNaN(val) ? 0 : val;
+  }, [calcDiaStr]);
+
+  const g76_r_fin = React.useMemo(() => {
+    const val = parseFloat(g76_r_finStr.replace(",", "."));
+    return isNaN(val) ? 0 : val;
+  }, [g76_r_finStr]);
+
+  const g76_q_min = React.useMemo(() => {
+    const val = parseFloat(g76_q_minStr.replace(",", "."));
+    if (isNaN(val)) return 0;
+    if (val < 1.0 || g76_q_minStr.includes(".") || g76_q_minStr.includes(",")) {
+      return Math.round(val * 1000);
+    }
+    return Math.round(val);
+  }, [g76_q_minStr]);
+
+  // Calculated Outputs
+  const outputThreadHeight = React.useMemo(() => {
+    if (calcPitch > 0) {
+      let multiplier = 0.65;
+      if (threadProfile === "whitworth") {
+        multiplier = 0.6403;
+      } else if (threadProfile === "npt") {
+        multiplier = 0.866;
+      } else if (threadProfile === "unf_unc") {
+        multiplier = 0.61343;
+      }
+      return Math.round(multiplier * calcPitch * 1000); // microns
+    }
+    return 0;
+  }, [calcPitch, threadProfile]);
+
+  const outputThreadRoot = React.useMemo(() => {
+    if (calcPitch > 0 && calcDia > 0) {
+      let minorDia = calcDia;
+      if (threadDirection === "externa") {
+        minorDia = calcDia - 2 * (outputThreadHeight / 1000);
+      } else {
+        minorDia = calcDia - 1.0825 * calcPitch; // internal minor diameter
+      }
+      return parseFloat(minorDia.toFixed(3));
+    }
+    return 0;
+  }, [calcPitch, calcDia, threadDirection, outputThreadHeight]);
+
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setThreadStarts(1);
-      setThreadPasses(10);
       setTpi("");
-      setCalcPitch(0);
-      setCalcDia(0);
       setZStart("");
       setZEnd("");
       setG76_M("00");
       setG76_S("00");
       setG76_A("60");
-      setG76_QMin(0);
-      setG76_RFin(0);
 
       setThreadStartsStr("");
       setCalcPitchStr("");
@@ -78,23 +132,21 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       setG76_A("55");
       setTpi("11");
       const pitch = parseFloat((25.4 / 11).toFixed(4));
-      setCalcPitch(pitch);
       setCalcPitchStr(pitch.toString());
     } else if (threadProfile === "npt") {
       setG76_A("60");
       setThreadTaper("conica");
       setTpi("11.5");
       const pitch = parseFloat((25.4 / 11.5).toFixed(4));
-      setCalcPitch(pitch);
       setCalcPitchStr(pitch.toString());
     } else if (threadProfile === "unf_unc") {
       setG76_A("60");
       setTpi("14");
       const pitch = parseFloat((25.4 / 14).toFixed(4));
-      setCalcPitch(pitch);
       setCalcPitchStr(pitch.toString());
     } else {
       setG76_A("60");
+      setThreadTaper("paralela");
     }
   }, [threadProfile]);
 
@@ -105,111 +157,38 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     const val = parseFloat(sanitized);
     if (val > 0) {
       const pitch = parseFloat((25.4 / val).toFixed(4));
-      setCalcPitch(pitch);
       setCalcPitchStr(pitch.toString());
     }
   };
 
   const handleThreadStartsChange = (valStr: string) => {
     setThreadStartsStr(valStr);
-    const parsed = parseInt(valStr);
-    if (!isNaN(parsed)) {
-      setThreadStarts(parsed);
-    } else {
-      setThreadStarts(0);
-    }
   };
 
   const handlePitchInputChange = (valStr: string) => {
     setCalcPitchStr(valStr);
     const normalized = valStr.replace(",", ".");
     const parsed = parseFloat(normalized);
-    if (!isNaN(parsed)) {
-      setCalcPitch(parsed);
-      if (threadProfile !== "metrica" && parsed > 0) {
-        setTpi((25.4 / parsed).toFixed(2));
-      }
-    } else {
-      setCalcPitch(0);
+    if (!isNaN(parsed) && parsed > 0 && threadProfile !== "metrica") {
+      setTpi((25.4 / parsed).toFixed(2));
     }
   };
 
   const handleDiaInputChange = (valStr: string) => {
     setCalcDiaStr(valStr);
-    const normalized = valStr.replace(",", ".");
-    const parsed = parseFloat(normalized);
-    if (!isNaN(parsed)) {
-      setCalcDia(parsed);
-    } else {
-      setCalcDia(0);
-    }
   };
 
   const handleThreadPassesChange = (valStr: string) => {
     setThreadPassesStr(valStr);
-    const parsed = parseInt(valStr);
-    if (!isNaN(parsed)) {
-      setThreadPasses(parsed);
-    } else {
-      setThreadPasses(0);
-    }
   };
 
   const handleRFinChange = (valStr: string) => {
     setG76_RFinStr(valStr);
-    const normalized = valStr.replace(",", ".");
-    const parsed = parseFloat(normalized);
-    if (!isNaN(parsed)) {
-      setG76_RFin(parsed);
-    } else {
-      setG76_RFin(0);
-    }
   };
 
   const handleQMinChange = (valStr: string) => {
     setG76_QMinStr(valStr);
-    const normalized = valStr.replace(",", ".");
-    const parsed = parseFloat(normalized);
-    if (!isNaN(parsed)) {
-      // If user inputs a millimeter value (e.g. 0.01, 0.1, 0.05 or with a decimal point), convert to microns
-      if (parsed < 1.0 || valStr.includes(".") || valStr.includes(",")) {
-        setG76_QMin(Math.round(parsed * 1000));
-      } else {
-        setG76_QMin(Math.round(parsed));
-      }
-    } else {
-      setG76_QMin(0);
-    }
   };
-
-  // Calculations
-  useEffect(() => {
-    if (calcPitch > 0) {
-      let multiplier = 0.65;
-      if (threadProfile === "whitworth") {
-        multiplier = 0.6403;
-      } else if (threadProfile === "npt") {
-        multiplier = 0.866;
-      } else if (threadProfile === "unf_unc") {
-        multiplier = 0.61343;
-      }
-      const height = Math.round(multiplier * calcPitch * 1000); // microns
-      setOutputThreadHeight(height);
-
-      if (calcDia > 0) {
-        let minorDia = calcDia;
-        if (threadDirection === "externa") {
-          minorDia = calcDia - 2 * (height / 1000);
-        } else {
-          minorDia = calcDia - 1.0825 * calcPitch; // internal minor diameter
-        }
-        setOutputThreadRoot(parseFloat(minorDia.toFixed(3)));
-      }
-    } else {
-      setOutputThreadHeight(0);
-      setOutputThreadRoot(0);
-    }
-  }, [calcPitch, calcDia, threadProfile, threadDirection]);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code);

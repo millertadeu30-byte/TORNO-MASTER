@@ -20,8 +20,6 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
   const [feedRate, setFeedRate] = useState<string>("0.12");     // F avanço de trabalho (mm/volta)
   const [spindleSpeed, setSpindleSpeed] = useState<string>("1200"); // S RPM sugerido
   
-  // Computed values
-  const [computedQMicrons, setComputedQMicrons] = useState<number>(5000);
   const [copied, setCopied] = useState<boolean>(false);
 
   const handleClearAll = () => {
@@ -35,10 +33,10 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
     }
   };
 
-  // Sync peck in mm to microns
-  useEffect(() => {
+  // Sync peck in mm to microns using useMemo for zero-lag reactivity
+  const computedQMicrons = React.useMemo(() => {
     const val = parseFloat(peckMm.replace(",", ".")) || 0;
-    setComputedQMicrons(Math.round(val * 1000));
+    return Math.round(val * 1000);
   }, [peckMm]);
 
   const handleCopyCode = (code: string) => {

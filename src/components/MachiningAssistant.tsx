@@ -969,13 +969,6 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [g76_q_min, setG76_QMin] = useState<string>("100");
   const [g76_r_fin, setG76_RFin] = useState<string>("0.05");
 
-  // Outputs
-  const [outputRpm, setOutputRpm] = useState<number>(0);
-  const [outputVc, setOutputVc] = useState<number>(180);
-  const [outputVf, setOutputVf] = useState<number>(0);
-  const [outputThreadHeight, setOutputThreadHeight] = useState<number>(0);
-  const [outputThreadRoot, setOutputThreadRoot] = useState<number>(0);
-
   // Compute conversions
   const mmOutputFromInch = React.useMemo(() => {
     return fractionalInchToMm(calcInchInput);
@@ -991,33 +984,36 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     setSearchQuery("");
   }, []);
 
-  // Compute RPM
-  useEffect(() => {
+  // Compute outputs using useMemo for zero-lag reactivity on all devices
+  const outputRpm = React.useMemo(() => {
     const vc = parseLocaleFloat(calcVc);
     const dia = parseLocaleFloat(calcDia);
     if (vc > 0 && dia > 0) {
-      const rpm = Math.round((vc * 1000) / (Math.PI * dia));
-      setOutputRpm(rpm);
-    } else {
-      setOutputRpm(0);
+      return Math.round((vc * 1000) / (Math.PI * dia));
     }
+    return 0;
   }, [calcVc, calcDia]);
 
-  // Compute Feed Speed
-  useEffect(() => {
+  const outputVf = React.useMemo(() => {
     const f = parseLocaleFloat(calcFeed);
     const rpm = parseLocaleFloat(calcRpm);
     if (f > 0 && rpm > 0) {
-      setOutputVf(Math.round(f * rpm));
-    } else {
-      setOutputVf(0);
+      return Math.round(f * rpm);
     }
+    return 0;
   }, [calcFeed, calcRpm]);
 
-  // Compute Thread Depth
-  useEffect(() => {
-    const p = parseLocaleFloat(calcPitch);
+  const outputVc = React.useMemo(() => {
+    const rpm = parseLocaleFloat(calcRpm);
     const dia = parseLocaleFloat(calcDia);
+    if (rpm > 0 && dia > 0) {
+      return Math.round((Math.PI * dia * rpm) / 1000);
+    }
+    return 0;
+  }, [calcRpm, calcDia]);
+
+  const outputThreadHeight = React.useMemo(() => {
+    const p = parseLocaleFloat(calcPitch);
     if (p > 0) {
       let multiplier = 0.65;
       if (threadProfile === "whitworth") {
@@ -1025,34 +1021,25 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       } else if (threadProfile === "npt") {
         multiplier = 0.866;
       }
-      const height = Math.round(multiplier * p * 1000); // in microns
-      setOutputThreadHeight(height);
-      if (dia > 0) {
-        let minorDia = dia;
-        if (threadDirection === "externa") {
-          minorDia = dia - 2 * (height / 1000);
-        } else {
-          minorDia = dia - 1.0825 * p; // standard minor diameter for internal threads
-        }
-        setOutputThreadRoot(parseFloat(minorDia.toFixed(3)));
-      }
-    } else {
-      setOutputThreadHeight(0);
-      setOutputThreadRoot(0);
+      return Math.round(multiplier * p * 1000); // in microns
     }
-  }, [calcPitch, calcDia, threadProfile, threadDirection]);
+    return 0;
+  }, [calcPitch, threadProfile]);
 
-  // Compute VC from RPM
-  useEffect(() => {
-    const rpm = parseLocaleFloat(calcRpm);
+  const outputThreadRoot = React.useMemo(() => {
+    const p = parseLocaleFloat(calcPitch);
     const dia = parseLocaleFloat(calcDia);
-    if (rpm > 0 && dia > 0) {
-      const vc = Math.round((Math.PI * dia * rpm) / 1000);
-      setOutputVc(vc);
-    } else {
-      setOutputVc(0);
+    if (p > 0 && dia > 0) {
+      let minorDia = dia;
+      if (threadDirection === "externa") {
+        minorDia = dia - 2 * (outputThreadHeight / 1000);
+      } else {
+        minorDia = dia - 1.0825 * p; // standard minor diameter for internal threads
+      }
+      return parseFloat(minorDia.toFixed(3));
     }
-  }, [calcRpm, calcDia]);
+    return 0;
+  }, [calcPitch, calcDia, threadDirection, outputThreadHeight]);
 
   const generateG76GCode = () => {
     const pitch = parseLocaleFloat(calcPitch);
@@ -1949,13 +1936,23 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           <label className="block text-[9px] font-bold text-zinc-400 uppercase mb-1 font-mono">
                             Perfil da Rosca
                           </label>
-                          <select
+                           <select
                             value={threadProfile}
                             onChange={(e) => {
                               const prof = e.target.value as any;
                               setThreadProfile(prof);
-                              if (prof === "npt") {
+                              if (prof === "whitworth") {
+                                setG76_A("55");
+                                setCalcPitch("2.309"); // 11 TPI pitch (25.4 / 11)
+                                setThreadTaper("paralela");
+                              } else if (prof === "npt") {
+                                setG76_A("60");
+                                setCalcPitch("2.209"); // 11.5 TPI pitch (25.4 / 11.5)
                                 setThreadTaper("conica");
+                              } else {
+                                setG76_A("60");
+                                setCalcPitch("1.5");   // Standard metric pitch
+                                setThreadTaper("paralela");
                               }
                             }}
                             className="w-full bg-[#0d0d11] text-zinc-100 px-2 py-1.5 rounded border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono"
