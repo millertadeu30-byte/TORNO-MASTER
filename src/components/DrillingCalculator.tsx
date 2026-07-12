@@ -12,6 +12,19 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
   onInsertCode,
   isHighContrast = false,
 }) => {
+  // Helper functions to prevent NaN rendering errors
+  const safeParseFloat = (value: string, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseFloat(value.replace(",", "."));
+    return isNaN(parsed) ? fallback : parsed;
+  };
+
+  const safeParseInt = (value: string, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? fallback : parsed;
+  };
+
   // Input states as strings to support easy typing of negative signs (-) and decimals (.)
   const [zFinal, setZFinal] = useState<string>("-30.0");       // Z posição final do furo (absoluto)
   const [rStart, setRStart] = useState<string>("2.0");          // R plano de referência para início
@@ -21,6 +34,8 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
   const [spindleSpeed, setSpindleSpeed] = useState<string>("1200"); // S RPM sugerido
   
   const [copied, setCopied] = useState<boolean>(false);
+  const [isCalculating, setIsCalculating] = useState<boolean>(false);
+  const [codePreview, setCodePreview] = useState<string>("");
 
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
@@ -35,7 +50,7 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
 
   // Sync peck in mm to microns using useMemo for zero-lag reactivity
   const computedQMicrons = React.useMemo(() => {
-    const val = parseFloat(peckMm.replace(",", ".")) || 0;
+    const val = safeParseFloat(peckMm, 0);
     return Math.round(val * 1000);
   }, [peckMm]);
 
@@ -47,15 +62,15 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
 
   // Generate dynamic G-code based on inputs
   const generateGCode = (): string => {
-    const pZ = parseFloat(zFinal.replace(",", ".")) || 0;
-    const pR = parseFloat(rStart.replace(",", ".")) || 0;
-    const pF = parseFloat(feedRate.replace(",", ".")) || 0;
-    const pS = parseFloat(spindleSpeed.replace(",", ".")) || 0;
-    const pDwell = parseInt(dwellMs) || 0;
+    const pZ = safeParseFloat(zFinal, -30);
+    const pR = safeParseFloat(rStart, 2);
+    const pF = safeParseFloat(feedRate, 0.12);
+    const pS = safeParseFloat(spindleSpeed, 1200);
+    const pDwell = safeParseInt(dwellMs, 0);
 
     let lines: string[] = [];
     lines.push(`; --- CICLO DE FURAÇÃO DE PRECISSÃO G83 ---`);
-    lines.push(`; Furo final: Z${pZ.toFixed(2)} | Avanço: F${pF.toFixed(2)} | Q: ${peckMm}mm (${computedQMicrons} micra)`);
+    lines.push(`; Furo final: Z${pZ.toFixed(2)} | Avanço: F${pF.toFixed(2)} | Q: ${peckMm || "0"}mm (${computedQMicrons} micra)`);
     
     // Safety & spindle start
     if (pS > 0) {
@@ -82,12 +97,21 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
     return lines.join("\n");
   };
 
-  const codePreview = generateGCode();
+  // Run calculation reactively with a discrete loading indicator to meet user guidelines
+  useEffect(() => {
+    setIsCalculating(true);
+    const timer = setTimeout(() => {
+      const code = generateGCode();
+      setCodePreview(code);
+      setIsCalculating(false);
+    }, 150); // 150ms discrete delay
+    return () => clearTimeout(timer);
+  }, [zFinal, rStart, peckMm, dwellMs, feedRate, spindleSpeed]);
 
   // Parse for preview visualization bounds
-  const parsedZ = parseFloat(zFinal.replace(",", ".")) || -30;
-  const parsedR = parseFloat(rStart.replace(",", ".")) || 2;
-  const parsedPeck = parseFloat(peckMm.replace(",", ".")) || 5;
+  const parsedZ = safeParseFloat(zFinal, -30);
+  const parsedR = safeParseFloat(rStart, 2);
+  const parsedPeck = safeParseFloat(peckMm, 5);
 
   return (
     <div className={`w-full h-full flex flex-col overflow-hidden ${isHighContrast ? "bg-white text-black font-semibold" : "bg-[#0b0b0e] text-zinc-100"}`}>
@@ -307,11 +331,20 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
               <div className="flex-1 bg-[#050508] border border-zinc-850 rounded-xl p-3 font-mono text-xs text-cyan-400 leading-normal overflow-y-auto whitespace-pre-wrap select-text relative">
                 <button
                   onClick={() => handleCopyCode(codePreview)}
-                  className="absolute top-2 right-2 p-1.5 bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800 rounded transition text-zinc-400 hover:text-white"
+                  disabled={isCalculating}
+                  className="absolute top-2 right-2 p-1.5 bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800 rounded transition text-zinc-400 hover:text-white disabled:opacity-40 z-10"
                   title="Copiar Código"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
+                
+                {isCalculating && (
+                  <div className="absolute inset-0 bg-[#050508]/85 flex flex-col items-center justify-center gap-2 rounded-xl z-20">
+                    <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-[10px] font-sans text-zinc-400 font-medium tracking-wide uppercase">Recalculando...</span>
+                  </div>
+                )}
+                
                 {codePreview}
               </div>
 

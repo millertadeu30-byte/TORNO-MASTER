@@ -12,6 +12,19 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   onInsertCode,
   isHighContrast = false,
 }) => {
+  // Safe parser helper functions to prevent NaN rendering bugs
+  const safeParseFloat = (value: string, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseFloat(value.replace(",", "."));
+    return isNaN(parsed) ? fallback : parsed;
+  };
+
+  const safeParseInt = (value: string, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? fallback : parsed;
+  };
+
   // Advanced G76 Thread Calculator state variables
   const [threadProfile, setThreadProfile] = useState<"metrica" | "whitworth" | "npt" | "unf_unc">("metrica");
   const [threadDirection, setThreadDirection] = useState<"externa" | "interna">("externa");
@@ -37,42 +50,38 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [g76_a, setG76_A] = useState<string>("60");      // Ângulo filete
 
   const [copied, setCopied] = useState<boolean>(false);
+  const [isCalculating, setIsCalculating] = useState<boolean>(false);
+  const [codePreview, setCodePreview] = useState<string>("");
 
   // Parse values on-the-fly via useMemo for instant, synchronous calculations
   const threadStarts = React.useMemo(() => {
-    const val = parseInt(threadStartsStr, 10);
-    return isNaN(val) ? 1 : Math.max(1, val);
+    return Math.max(1, safeParseInt(threadStartsStr, 1));
   }, [threadStartsStr]);
 
   const threadPasses = React.useMemo(() => {
-    const val = parseInt(threadPassesStr, 10);
-    return isNaN(val) ? 10 : Math.max(1, val);
+    return Math.max(1, safeParseInt(threadPassesStr, 10));
   }, [threadPassesStr]);
 
   const calcPitch = React.useMemo(() => {
     if (threadProfile !== "metrica") {
-      const parsedTpi = parseFloat(tpi.replace(",", ".")) || 0;
+      const parsedTpi = safeParseFloat(tpi, 0);
       if (parsedTpi > 0) {
         return parseFloat((25.4 / parsedTpi).toFixed(4));
       }
     }
-    const val = parseFloat(calcPitchStr.replace(",", "."));
-    return isNaN(val) ? 0 : val;
+    return safeParseFloat(calcPitchStr, 0);
   }, [threadProfile, tpi, calcPitchStr]);
 
   const calcDia = React.useMemo(() => {
-    const val = parseFloat(calcDiaStr.replace(",", "."));
-    return isNaN(val) ? 0 : val;
+    return safeParseFloat(calcDiaStr, 0);
   }, [calcDiaStr]);
 
   const g76_r_fin = React.useMemo(() => {
-    const val = parseFloat(g76_r_finStr.replace(",", "."));
-    return isNaN(val) ? 0 : val;
+    return safeParseFloat(g76_r_finStr, 0);
   }, [g76_r_finStr]);
 
   const g76_q_min = React.useMemo(() => {
-    const val = parseFloat(g76_q_minStr.replace(",", "."));
-    if (isNaN(val)) return 0;
+    const val = safeParseFloat(g76_q_minStr, 0);
     if (val < 1.0 || g76_q_minStr.includes(".") || g76_q_minStr.includes(",")) {
       return Math.round(val * 1000);
     }
@@ -216,8 +225,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       angle = g76_a;
     }
 
-    const parsedZStart = parseFloat(String(zStart).replace(",", ".")) || 0;
-    const parsedZEnd = parseFloat(String(zEnd).replace(",", ".")) || 0;
+    const parsedZStart = safeParseFloat(zStart, 5.0);
+    const parsedZEnd = safeParseFloat(zEnd, -20.0);
 
     const h_mm = multiplier * calcPitch;
     const h_microns = Math.round(h_mm * 1000);
@@ -273,7 +282,32 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     return gcodeLines.join("\n");
   };
 
-  const codePreview = generateGCode();
+  // Run G-code calculation reactively with a discrete loading indicator to meet user guidelines
+  useEffect(() => {
+    setIsCalculating(true);
+    const timer = setTimeout(() => {
+      const code = generateGCode();
+      setCodePreview(code);
+      setIsCalculating(false);
+    }, 150); // 150ms discrete delay
+    return () => clearTimeout(timer);
+  }, [
+    threadProfile,
+    threadDirection,
+    threadTaper,
+    tpi,
+    threadStartsStr,
+    calcPitchStr,
+    calcDiaStr,
+    threadPassesStr,
+    g76_r_finStr,
+    g76_q_minStr,
+    zStart,
+    zEnd,
+    g76_m,
+    g76_s,
+    g76_a,
+  ]);
 
   return (
     <div className={`w-full h-full flex flex-col overflow-hidden ${isHighContrast ? "bg-white text-black font-semibold" : "bg-[#0b0b0e] text-zinc-100"}`}>
@@ -601,11 +635,20 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
               <div className="flex-1 bg-[#050508] border border-zinc-850 rounded-xl p-3 font-mono text-xs text-cyan-400 leading-relaxed overflow-y-auto whitespace-pre-wrap select-text relative">
                 <button
                   onClick={() => handleCopyCode(codePreview)}
-                  className="absolute top-2 right-2 p-1.5 bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800 rounded transition text-zinc-400 hover:text-white"
+                  disabled={isCalculating}
+                  className="absolute top-2 right-2 p-1.5 bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800 rounded transition text-zinc-400 hover:text-white disabled:opacity-40 z-10"
                   title="Copiar G-Code"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
+                
+                {isCalculating && (
+                  <div className="absolute inset-0 bg-[#050508]/85 flex flex-col items-center justify-center gap-2 rounded-xl z-20">
+                    <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-[10px] font-sans text-zinc-400 font-medium tracking-wide uppercase">Recalculando...</span>
+                  </div>
+                )}
+                
                 {codePreview}
               </div>
 

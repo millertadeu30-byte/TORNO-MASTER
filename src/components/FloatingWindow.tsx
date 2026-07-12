@@ -66,11 +66,15 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
       setIsDragging(true);
       dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
       target.setPointerCapture(e.pointerId);
-      onFocus(id);
+      if (activeWindowId !== id) {
+        onFocus(id);
+      }
       e.preventDefault();
     } else {
-      // Just focus on click
-      onFocus(id);
+      // Just focus on click if not already focused
+      if (activeWindowId !== id) {
+        onFocus(id);
+      }
     }
   };
 
@@ -98,7 +102,11 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   return (
     <div
       ref={windowRef}
-      onPointerDown={() => onFocus(id)}
+      onPointerDown={() => {
+        if (activeWindowId !== id) {
+          onFocus(id);
+        }
+      }}
       className={`fixed rounded-xl border flex flex-col overflow-hidden shadow-2xl transition-all duration-150 ${
         isActive
           ? "border-cyan-400 shadow-cyan-950/40 z-[999]"
