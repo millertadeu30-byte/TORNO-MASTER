@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from "react";
-import { Search, Copy, CheckCircle2, Trash2 } from "lucide-react";
+import { Search, Copy, CheckCircle2, Trash2, Calculator, Minus, Plus } from "lucide-react";
 
 interface CNCEditorProps {
   paneIndex: number;
@@ -11,6 +11,8 @@ interface CNCEditorProps {
   onSetFocus: () => void;
   isHighContrast: boolean;
   fileName?: string;
+  onToggleFloatingCalculator?: () => void;
+  isFloatingCalculatorOpen?: boolean;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -23,12 +25,20 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   onSetFocus,
   isHighContrast,
   fileName,
+  onToggleFloatingCalculator,
+  isFloatingCalculatorOpen,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = React.useState(false);
   const [useHighlight, setUseHighlight] = React.useState(true);
+  const [fontSize, setFontSize] = React.useState<number>(() => {
+    const saved = localStorage.getItem("cnc-editor-font-size");
+    return saved ? parseInt(saved, 10) : 14;
+  });
+
+  const lineHeight = Math.round(fontSize * 1.714);
 
   // Synchronize scrolling of textarea, highlight layer, and line numbers
   const handleScroll = () => {
@@ -77,7 +87,6 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       onLineSelect(lineIndex);
 
       // Scroll to view
-      const lineHeight = 24;
       textareaRef.current.scrollTop = lineIndex * lineHeight - textareaRef.current.clientHeight / 2;
     } else {
       alert("⚠️ Texto não localizado no editor!");
@@ -235,21 +244,20 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   useEffect(() => {
     if (activeLine >= 0 && textareaRef.current) {
       const textarea = textareaRef.current;
-      const lineHeight = 24; // line height is 24px as defined in editor CSS/elements
       
       const currentScrollTop = textarea.scrollTop;
       const viewHeight = textarea.clientHeight;
       const lineY = Math.floor(activeLine) * lineHeight;
       
       // If line is near or outside the visible viewport range, scroll it to the middle
-      if (lineY < currentScrollTop + 48 || lineY > currentScrollTop + viewHeight - 48) {
+      if (lineY < currentScrollTop + (lineHeight * 2) || lineY > currentScrollTop + viewHeight - (lineHeight * 2)) {
         const targetScrollTop = Math.floor(activeLine) * lineHeight - viewHeight / 2;
         textarea.scrollTop = Math.max(0, targetScrollTop);
         // Sync custom highlight layover scroll position
         handleScroll();
       }
     }
-  }, [activeLine, isActive]);
+  }, [activeLine, isActive, lineHeight]);
 
   return (
     <div
@@ -288,6 +296,64 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
             {useHighlight ? "🎨 Colorido" : "✍️ Bloco de Notas"}
           </button>
 
+          {/* Scientific Calculator Toggle Button */}
+          {onToggleFloatingCalculator && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFloatingCalculator();
+              }}
+              className={`text-[10px] px-2.5 py-1 rounded font-mono border transition-all duration-200 flex items-center gap-1.5 ${
+                isFloatingCalculatorOpen
+                  ? isHighContrast
+                    ? "bg-cyan-100 text-cyan-800 border-cyan-400 hover:bg-cyan-200 font-bold"
+                    : "bg-[#00f3ff]/20 text-[#00f3ff] border-[#00f3ff]/50 shadow-[0_0_8px_rgba(0,243,255,0.25)] font-bold animate-pulse"
+                  : isHighContrast
+                    ? "bg-zinc-100 text-zinc-850 border-zinc-350 hover:bg-zinc-250 font-bold"
+                    : "bg-zinc-900/60 text-zinc-400 border-zinc-800/80 hover:bg-zinc-800 hover:text-white"
+              }`}
+              title="Abrir/Fechar Calculadora Científica Flutuante"
+            >
+              <Calculator className="w-3.5 h-3.5 text-[#00f3ff]" />
+              <span>🧮 Calculadora</span>
+            </button>
+          )}
+
+          {/* Font Size Adjuster Control */}
+          <div className={`flex items-center border rounded px-2 py-1 gap-1.5 select-none ${isHighContrast ? 'bg-zinc-100 border-zinc-400 text-black' : 'bg-[#15151b] border-zinc-850 text-zinc-400'}`}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setFontSize(prev => {
+                  const val = Math.max(10, prev - 1);
+                  localStorage.setItem("cnc-editor-font-size", val.toString());
+                  return val;
+                });
+              }}
+              title="Diminuir tamanho da fonte"
+              className={`p-0.5 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'hover:bg-zinc-300 text-black' : 'text-zinc-400 hover:text-white'}`}
+            >
+              <Minus className="w-2.5 h-2.5" />
+            </button>
+            <span className="text-[10px] font-mono font-bold leading-none min-w-[22px] text-center">
+              {fontSize}px
+            </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setFontSize(prev => {
+                  const val = Math.min(26, prev + 1);
+                  localStorage.setItem("cnc-editor-font-size", val.toString());
+                  return val;
+                });
+              }}
+              title="Aumentar tamanho da fonte"
+              className={`p-0.5 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'hover:bg-zinc-300 text-black' : 'text-zinc-400 hover:text-white'}`}
+            >
+              <Plus className="w-2.5 h-2.5" />
+            </button>
+          </div>
+
           <button
             onClick={handleCopy}
             title="Copiar Código"
@@ -322,12 +388,14 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
         {/* Line Numbers column */}
         <div
           ref={lineNumbersRef}
-          className={`w-12 text-right pr-2 font-mono select-none overflow-hidden py-4 border-r leading-6 text-sm ${isHighContrast ? 'bg-zinc-100 text-black border-black' : 'bg-[#08080c] text-zinc-600 border-zinc-900/60'}`}
+          style={{ fontSize: `${fontSize - 1}px`, lineHeight: `${lineHeight}px` }}
+          className={`w-12 text-right pr-2 font-mono select-none overflow-hidden py-4 border-r ${isHighContrast ? 'bg-zinc-100 text-black border-black' : 'bg-[#08080c] text-zinc-600 border-zinc-900/60'}`}
         >
           {lines.map((_, i) => (
             <div
               key={i}
-              className={`h-6 flex items-center justify-end px-1 ${
+              style={{ height: `${lineHeight}px` }}
+              className={`flex items-center justify-end px-1 ${
                 i === Math.floor(activeLine) && isActive 
                   ? "bg-cyan-950/40 text-cyan-400 border-r-2 border-cyan-400" 
                   : ""
@@ -343,12 +411,16 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           {/* Active Line Highlight Layer */}
           <div
             ref={highlightRef}
-            className={`grid-area-[1/1/2/2] pointer-events-none absolute inset-0 font-mono text-sm leading-6 p-4 overflow-hidden whitespace-pre select-none z-10 text-left align-top m-0 border-0 ${
+            className={`grid-area-[1/1/2/2] pointer-events-none absolute inset-0 font-mono p-4 overflow-hidden whitespace-pre select-none z-10 text-left align-top m-0 border-0 ${
               !useHighlight ? "hidden" : ""
             } ${
               isHighContrast ? "text-zinc-900" : "text-zinc-300"
             }`}
-            style={{ tabSize: 4 }}
+            style={{ 
+              fontSize: `${fontSize}px`, 
+              lineHeight: `${lineHeight}px`, 
+              tabSize: 4 
+            }}
             aria-hidden="true"
           >
             {lines.map((line, i) => {
@@ -357,7 +429,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               return (
                 <div
                   key={i}
-                  className={`min-w-max h-[24px] ${
+                  style={{ height: `${lineHeight}px` }}
+                  className={`min-w-max ${
                     isActiveLine 
                       ? isHighContrast ? "bg-yellow-100" : "bg-cyan-950/45"
                       : hasTool 
@@ -373,6 +446,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
 
           {/* Actual Editable Textarea */}
           <textarea
+            id={`gcode-textarea-${paneIndex}`}
             ref={textareaRef}
             value={text}
             onChange={(e) => onChange(e.target.value)}
@@ -382,7 +456,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
             wrap="off"
             spellCheck="false"
             placeholder="Digite ou carregue seu código G-Code aqui..."
-            className={`grid-area-[1/1/2/2] absolute inset-0 w-full h-full bg-transparent border-none outline-none resize-none p-4 font-mono text-sm leading-6 ${
+            className={`grid-area-[1/1/2/2] absolute inset-0 w-full h-full bg-transparent border-none outline-none resize-none p-4 font-mono ${
               useHighlight
                 ? `text-transparent ${
                     isHighContrast 
@@ -394,6 +468,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                   : "text-zinc-100 caret-[#00f3ff] selection:bg-cyan-500/40"
             } overflow-auto z-20 whitespace-pre text-left align-top m-0`}
             style={{
+              fontSize: `${fontSize}px`,
+              lineHeight: `${lineHeight}px`,
               wordBreak: 'normal',
               overflowWrap: 'normal',
               tabSize: 4,

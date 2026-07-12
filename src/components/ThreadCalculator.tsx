@@ -13,7 +13,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   isHighContrast = false,
 }) => {
   // Advanced G76 Thread Calculator state variables
-  const [threadProfile, setThreadProfile] = useState<"metrica" | "whitworth" | "npt">("metrica");
+  const [threadProfile, setThreadProfile] = useState<"metrica" | "whitworth" | "npt" | "unf_unc">("metrica");
   const [threadDirection, setThreadDirection] = useState<"externa" | "interna">("externa");
   const [threadTaper, setThreadTaper] = useState<"paralela" | "conica">("paralela");
   const [threadStarts, setThreadStarts] = useState<number>(1);
@@ -85,6 +85,12 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       setThreadTaper("conica");
       setTpi("11.5");
       const pitch = parseFloat((25.4 / 11.5).toFixed(4));
+      setCalcPitch(pitch);
+      setCalcPitchStr(pitch.toString());
+    } else if (threadProfile === "unf_unc") {
+      setG76_A("60");
+      setTpi("14");
+      const pitch = parseFloat((25.4 / 14).toFixed(4));
       setCalcPitch(pitch);
       setCalcPitchStr(pitch.toString());
     } else {
@@ -184,6 +190,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
         multiplier = 0.6403;
       } else if (threadProfile === "npt") {
         multiplier = 0.866;
+      } else if (threadProfile === "unf_unc") {
+        multiplier = 0.61343;
       }
       const height = Math.round(multiplier * calcPitch * 1000); // microns
       setOutputThreadHeight(height);
@@ -221,6 +229,9 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     } else if (threadProfile === "npt") {
       multiplier = 0.866;
       angle = "60";
+    } else if (threadProfile === "unf_unc") {
+      multiplier = 0.61343;
+      angle = "60";
     } else {
       multiplier = 0.65;
       angle = g76_a;
@@ -249,7 +260,9 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       ? `NPT Cônica (${tpi} FPP/TPI)` 
       : threadProfile === "whitworth" 
         ? `Whitworth (${tpi} FPP/TPI)` 
-        : `Métrica`;
+        : threadProfile === "unf_unc"
+          ? `UNF / UNC (${tpi} FPP/TPI)`
+          : `Métrica`;
     
     gcodeLines.push(`; ROSCA G76: M${calcDia}x${calcPitch.toFixed(2)} (${labelProfile})`);
     gcodeLines.push(`; Tipo: ${threadDirection === "externa" ? "Externa" : "Interna"} | Entradas: ${threadStarts} | Passadas: ${threadPasses}`);
@@ -309,6 +322,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
                   <option value="metrica">Métrica ISO (60°)</option>
                   <option value="whitworth">Whitworth (55°)</option>
                   <option value="npt">NPT Cônica (60° - 1:16)</option>
+                  <option value="unf_unc">UNF / UNC (Polegadas 60°)</option>
                 </select>
               </div>
 
@@ -352,7 +366,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
               </div>
 
               {/* Condicional de Polegada: Fios por Polegada (TPI/FPP) */}
-              {(threadProfile === "whitworth" || threadProfile === "npt") && (
+              {(threadProfile === "whitworth" || threadProfile === "npt" || threadProfile === "unf_unc") && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-mono uppercase text-[#00f3ff] font-bold">
                     Fios por Polegada (FPP / TPI)
@@ -452,7 +466,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
                 <label className="block text-[9px] font-mono text-zinc-500 uppercase mb-1">Ângulo Filete (a)</label>
                 <select
                   value={g76_a}
-                  disabled={threadProfile === "whitworth"}
+                  disabled={threadProfile === "whitworth" || threadProfile === "npt" || threadProfile === "unf_unc"}
                   onChange={(e) => setG76_A(e.target.value)}
                   className="w-full bg-[#0d0d11] text-zinc-300 px-2 py-1 rounded border border-zinc-850 text-xs font-mono outline-none focus:border-cyan-400 disabled:opacity-50"
                 >

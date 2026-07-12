@@ -38,6 +38,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
 import { CNCSimulator } from "./components/CNCSimulator";
 import { MachiningAssistant } from "./components/MachiningAssistant";
+import FloatingCalculator from "./components/FloatingCalculator";
 import { AdminPanel } from "./components/AdminPanel";
 import { PolygonCalculator } from "./components/PolygonCalculator";
 import { RPMCalculator } from "./components/RPMCalculator";
@@ -142,6 +143,7 @@ export default function App() {
   const [showFeedCalc, setShowFeedCalc] = useState<boolean>(false);
   const [showThreadCalc, setShowThreadCalc] = useState<boolean>(false);
   const [showDrillingCalc, setShowDrillingCalc] = useState<boolean>(false);
+  const [isFloatingCalcOpen, setIsFloatingCalcOpen] = useState<boolean>(false);
 
   // Floating Window management states
   const [activeWindowId, setActiveWindowId] = useState<string>("");
@@ -476,10 +478,34 @@ export default function App() {
 
   // Insert generated code directly at current location
   const handleInsertCalculatedCode = (code: string) => {
-    const text = editorTexts[activePaneIdx];
-    // Simple append to bottom or selection point
-    const updated = text + "\n" + code;
-    updateEditorText(updated, activePaneIdx);
+    const textarea = document.getElementById(`gcode-textarea-${activePaneIdx}`) as HTMLTextAreaElement | null;
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const originalText = textarea.value;
+      const updated = originalText.substring(0, start) + code + originalText.substring(end);
+      
+      const savedScrollTop = textarea.scrollTop;
+      const savedScrollLeft = textarea.scrollLeft;
+      
+      updateEditorText(updated, activePaneIdx);
+      
+      // Restore cursor position exactly after the inserted code and preserve scrolling
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + code.length, start + code.length);
+        textarea.scrollTop = savedScrollTop;
+        textarea.scrollLeft = savedScrollLeft;
+        
+        // Dispatch synthetic scroll event to sync the highlighted code backdrop
+        textarea.dispatchEvent(new Event("scroll"));
+      }, 50);
+    } else {
+      // Fallback
+      const text = editorTexts[activePaneIdx];
+      const updated = text + "\n" + code;
+      updateEditorText(updated, activePaneIdx);
+    }
   };
 
   return (
@@ -1066,6 +1092,8 @@ export default function App() {
                   onSetFocus={() => setActivePaneIdx(idx)}
                   isHighContrast={isHighContrast}
                   fileName={fileNames[idx]}
+                  onToggleFloatingCalculator={() => setIsFloatingCalcOpen(prev => !prev)}
+                  isFloatingCalculatorOpen={isFloatingCalcOpen}
                 />
               ))}
             </div>
@@ -1169,6 +1197,8 @@ export default function App() {
                 activeGCode={editorTexts[activePaneIdx]}
                 isHighContrast={isHighContrast}
                 diagnosticError={diagnosticError}
+                onToggleFloatingCalculator={() => setIsFloatingCalcOpen(prev => !prev)}
+                isFloatingCalculatorOpen={isFloatingCalcOpen}
                 onOpenCalculator={(type) => {
                   if (type === "rpm") { setShowRpmCalc(true); setActiveWindowId("rpm"); }
                   else if (type === "feed") { setShowFeedCalc(true); setActiveWindowId("feed"); }
@@ -1304,6 +1334,14 @@ export default function App() {
                 isHighContrast={isHighContrast}
               />
             </FloatingWindow>
+          )}
+
+          {/* Global Floating Scientific Calculator */}
+          {isFloatingCalcOpen && (
+            <FloatingCalculator
+              onClose={() => setIsFloatingCalcOpen(false)}
+              onInsertValue={handleInsertCalculatedCode}
+            />
           )}
         </div>
       )}

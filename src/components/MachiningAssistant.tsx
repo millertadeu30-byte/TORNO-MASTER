@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, Calculator, Wrench, ChevronRight, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon } from "lucide-react";
+import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon } from "lucide-react";
+import { SENAI_MANUAL_CHAPTERS, SenaiManualChapter } from "../data/senaiManual";
+import FloatingCalculator from "./FloatingCalculator";
 
 interface TableData {
   nome: string;
@@ -40,6 +42,8 @@ interface MachiningAssistantProps {
   isHighContrast: boolean;
   diagnosticError: string | null;
   onOpenCalculator?: (type: "rpm" | "feed" | "thread" | "polygon" | "drilling") => void;
+  onToggleFloatingCalculator?: () => void;
+  isFloatingCalculatorOpen?: boolean;
 }
 
 const PRELOADED_MANUALS: ManualFile[] = [
@@ -259,6 +263,116 @@ const parseLocaleFloat = (val: string | number | undefined | null): number => {
   return isNaN(parsed) ? 0 : parsed;
 };
 
+export function mmToFractionalInch(mmValue: number): string {
+  if (isNaN(mmValue) || mmValue <= 0) return "";
+  const inches = mmValue / 25.4;
+  
+  const wholeInches = Math.floor(inches);
+  const fraction = inches - wholeInches;
+  
+  // Find the closest fraction with denominator 64, 32, 16, 8, 4, 2
+  const denominators = [2, 4, 8, 16, 32, 64];
+  let bestDiff = Infinity;
+  let bestNum = 0;
+  let bestDen = 1;
+  
+  for (const den of denominators) {
+    const num = Math.round(fraction * den);
+    const approxFraction = num / den;
+    const diff = Math.abs(fraction - approxFraction);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestNum = num;
+      bestDen = den;
+    }
+  }
+  
+  // Simplify fraction
+  const gcd = (a: number, b: number): number => {
+    return b === 0 ? a : gcd(b, a % b);
+  };
+  
+  let num = bestNum;
+  let den = bestDen;
+  const common = gcd(num, den);
+  if (common > 0) {
+    num /= common;
+    den /= common;
+  }
+  
+  let finalWhole = wholeInches;
+  let finalFractionStr = "";
+  
+  if (num === den && num > 0) {
+    finalWhole += 1;
+  } else if (num > 0) {
+    finalFractionStr = `${num}/${den}`;
+  }
+  
+  let result = "";
+  if (finalWhole > 0) {
+    result = `${finalWhole}`;
+    if (finalFractionStr) {
+      result += ` e ${finalFractionStr}`;
+    }
+  } else if (finalFractionStr) {
+    result = finalFractionStr;
+  } else {
+    result = "0";
+  }
+  
+  return result + '"';
+}
+
+export function fractionalInchToMm(inchStr: string): number {
+  if (!inchStr) return 0;
+  const cleaned = inchStr.trim()
+    .replace(/"/g, "")
+    .replace(/e/g, " ")
+    .replace(/-/g, " ")
+    .replace(/\+/g, " ")
+    .replace(",", ".");
+  
+  if (/^\d+(\.\d+)?$/.test(cleaned)) {
+    return parseFloat(cleaned) * 25.4;
+  }
+  
+  const normalized = cleaned.replace(/(\d+)\.(\d+\/\d+)/, "$1 $2");
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  let totalInches = 0;
+  
+  if (parts.length === 1) {
+    const part = parts[0];
+    if (part.includes("/")) {
+      const fracParts = part.split("/");
+      if (fracParts.length === 2) {
+        const num = parseFloat(fracParts[0]);
+        const den = parseFloat(fracParts[1]);
+        if (den > 0) {
+          totalInches = num / den;
+        }
+      }
+    } else {
+      totalInches = parseFloat(part);
+    }
+  } else if (parts.length === 2) {
+    const whole = parseFloat(parts[0]);
+    const frac = parts[1];
+    if (frac.includes("/")) {
+      const fracParts = frac.split("/");
+      if (fracParts.length === 2) {
+        const num = parseFloat(fracParts[0]);
+        const den = parseFloat(fracParts[1]);
+        if (den > 0) {
+          totalInches = whole + (num / den);
+        }
+      }
+    }
+  }
+  
+  return parseFloat((totalInches * 25.4).toFixed(3));
+}
+
 export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   onClose,
   onInsertCode,
@@ -267,6 +381,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   isHighContrast,
   diagnosticError,
   onOpenCalculator,
+  onToggleFloatingCalculator,
+  isFloatingCalculatorOpen,
 }) => {
   const [tables, setTables] = useState<TableData[]>(STATIC_FALLBACK_TABLES);
   const [activeTab, setActiveTab] = useState<number>(0);
@@ -573,13 +689,262 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   const activeDiagnostics = getGCodeDiagnostics();
 
-  // Library & Chat States
+  // Floating Calculator & Chat States
+  const [localFloatingCalcOpen, setLocalFloatingCalcOpen] = useState<boolean>(false);
+  const isFloatingCalcOpen = isFloatingCalculatorOpen !== undefined ? isFloatingCalculatorOpen : localFloatingCalcOpen;
+  const setIsFloatingCalcOpen = (val: boolean | ((prev: boolean) => boolean)) => {
+    if (onToggleFloatingCalculator) {
+      onToggleFloatingCalculator();
+    } else {
+      if (typeof val === "function") {
+        setLocalFloatingCalcOpen(val);
+      } else {
+        setLocalFloatingCalcOpen(val);
+      }
+    }
+  };
   const [activeMode, setActiveMode] = useState<"tables" | "senai-book">("tables");
   const [bookSearchQuery, setBookSearchQuery] = useState<string>("");
   const [selectedTopicId, setSelectedTopicId] = useState<string>("head");
+  const [selectedChapterId, setSelectedChapterId] = useState<string>("all");
+  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
+
+  // Generate slides from chapters dynamically
+  const slides = React.useMemo(() => {
+    const slidesList: any[] = [];
+    let globalSlideNum = 1;
+    
+    SENAI_MANUAL_CHAPTERS.forEach((chapter) => {
+      // 1. Cover slide
+      slidesList.push({
+        id: `${chapter.id}-cover`,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        category: chapter.category,
+        slideRange: chapter.slides,
+        title: chapter.title,
+        content: chapter.description,
+        isExample: false,
+        slideNumber: globalSlideNum++,
+      });
+
+      // 2. Main content pages (Split by ### headers)
+      if (chapter.content) {
+        const sections = chapter.content.split("###").map(s => s.trim()).filter(Boolean);
+        sections.forEach((section, idx) => {
+          const lines = section.split("\n");
+          const slideTitle = lines[0].replace(/[*#]/g, "").trim();
+          const slideBody = lines.slice(1).join("\n").trim();
+          slidesList.push({
+            id: `${chapter.id}-content-${idx}`,
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            category: chapter.category,
+            slideRange: chapter.slides,
+            title: slideTitle,
+            content: slideBody,
+            isExample: false,
+            slideNumber: globalSlideNum++,
+          });
+        });
+      }
+
+      // 3. Examples
+      if (chapter.examples) {
+        chapter.examples.forEach((ex, idx) => {
+          slidesList.push({
+            id: `${chapter.id}-example-${idx}`,
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            category: chapter.category,
+            slideRange: chapter.slides,
+            title: `Exercício: ${ex.title}`,
+            content: ex.description,
+            isExample: true,
+            exampleCode: ex.code,
+            examplePoints: ex.points,
+            slideNumber: globalSlideNum++,
+          });
+        });
+      }
+    });
+
+    return slidesList;
+  }, []);
+
+  // Filter slides by chapter and search query
+  const filteredSlides = React.useMemo(() => {
+    const removeAccents = (str: string) => {
+      return str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    };
+
+    return slides.filter((slide) => {
+      if (selectedChapterId !== "all" && slide.chapterId !== selectedChapterId) {
+        return false;
+      }
+      const query = removeAccents(bookSearchQuery.trim());
+      if (!query) return true;
+      return (
+        removeAccents(slide.chapterTitle).includes(query) ||
+        removeAccents(slide.category).includes(query) ||
+        removeAccents(slide.title).includes(query) ||
+        removeAccents(slide.content).includes(query) ||
+        (slide.exampleCode && removeAccents(slide.exampleCode).includes(query))
+      );
+    });
+  }, [slides, selectedChapterId, bookSearchQuery]);
+
+  // Clamp currentSlideIndex when filtered content changes
+  useEffect(() => {
+    setCurrentSlideIndex(0);
+  }, [selectedChapterId, bookSearchQuery]);
+
+  // Helper to render slide body text with nice typography
+  const renderSlideContent = (text: string) => {
+    const lines = text.split("\n");
+    return (
+      <div className="space-y-3 text-zinc-800 leading-relaxed text-sm md:text-base font-sans">
+        {lines.map((line, idx) => {
+          const trimmed = line.trim();
+          if (!trimmed) return <div key={idx} className="h-2" />;
+
+          // Check if it's a list item
+          const isBullet = trimmed.startsWith("*") || trimmed.startsWith("-");
+          const isNumbered = /^\d+\./.test(trimmed);
+
+          let content = trimmed;
+          if (isBullet) {
+            content = trimmed.substring(1).trim();
+          } else if (isNumbered) {
+            content = trimmed.replace(/^\d+\./, "").trim();
+          }
+
+          // Parse bold text **text** and inline code `code`
+          const parseInline = (str: string) => {
+            const parts: React.ReactNode[] = [];
+            let current = str;
+            let key = 0;
+
+            while (current.length > 0) {
+              const boldIdx = current.indexOf("**");
+              const codeIdx = current.indexOf("`");
+
+              if (boldIdx !== -1 && (codeIdx === -1 || boldIdx < codeIdx)) {
+                if (boldIdx > 0) {
+                  parts.push(current.substring(0, boldIdx));
+                }
+                const endBold = current.indexOf("**", boldIdx + 2);
+                if (endBold !== -1) {
+                  parts.push(
+                    <strong key={key++} className="font-extrabold text-zinc-950">
+                      {current.substring(boldIdx + 2, endBold)}
+                    </strong>
+                  );
+                  current = current.substring(endBold + 2);
+                } else {
+                  parts.push(current.substring(boldIdx));
+                  break;
+                }
+              } else if (codeIdx !== -1) {
+                if (codeIdx > 0) {
+                  parts.push(current.substring(0, codeIdx));
+                }
+                const endCode = current.indexOf("`", codeIdx + 1);
+                if (endCode !== -1) {
+                  parts.push(
+                    <code key={key++} className="bg-zinc-100 text-[#005fb8] px-1.5 py-0.5 rounded font-mono text-xs border border-zinc-200">
+                      {current.substring(codeIdx + 1, endCode)}
+                    </code>
+                  );
+                  current = current.substring(endCode + 1);
+                } else {
+                  parts.push(current.substring(codeIdx));
+                  break;
+                }
+              } else {
+                parts.push(current);
+                break;
+              }
+            }
+            return parts;
+          };
+
+          if (isBullet) {
+            return (
+              <div key={idx} className="flex items-start gap-2 pl-2">
+                <span className="text-[#005fb8] font-bold text-lg leading-none select-none">•</span>
+                <span className="flex-1">{parseInline(content)}</span>
+              </div>
+            );
+          }
+
+          if (isNumbered) {
+            const numberMatch = trimmed.match(/^(\d+)\./);
+            const num = numberMatch ? numberMatch[1] : "1";
+            return (
+              <div key={idx} className="flex items-start gap-2 pl-2">
+                <span className="text-[#005fb8] font-bold font-mono text-sm leading-6 select-none">{num}.</span>
+                <span className="flex-1">{parseInline(content)}</span>
+              </div>
+            );
+          }
+
+          return <p key={idx} className="pl-1 text-zinc-700 leading-relaxed">{parseInline(content)}</p>;
+        })}
+      </div>
+    );
+  };
+
+  // Helper to render G-Code with syntax highlighting inside slides
+  const renderGCodeHighlight = (code: string) => {
+    const lines = code.split("\n");
+    return (
+      <pre className="font-mono text-xs leading-relaxed text-zinc-300 bg-[#0d0d12] p-4 rounded-xl border border-zinc-800 overflow-x-auto max-h-[550px] select-text">
+        {lines.map((line, idx) => {
+          const commentIdx = line.indexOf("(");
+          let mainCode = line;
+          let comment = "";
+          if (commentIdx !== -1) {
+            mainCode = line.substring(0, commentIdx);
+            comment = line.substring(commentIdx);
+          }
+
+          const tokens = mainCode.split(/(\s+)/);
+          const highlightedTokens = tokens.map((token, tIdx) => {
+            if (/^[NG]\d+/i.test(token)) {
+              return <span key={tIdx} className="text-cyan-400 font-bold">{token}</span>;
+            }
+            if (/^[XYZFSTMWD]/i.test(token)) {
+              const letter = token[0];
+              const val = token.substring(1);
+              return (
+                <span key={tIdx}>
+                  <span className="text-amber-400 font-semibold">{letter}</span>
+                  <span className="text-emerald-400">{val}</span>
+                </span>
+              );
+            }
+            return <span key={tIdx}>{token}</span>;
+          });
+
+          return (
+            <div key={idx} className="hover:bg-zinc-800/30 px-1 rounded transition">
+              {highlightedTokens}
+              {comment && <span className="text-zinc-500 italic">{comment}</span>}
+            </div>
+          );
+        })}
+      </pre>
+    );
+  };
 
   // Calculator states
-  const [calcType, setCalcType] = useState<"rpm" | "feed" | "thread">("rpm");
+  const [calcType, setCalcType] = useState<"rpm" | "feed" | "thread" | "conversor">("rpm");
+  const [calcInchInput, setCalcInchInput] = useState<string>("1 e 1/4");
+  const [calcMmInput, setCalcMmInput] = useState<string>("31.75");
   const [calcVc, setCalcVc] = useState<string>("180");
   const [calcDia, setCalcDia] = useState<string>("50");
   const [calcRpm, setCalcRpm] = useState<string>("1145");
@@ -610,6 +975,16 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [outputVf, setOutputVf] = useState<number>(0);
   const [outputThreadHeight, setOutputThreadHeight] = useState<number>(0);
   const [outputThreadRoot, setOutputThreadRoot] = useState<number>(0);
+
+  // Compute conversions
+  const mmOutputFromInch = React.useMemo(() => {
+    return fractionalInchToMm(calcInchInput);
+  }, [calcInchInput]);
+
+  const inchOutputFromMm = React.useMemo(() => {
+    const val = parseLocaleFloat(calcMmInput);
+    return mmToFractionalInch(val);
+  }, [calcMmInput]);
 
   // Fetch tables on mount
   useEffect(() => {
@@ -765,7 +1140,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
   return (
     <>
-      <div className={`w-full h-full flex flex-col overflow-hidden ${isHighContrast ? 'bg-white text-black' : 'bg-[#1e1e24] text-zinc-100'}`}>
+      <div className={`relative w-full h-full flex flex-col overflow-hidden ${isHighContrast ? 'bg-white text-black' : 'bg-[#1e1e24] text-zinc-100'}`}>
         
         {/* Advanced CNC G-code Diagnostics */}
         {activeDiagnostics.length > 0 ? (
@@ -954,6 +1329,21 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
                 <button
                   onClick={() => {
+                    setActiveMode("tables");
+                    setCalcType("conversor");
+                  }}
+                  className={`text-left text-xs p-2.5 rounded-lg border transition flex items-center gap-2 ${
+                    activeMode === "tables" && calcType === "conversor"
+                      ? "bg-emerald-950/20 text-[#00f3ff] border-[#00f3ff]/40 font-bold"
+                      : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Calculator className="w-3.5 h-3.5 text-[#00f3ff]" />
+                  Conversor Pol. ⇄ mm
+                </button>
+
+                <button
+                  onClick={() => {
                     if (onOpenCalculator) {
                       onOpenCalculator("drilling");
                     }
@@ -978,24 +1368,27 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
               </div>
             </div>
 
-            {/* Guia de Programação */}
+            {/* Calculadora Científica */}
             <div>
               <h4 className="text-xs font-bold text-zinc-500 tracking-wider mb-2 uppercase">
-                Guia de Programação
+                Calculadora Científica
               </h4>
               <div className="flex flex-col gap-1.5">
                 <button
                   onClick={() => {
-                    setActiveMode("senai-book");
+                    setIsFloatingCalcOpen(prev => !prev);
                   }}
-                  className={`text-left text-xs p-2.5 rounded-lg border transition font-medium flex items-center gap-2 ${
-                    activeMode === "senai-book"
-                      ? "bg-cyan-950/20 text-cyan-400 border-cyan-400/40 font-bold"
+                  className={`text-left text-xs p-2.5 rounded-lg border transition font-medium flex items-center justify-between w-full ${
+                    isFloatingCalcOpen
+                      ? "bg-[#00f3ff]/10 text-[#00f3ff] border-[#00f3ff]/40 font-bold"
                       : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
                   }`}
                 >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  Livro de Consulta SENAI
+                  <div className="flex items-center gap-2">
+                    <Calculator className="w-3.5 h-3.5 text-[#00f3ff]" />
+                    <span>Calculadora Flutuante</span>
+                  </div>
+                  <span className={`w-2 h-2 rounded-full ${isFloatingCalcOpen ? "bg-[#00f3ff] animate-pulse" : "bg-zinc-650"}`} />
                 </button>
               </div>
             </div>
@@ -1004,7 +1397,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
           {/* Right main panel split */}
           <div className="flex-1 flex flex-col p-6 overflow-hidden bg-[#0d0d11]">
-            {activeMode === "senai-book" ? (
+            {false ? (
               <div className="flex-1 flex flex-col overflow-hidden h-full">
                 
                 {/* Book Header */}
@@ -1016,144 +1409,252 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                         Livro de Consulta Digital - SENAI CNC
                       </h4>
                       <p className="text-[10px] text-zinc-500 font-mono">
-                        Digite termos com a lupa para pesquisar capítulos de torneamento ISO Fanuc.
+                        Navegue pelos slides práticos do manual oficial do SENAI, pesquise termos e copie códigos.
                       </p>
                     </div>
                   </div>
                   <span className="text-[9px] px-2 py-0.5 bg-cyan-950/40 text-cyan-400 border border-cyan-800/20 rounded font-mono font-bold uppercase">
-                    Norma SENAI / ISO / Fanuc
+                    Modo Slides / Manual Real
                   </span>
                 </div>
 
-                {/* Main panel split: Left list of chapters / Right detailed handbook page */}
+                {/* Main panel split: Left list of chapters & slides / Right real photo slide canvas */}
                 <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
                   
-                  {/* Sub Left list (Scrollable) */}
-                  <div className="w-[260px] shrink-0 flex flex-col gap-2.5 h-full border-r border-zinc-800/60 pr-4">
-                    {/* Search Field with magnifying glass */}
+                  {/* Left list of chapters (Scrollable list with search) */}
+                  <div className="w-[280px] shrink-0 flex flex-col gap-3 h-full border-r border-zinc-850 pr-4">
+                    
+                    {/* Search field */}
                     <div className="relative shrink-0">
-                      <Search className="absolute left-2.5 top-2.5 text-zinc-550 w-3.5 h-3.5" />
+                      <Search className="absolute left-2.5 top-2.5 text-zinc-555 w-3.5 h-3.5" />
                       <input
                         type="text"
                         value={bookSearchQuery}
-                        onChange={(e) => setBookSearchQuery(e.target.value)}
-                        placeholder="Buscar com lupa..."
-                        className="w-full bg-[#131317] border border-zinc-800 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none focus:border-cyan-400 font-sans"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBookSearchQuery(val);
+                          if (val.trim() !== "") {
+                            setSelectedChapterId("all");
+                          }
+                        }}
+                        placeholder="Pesquisar termo no manual..."
+                        className="w-full bg-[#131317] border border-zinc-800 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none focus:border-[#00f3ff] font-sans transition"
                       />
                     </div>
 
-                    {/* Topics List */}
+                    {/* Chapter filter selector */}
+                    <div className="shrink-0">
+                      <label className="text-[10px] text-zinc-500 uppercase font-mono block mb-1">Filtrar por Capítulo:</label>
+                      <select
+                        value={selectedChapterId}
+                        onChange={(e) => setSelectedChapterId(e.target.value)}
+                        className="w-full bg-[#131317] border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-250 outline-none focus:border-[#00f3ff] transition"
+                      >
+                        <option value="all">📚 Todos os Capítulos ({SENAI_MANUAL_CHAPTERS.length})</option>
+                        {SENAI_MANUAL_CHAPTERS.map(ch => (
+                          <option key={ch.id} value={ch.id}>
+                            {ch.title.length > 35 ? ch.title.substring(0, 35) + "..." : ch.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Slides Navigation list inside Sidebar */}
+                    <div className="text-[10px] text-zinc-555 uppercase font-mono tracking-wider pt-2 border-t border-zinc-900 shrink-0 flex justify-between items-center">
+                      <span>Slides do Manual:</span>
+                      <span className="text-[#00f3ff] font-bold">({filteredSlides.length})</span>
+                    </div>
+
                     <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 pr-1">
-                      {SENAI_MANUAL_TOPICS.filter((t) => {
-                        const q = bookSearchQuery.toLowerCase();
-                        return (
-                          t.title.toLowerCase().includes(q) ||
-                          t.code.toLowerCase().includes(q) ||
-                          t.explanation.toLowerCase().includes(q) ||
-                          t.category.toLowerCase().includes(q)
-                        );
-                      }).map((t) => (
+                      {filteredSlides.map((slide, sIdx) => (
                         <button
-                          key={t.id}
-                          onClick={() => setSelectedTopicId(t.id)}
-                          className={`text-left p-2 rounded-lg border transition text-xs flex items-start gap-2.5 ${
-                            selectedTopicId === t.id
-                              ? "bg-cyan-950/20 text-[#00f3ff] border-cyan-400/40"
-                              : "bg-[#111116] border-zinc-850/60 text-zinc-400 hover:text-zinc-200"
+                          key={slide.id}
+                          onClick={() => setCurrentSlideIndex(sIdx)}
+                          className={`text-left p-2.5 rounded-lg border transition text-xs flex flex-col gap-1 ${
+                            currentSlideIndex === sIdx
+                              ? "bg-cyan-950/20 text-[#00f3ff] border-cyan-400/40 font-bold"
+                              : "bg-[#111116] border-zinc-850/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40"
                           }`}
                         >
-                          <span className="font-mono text-[9px] bg-zinc-900 px-1.5 py-0.5 rounded font-black text-cyan-400 shrink-0">
-                            {t.code}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-bold truncate text-zinc-200">{t.title}</div>
-                            <div className="text-[9px] text-zinc-550 truncate uppercase font-semibold">{t.category}</div>
+                          <div className="flex items-center justify-between w-full">
+                            <span className="font-mono text-[9px] bg-zinc-900 px-1.5 py-0.5 rounded font-bold text-zinc-400">
+                              Pág. {slide.slideNumber}
+                            </span>
+                            <span className="text-[9px] text-zinc-555 font-mono italic truncate max-w-[120px] uppercase">
+                              {slide.category}
+                            </span>
                           </div>
+                          <div className="font-bold truncate text-zinc-200 w-full mt-0.5">{slide.title}</div>
                         </button>
                       ))}
-                      {SENAI_MANUAL_TOPICS.filter((t) => {
-                        const q = bookSearchQuery.toLowerCase();
-                        return (
-                          t.title.toLowerCase().includes(q) ||
-                          t.code.toLowerCase().includes(q) ||
-                          t.explanation.toLowerCase().includes(q) ||
-                          t.category.toLowerCase().includes(q)
-                        );
-                      }).length === 0 && (
-                        <div className="text-zinc-600 text-center py-6 text-[11px] font-mono">
-                          Nenhum tópico encontrado com esta palavra.
+
+                      {filteredSlides.length === 0 && (
+                        <div className="text-zinc-600 text-center py-12 text-[11px] font-mono">
+                          Nenhum slide ou capítulo corresponde aos filtros.
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Sub Right Detailed handbook page */}
-                  <div className="flex-1 overflow-y-auto bg-[#131318] border border-zinc-800 rounded-xl p-5 flex flex-col justify-between h-full min-h-0">
+                  {/* Right Column: Beautiful Slide presentation card ("Livro de Consulta como Foto/Slide") */}
+                  <div className="flex-1 flex flex-col justify-between h-full min-h-0 overflow-hidden">
                     {(() => {
-                      const topic = SENAI_MANUAL_TOPICS.find(t => t.id === selectedTopicId);
-                      if (!topic) return <div className="text-zinc-500 text-center py-12 text-xs font-mono">Selecione um tópico para consultar</div>;
+                      const currentSlide = filteredSlides[currentSlideIndex];
+                      if (!currentSlide) {
+                        return (
+                          <div className="flex-1 flex items-center justify-center bg-[#131318] border border-zinc-800 rounded-xl p-8">
+                            <p className="text-zinc-500 text-xs font-mono text-center">
+                              Use a pesquisa para encontrar termos ou selecione um capítulo ao lado.
+                            </p>
+                          </div>
+                        );
+                      }
 
                       return (
-                        <div className="flex flex-col gap-4 h-full">
+                        <div className="flex-1 flex flex-col gap-4 overflow-hidden h-full">
                           
-                          {/* Breadcrumb & Title */}
-                          <div className="flex items-center justify-between pb-2 border-b border-zinc-900 shrink-0">
-                            <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest font-black">
-                              Manual Prático • {topic.category}
-                            </span>
-                            <span className="text-[9px] font-mono font-black text-[#00f3ff] bg-cyan-950/30 px-2.5 py-0.5 rounded-md border border-cyan-400/20">
-                              CÓDIGO {topic.code}
-                            </span>
+                          {/* THE ACTUAL SLIDE / "FOTO" OF MANUAL */}
+                          <div className="flex-1 bg-white text-zinc-900 rounded-xl border border-zinc-200 shadow-2xl flex flex-col justify-between overflow-hidden relative p-4 md:p-6 select-text">
+                            
+                            {/* Slide Top Decorative bar (looks exactly like the blue block in screenshot) */}
+                            <div className="absolute top-0 left-0 right-0 h-2 bg-[#005fb8]" />
+                            
+                            {/* Slide Header */}
+                            <div className="flex items-center justify-between border-b border-zinc-100 pb-3 mb-2 shrink-0">
+                              <div className="flex items-center gap-2">
+                                <BookOpen className="w-4 h-4 text-[#005fb8]" />
+                                <span className="text-[10px] md:text-xs font-mono text-[#005fb8] uppercase font-black tracking-widest">
+                                  SENAI CNC • {currentSlide.category}
+                                </span>
+                              </div>
+                              <span className="text-[10px] md:text-xs font-mono text-zinc-400 font-bold bg-zinc-50 border border-zinc-150 px-2 py-0.5 rounded">
+                                {currentSlide.slideRange}
+                              </span>
+                            </div>
+
+                            {/* Slide Main Content Body */}
+                            <div className="flex-1 overflow-y-auto pr-1 my-3 scrollbar-thin">
+                              {currentSlide.isExample ? (
+                                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
+                                  {/* Left column: Text info */}
+                                  <div className="lg:col-span-2 flex flex-col space-y-4">
+                                    <div className="space-y-3">
+                                      <h3 className="text-xl font-black text-zinc-900 leading-tight">
+                                        {currentSlide.title}
+                                      </h3>
+                                      <div className="text-sm text-zinc-650 leading-relaxed font-sans pr-2">
+                                        {renderSlideContent(currentSlide.content)}
+                                      </div>
+                                    </div>
+
+                                    {/* Geometric points if any */}
+                                    {currentSlide.examplePoints && currentSlide.examplePoints.length > 0 && (
+                                      <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg text-xs font-mono text-slate-700 mt-2">
+                                        <div className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-1 uppercase text-[10px] tracking-wide">
+                                          Coordenadas do Perfil:
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-y-1 gap-x-2">
+                                          {currentSlide.examplePoints.map((pt: any, pIdx: number) => (
+                                            <div key={pIdx} className="flex justify-between border-b border-slate-100/60 pb-0.5">
+                                              <span className="font-black text-[#005fb8]">{pt.pt}:</span>
+                                              <span>X{pt.x} Z{pt.z}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Right column: G-Code view with insert tools */}
+                                  <div className="lg:col-span-3 flex flex-col bg-[#0b0b0f] p-4 rounded-xl border border-zinc-800 relative">
+                                    <div className="flex justify-between items-center pb-2 mb-2 border-b border-zinc-850">
+                                      <span className="text-[9px] font-mono font-bold text-cyan-400 uppercase tracking-widest">
+                                        Código G Resolvido:
+                                      </span>
+                                      <button
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(currentSlide.exampleCode);
+                                        }}
+                                        className="text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition"
+                                        title="Copiar Código"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                    
+                                    <div className="mb-3 w-full overflow-x-auto">
+                                      {renderGCodeHighlight(currentSlide.exampleCode)}
+                                    </div>
+
+                                    <button
+                                      onClick={() => {
+                                        handleInsertCalculated(currentSlide.exampleCode);
+                                      }}
+                                      className="w-full bg-[#005fb8] hover:bg-[#004d96] text-white font-extrabold py-2 px-3 rounded-lg text-xs uppercase tracking-wide flex items-center justify-center gap-2 transition shrink-0"
+                                    >
+                                      <span>⚡ Inserir Código Resolvido no Editor</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-4 max-w-3xl">
+                                  <h3 className="text-2xl font-black text-zinc-900 tracking-tight leading-tight border-b border-zinc-100 pb-2">
+                                    {currentSlide.title}
+                                  </h3>
+                                  <div className="text-sm md:text-base text-zinc-750 leading-relaxed pr-2">
+                                    {renderSlideContent(currentSlide.content)}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Slide Footer - STRICTLY CLEAN (No instructor names) */}
+                            <div className="border-t border-zinc-100 pt-3 flex items-center justify-between text-[9px] md:text-[10px] font-mono text-zinc-400 tracking-wider shrink-0 mt-2">
+                              <span>MANUAL DE PROGRAMAÇÃO DE TORNO CNC • SENAI</span>
+                              <span className="font-bold bg-zinc-100 text-zinc-700 px-2 py-0.5 rounded border border-zinc-150">
+                                Slide {currentSlide.slideNumber}
+                              </span>
+                            </div>
                           </div>
 
-                          <div className="space-y-1 shrink-0">
-                            <h3 className="text-base font-display font-black text-zinc-100 flex items-center gap-2">
-                              📖 {topic.title}
-                            </h3>
-                            <p className="text-xs text-zinc-400 font-mono italic">
-                              {topic.explanation}
-                            </p>
-                          </div>
-
-                          {/* Syntax Section */}
-                          <div className="bg-[#0b0b0e] border border-cyan-400/20 rounded-xl p-4 font-mono shrink-0">
-                            <div className="text-[9px] text-cyan-400/60 uppercase font-black tracking-wider mb-2">
-                              ESTRUTURA DE PROGRAMAÇÃO RECOMENDADA PELO SENAI:
-                            </div>
-                            <div className="text-xs text-[#00f3ff] font-black select-text whitespace-pre-wrap leading-relaxed">
-                              {topic.syntax}
-                            </div>
-                          </div>
-
-                          {/* Technical details Grid */}
-                          <div className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-850/50 overflow-y-auto max-h-[140px]">
-                            <div className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-2 font-mono">
-                              Significado dos Parâmetros & Detalhes Técnicos:
-                            </div>
-                            <div className="text-xs text-zinc-350 leading-relaxed font-mono whitespace-pre-line">
-                              {topic.details}
-                            </div>
-                          </div>
-
-                          {/* Practical tips */}
-                          <div className="bg-emerald-950/10 border-l-4 border-emerald-500 p-4 rounded-r-xl shrink-0">
-                            <div className="text-[9px] font-black text-emerald-400 uppercase tracking-wider mb-1 font-mono">
-                              Anotações de Prática Mecânica (Oficina):
-                            </div>
-                            <p className="text-xs text-zinc-300 leading-relaxed">
-                              {topic.practicalUse}
-                            </p>
-                          </div>
-
-                          {/* Bottom Action Button */}
-                          <div className="mt-auto pt-4 border-t border-zinc-900 flex justify-end shrink-0">
+                          {/* Navigation control overlay under the slide */}
+                          <div className="flex justify-between items-center py-2 px-1 shrink-0">
                             <button
                               onClick={() => {
-                                handleInsertCalculated(topic.syntax);
+                                if (currentSlideIndex > 0) {
+                                  setCurrentSlideIndex(currentSlideIndex - 1);
+                                }
                               }}
-                              className="bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-black py-2 px-4 rounded-lg text-xs uppercase tracking-wider flex items-center gap-2 transition"
+                              disabled={currentSlideIndex === 0}
+                              className={`flex items-center gap-1.5 py-2 px-4 rounded-lg font-bold text-xs uppercase tracking-wider transition ${
+                                currentSlideIndex === 0
+                                  ? "text-zinc-600 bg-zinc-900/25 border border-zinc-800/40 cursor-not-allowed"
+                                  : "bg-[#181822] text-zinc-200 border border-zinc-800 hover:bg-zinc-800 hover:text-white"
+                              }`}
                             >
-                              <span>⚡ Inserir Código de Exemplo</span>
+                              <ChevronLeft className="w-4 h-4" />
+                              <span>Anterior</span>
+                            </button>
+
+                            <div className="text-center font-mono text-xs text-zinc-400">
+                              Página <span className="text-[#00f3ff] font-bold">{currentSlideIndex + 1}</span> de <span className="font-bold">{filteredSlides.length}</span>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                if (currentSlideIndex < filteredSlides.length - 1) {
+                                  setCurrentSlideIndex(currentSlideIndex + 1);
+                                }
+                              }}
+                              disabled={currentSlideIndex === filteredSlides.length - 1}
+                              className={`flex items-center gap-1.5 py-2 px-4 rounded-lg font-bold text-xs uppercase tracking-wider transition ${
+                                currentSlideIndex === filteredSlides.length - 1
+                                  ? "text-zinc-650 bg-zinc-900/25 border border-zinc-800/40 cursor-not-allowed"
+                                  : "bg-[#00f3ff] text-zinc-950 hover:bg-[#00f3ff]/90"
+                              }`}
+                            >
+                              <span>Próximo</span>
+                              <ChevronRight className="w-4 h-4" />
                             </button>
                           </div>
 
@@ -1164,13 +1665,13 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
                 </div>
               </div>
-            ) : activeMode === "tables" ? (
+            ) : true ? (
               <>
                 {/* CNC Interactive calculators at top */}
                 <div className="mb-6 p-4 bg-[#1b1b21] rounded-xl border border-zinc-800">
                   <div className="flex justify-between items-center mb-3">
                     <span className="text-[11px] font-bold text-[#00f3ff] uppercase tracking-wider font-mono">
-                      Calculadora Rápida {calcType === "rpm" ? "RPM / G96" : calcType === "feed" ? "Avanço Vf" : "Rosca G76"}
+                      Calculadora Rápida {calcType === "rpm" ? "RPM / G96" : calcType === "feed" ? "Avanço Vf" : calcType === "thread" ? "Rosca G76" : "Conversor Pol/mm"}
                     </span>
                     <button
                       onClick={() => {
@@ -1338,6 +1839,95 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                         >
                           Inserir Avanço f no G-Code
                         </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {calcType === "conversor" && (
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center justify-between pb-1 border-b border-zinc-800">
+                        <span className="text-[11px] font-bold text-[#00f3ff] uppercase tracking-wider font-mono">
+                          Conversor de Medidas (Polegadas Fracionárias ⇄ Milímetros)
+                        </span>
+                        <span className="text-[10px] text-zinc-500 italic">
+                          Conversor bidirecional de precisão mecânica conforme padrão SENAI (ex: 31,75mm = 1 e 1/4")
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Column 1: Inch to MM */}
+                        <div className="p-4 bg-[#16161c] rounded-xl border border-zinc-800/80 flex flex-col gap-3">
+                          <h4 className="text-xs font-bold text-cyan-400 uppercase font-sans">
+                            Converter Polegada Fracionária para mm
+                          </h4>
+                          <div>
+                            <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">
+                              Fração em Polegada (ex: 1 e 1/4, 3/8, 1 1/2)
+                            </label>
+                            <input
+                              type="text"
+                              value={calcInchInput}
+                              onChange={(e) => setCalcInchInput(e.target.value)}
+                              placeholder="Ex: 1 e 1/4"
+                              className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
+                            />
+                          </div>
+
+                          <div className="bg-[#0f0f13] p-3 rounded border border-zinc-800/60 flex flex-col justify-center text-center">
+                            <span className="text-[9px] text-zinc-500 font-bold uppercase font-sans">Resultado em Milímetros</span>
+                            <span className="text-emerald-400 font-mono font-bold text-lg">
+                              {mmOutputFromInch > 0 ? `${mmOutputFromInch.toString().replace(".", ",")} mm` : "---"}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              if (mmOutputFromInch > 0) {
+                                handleInsertCalculated(`${mmOutputFromInch.toString().replace(".", ",")}`);
+                              }
+                            }}
+                            className="w-full text-center text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-3 rounded-lg transition"
+                          >
+                            Inserir valor no G-Code
+                          </button>
+                        </div>
+
+                        {/* Column 2: MM to Inch */}
+                        <div className="p-4 bg-[#16161c] rounded-xl border border-zinc-800/80 flex flex-col gap-3">
+                          <h4 className="text-xs font-bold text-cyan-400 uppercase font-sans">
+                            Converter mm para Polegada Fracionária
+                          </h4>
+                          <div>
+                            <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">
+                              Valor em Milímetros (ex: 31.75 ou 31,75)
+                            </label>
+                            <input
+                              type="text"
+                              value={calcMmInput}
+                              onChange={(e) => setCalcMmInput(e.target.value)}
+                              placeholder="Ex: 31,75"
+                              className="w-full bg-[#0d0d11] text-zinc-100 px-3 py-1.5 rounded border border-zinc-800 text-sm outline-none focus:border-cyan-400 font-mono"
+                            />
+                          </div>
+
+                          <div className="bg-[#0f0f13] p-3 rounded border border-zinc-800/60 flex flex-col justify-center text-center">
+                            <span className="text-[9px] text-zinc-500 font-bold uppercase font-sans">Fração Equivalente</span>
+                            <span className="text-emerald-400 font-mono font-bold text-lg">
+                              {inchOutputFromMm || "---"}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              if (inchOutputFromMm) {
+                                handleInsertCalculated(`${inchOutputFromMm}`);
+                              }
+                            }}
+                            className="w-full text-center text-xs bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-bold py-2 px-3 rounded-lg transition"
+                          >
+                            Inserir fração no G-Code
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1646,6 +2236,12 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
             ) : null}
           </div>
         </div>
+        {isFloatingCalcOpen && !onToggleFloatingCalculator && (
+          <FloatingCalculator
+            onClose={() => setIsFloatingCalcOpen(false)}
+            onInsertValue={(val) => onInsertCode(val)}
+          />
+        )}
       </div>
 
       {/* Selected Diagnostic Detail Modal */}
@@ -1805,6 +2401,94 @@ const STATIC_FALLBACK_TABLES: TableData[] = [
       ["1/2\"", "12", "10.50", "Broca Ø 10.5 mm", "2.116"],
       ["5/8\"", "11", "13.50", "Broca Ø 13.5 mm", "2.309"],
       ["3/4\"", "10", "16.50", "Broca Ø 16.5 mm", "2.540"]
+    ]
+  },
+  {
+    nome: "Conversão: Polegadas Fracionárias em Milímetros (mm)",
+    dados: [
+      ["Polegada (Frações)", "Milímetros (mm)"],
+      ["1/32\"", "0,794"],
+      ["1/16\"", "1,588"],
+      ["3/32\"", "2,381"],
+      ["1/8\"", "3,175"],
+      ["5/32\"", "3,969"],
+      ["3/16\"", "4,763"],
+      ["7/32\"", "5,556"],
+      ["1/4\"", "6,350"],
+      ["9/32\"", "7,144"],
+      ["5/16\"", "7,938"],
+      ["11/32\"", "8,731"],
+      ["3/8\"", "9,525"],
+      ["13/32\"", "10,319"],
+      ["7/16\"", "11,113"],
+      ["15/32\"", "11,906"],
+      ["1/2\"", "12,700"],
+      ["17/32\"", "13,494"],
+      ["9/16\"", "14,288"],
+      ["19/32\"", "15,081"],
+      ["5/8\"", "15,875"],
+      ["21/32\"", "16,669"],
+      ["11/16\"", "17,463"],
+      ["23/32\"", "18,256"],
+      ["3/4\"", "19,050"],
+      ["25/32\"", "19,844"],
+      ["13/16\"", "20,638"],
+      ["27/32\"", "21,431"],
+      ["7/8\"", "22,225"],
+      ["29/32\"", "23,019"],
+      ["15/16\"", "23,813"],
+      ["31/32\"", "24,605"],
+      ["1\"", "25,400"],
+      ["1 1/16\"", "26,988"],
+      ["1 1/8\"", "28,575"],
+      ["1 3/16\"", "30,163"],
+      ["1 1/4\"", "31,750"],
+      ["1 5/16\"", "33,338"],
+      ["1 3/8\"", "34,925"],
+      ["1 7/16\"", "36,513"],
+      ["1 1/2\"", "38,100"],
+      ["1 9/16\"", "39,688"],
+      ["1 5/8\"", "41,275"],
+      ["1 11/16\"", "42,863"],
+      ["1 3/4\"", "44,450"],
+      ["1 13/16\"", "46,038"],
+      ["1 7/8\"", "47,625"],
+      ["1 15/16\"", "49,213"],
+      ["2\"", "50,800"],
+      ["2 1/8\"", "53,975"],
+      ["2 1/4\"", "57,150"],
+      ["2 3/8\"", "60,325"],
+      ["2 1/2\"", "63,500"],
+      ["2 5/8\"", "66,675"],
+      ["2 3/4\"", "69,850"],
+      ["2 7/8\"", "73,025"],
+      ["3\"", "76,200"],
+      ["3 1/4\"", "82,550"],
+      ["3 1/2\"", "88,900"],
+      ["3 3/4\"", "95,250"],
+      ["4\"", "101,600"],
+      ["4 1/4\"", "107,950"],
+      ["4 1/2\"", "114,300"],
+      ["4 3/4\"", "120,650"],
+      ["5\"", "127,000"],
+      ["5 1/4\"", "133,350"],
+      ["5 1/2\"", "139,700"],
+      ["5 3/4\"", "146,050"],
+      ["6\"", "152,400"],
+      ["7\"", "177,800"],
+      ["8\"", "203,200"],
+      ["9\"", "228,600"],
+      ["10\"", "254,000"],
+      ["11\"", "279,400"],
+      ["12\"", "304,800"],
+      ["13\"", "330,200"],
+      ["14\"", "355,600"],
+      ["15\"", "381,000"],
+      ["16\"", "406,400"],
+      ["17\"", "431,800"],
+      ["18\"", "457,200"],
+      ["19\"", "482,600"],
+      ["20\"", "508,000"]
     ]
   }
 ];
