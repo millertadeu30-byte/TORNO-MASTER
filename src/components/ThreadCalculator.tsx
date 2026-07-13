@@ -29,6 +29,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const [threadProfile, setThreadProfile] = useState<"metrica" | "whitworth" | "npt" | "unf_unc">("metrica");
   const [threadDirection, setThreadDirection] = useState<"externa" | "interna">("externa");
   const [threadTaper, setThreadTaper] = useState<"paralela" | "conica">("paralela");
+  const [taperDirection, setTaperDirection] = useState<"subida" | "descida">("subida");
 
   // Unit and TPI (Threads Per Inch)
   const [tpi, setTpi] = useState<string>("11");
@@ -267,7 +268,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       if (isConic) {
         const angleInRad = (taperAngle * Math.PI) / 180;
         const rVal = Math.tan(angleInRad) * zTravel;
-        const rSigned = threadDirection === "externa" ? -rVal : rVal;
+        // Pedido 3: em subida o R fica negativo, em descida o R fica positivo (ou seja, sem nenhum sinal de +)
+        const rSigned = taperDirection === "subida" ? -Math.abs(rVal) : Math.abs(rVal);
         taperRStr = ` R${rSigned.toFixed(3)}`;
       }
 
@@ -276,7 +278,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       gcodeLines.push(`; --- Entrada ${i + 1} de ${threadStarts} ---`);
       gcodeLines.push(`G00 X${approachDia.toFixed(2)} Z${currentZStart.toFixed(2)};`);
       gcodeLines.push(`G76 P${g76_m}${g76_s}${angle} Q${g76_q_min} R${g76_r_fin.toFixed(2)};`);
-      gcodeLines.push(`G76 X${finalXStr} Z${parsedZEnd.toFixed(2)}${taperRStr} P${h_microns} Q${q_first} F${lead.toFixed(2)};`);
+      // Pedido 2: o R no G76 vem antes do F, respeitando a sequencia do manual (X Z P Q R F)
+      gcodeLines.push(`G76 X${finalXStr} Z${parsedZEnd.toFixed(2)} P${h_microns} Q${q_first}${taperRStr} F${lead.toFixed(2)};`);
     }
 
     return gcodeLines.join("\n");
@@ -295,6 +298,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     threadProfile,
     threadDirection,
     threadTaper,
+    taperDirection,
     tpi,
     threadStartsStr,
     calcPitchStr,
@@ -308,6 +312,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     g76_s,
     g76_a,
   ]);
+
+  const isConic = threadTaper === "conica" || threadProfile === "npt";
 
   return (
     <div className={`w-full h-full flex flex-col overflow-hidden ${isHighContrast ? "bg-white text-black font-semibold" : "bg-[#0b0b0e] text-zinc-100"}`}>
@@ -365,6 +371,21 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
                   <option value="conica">Cônica (1:16 / 1.78°)</option>
                 </select>
               </div>
+
+              {/* Conic Direction Selection (Pedido 3) */}
+              {isConic && (
+                <div className="flex flex-col gap-1 animate-fadeIn">
+                  <label className="text-[10px] font-mono uppercase text-cyan-400 font-bold">Direção da Conicidade (R)</label>
+                  <select
+                    value={taperDirection}
+                    onChange={(e) => setTaperDirection(e.target.value as any)}
+                    className="bg-[#121216] border border-cyan-800/80 focus:border-cyan-400 rounded-lg px-2.5 py-2 text-xs font-mono outline-none shadow-[0_0_10px_rgba(6,182,212,0.05)]"
+                  >
+                    <option value="subida">Subida (R negativo -)</option>
+                    <option value="descida">Descida (R positivo +)</option>
+                  </select>
+                </div>
+              )}
 
               {/* Thread starts */}
               <div className="flex flex-col gap-1">

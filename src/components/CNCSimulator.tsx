@@ -1112,6 +1112,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
           const depthPerPass = threadHeight / passesCount;
           const stepId = cmd.linhaOriginal;
+          const taperR = cmd.r !== null ? cmd.r : 0; // Pedido 4: ler o valor de R do bloco G76
 
           for (let p = 1; p <= passesCount; p++) {
             // Fanuc G76 constant volume formula: depth = threadHeight * sqrt(p / passesCount)
@@ -1119,21 +1120,25 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             const passRadius = isInternal ? crestRadius + passDepth : crestRadius - passDepth;
             const passId = stepId + p * 0.01;
 
+            // Pedido 4: inclinar a rosca cônica de acordo com o R e o comprimento (invertendo a inclinação conforme pedido do usuário)
+            const passRadiusStart = passRadius + taperR;
+            const passRadiusEnd = passRadius;
+
             // Rapid to pass radius
             plotList.push({
-              type: "line", x1: cx, z1: startZ, x2: passRadius, z2: startZ,
+              type: "line", x1: cx, z1: startZ, x2: passRadiusStart, z2: startZ,
               color: "#ff2a2a", linhaId: passId,
             });
 
             // Thread feed pass
             plotList.push({
-              type: "line", x1: passRadius, z1: startZ, x2: passRadius, z2: endZ,
+              type: "line", x1: passRadiusStart, z1: startZ, x2: passRadiusEnd, z2: endZ,
               color: "#ff8c00", linhaId: passId + 0.005,
             });
 
             // Diagonal/Rapid retract to clearance
             plotList.push({
-              type: "line", x1: passRadius, z1: endZ, x2: cx, z2: endZ,
+              type: "line", x1: passRadiusEnd, z1: endZ, x2: cx, z2: endZ,
               color: "#ff2a2a", linhaId: passId + 0.008,
             });
 

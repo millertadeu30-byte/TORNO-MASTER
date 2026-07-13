@@ -31,31 +31,41 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   onFocus,
 }) => {
   const [position, setPosition] = useState({ x: defaultX, y: defaultY });
+  const [size, setSize] = useState({ width: defaultWidth, height: defaultHeight });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
 
-  // Stagger window initial positions based on id to prevent complete overlap
+  // Position windows starting from top-right and ensure they fit inside the viewport
   useEffect(() => {
     let offset = 0;
     if (id === "assistant") offset = 0;
-    else if (id === "admin") offset = 30;
-    else if (id === "rpm") offset = 60;
-    else if (id === "feed") offset = 90;
-    else if (id === "thread") offset = 120;
-    else if (id === "drilling") offset = 150;
-    else if (id === "polygon") offset = 180;
+    else if (id === "admin") offset = 1;
+    else if (id === "rpm") offset = 2;
+    else if (id === "feed") offset = 3;
+    else if (id === "thread") offset = 4;
+    else if (id === "drilling") offset = 5;
+    else if (id === "polygon") offset = 6;
 
-    // Center on screen as base
     if (typeof window !== "undefined") {
       const w = window.innerWidth;
       const h = window.innerHeight;
       const parsedWidth = parseInt(defaultWidth) || 500;
       const parsedHeight = parseInt(defaultHeight) || 450;
       
-      const centerX = Math.max(20, (w - parsedWidth) / 2 + offset);
-      const centerY = Math.max(60, (h - parsedHeight) / 2 + offset - 40);
-      setPosition({ x: centerX, y: centerY });
+      // Scale down if screen is smaller than the window, ensuring complete visibility
+      const actualWidth = Math.min(w - 40, parsedWidth);
+      const actualHeight = Math.min(h - 100, parsedHeight);
+      
+      const staggerX = offset * 25;
+      const staggerY = offset * 25;
+      
+      // Calculate top-right position
+      const x = Math.max(10, w - actualWidth - 20 - staggerX);
+      const y = Math.max(50, 50 + staggerY);
+      
+      setPosition({ x, y });
+      setSize({ width: `${actualWidth}px`, height: `${actualHeight}px` });
     }
   }, [id, defaultWidth, defaultHeight]);
 
@@ -115,8 +125,8 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
       style={{
         top: `${position.y}px`,
         left: `${position.x}px`,
-        width: defaultWidth,
-        height: defaultHeight,
+        width: size.width,
+        height: size.height,
         resize: "both",
         minWidth: minWidth,
         minHeight: minHeight,
