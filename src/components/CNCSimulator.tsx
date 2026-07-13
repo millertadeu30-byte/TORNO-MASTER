@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon } from "lucide-react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 
 interface CNCSimulatorProps {
@@ -35,6 +35,15 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
   const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
 
+  // Measuring overlay states
+  const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
+  const [measureStartPoint, setMeasureStartPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
+  const [measureEndPoint, setMeasureEndPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
+  const [mousePos, setMousePos] = useState<Point2D | null>(null);
+  const [measurePanelPos, setMeasurePanelPos] = useState<Point2D>({ x: 12, y: 100 });
+  const [isDraggingMeasurePanel, setIsDraggingMeasurePanel] = useState<boolean>(false);
+  const [dragOffset, setDragOffset] = useState<Point2D>({ x: 0, y: 0 });
+
   // High precision mouse hover / snap coordinate tracking ("Mirinha")
   interface HoveredPointInfo {
     canvasX: number;
@@ -43,6 +52,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     latheZ: number;
     gcodeLine: number;
     gcodeText: string;
+    isVertex?: boolean;
   }
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
 
@@ -139,6 +149,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
     const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
 
+    if (isMeasuring) {
+      setMousePos({ x: mouseX, y: mouseY });
+    }
+
     const zDirSign = simInvertZ ? -1 : 1;
     const originX = canvas.width / 2 + 50 + panX;
     const originY = canvas.height / 2 + 50 + panY;
@@ -167,9 +181,31 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     });
 
     if (closestItem) {
+      const x1 = originX + closestItem.z1 * zoom * zDirSign;
+      const y1 = originY - closestItem.x1 * zoom;
+      const x2 = originX + closestItem.z2 * zoom * zDirSign;
+      const y2 = originY - closestItem.x2 * zoom;
+
+      const distToP1 = Math.hypot(closestPoint.x - x1, closestPoint.y - y1);
+      const distToP2 = Math.hypot(closestPoint.x - x2, closestPoint.y - y2);
+
+      let isVertex = false;
+      let snapX = closestPoint.x;
+      let snapY = closestPoint.y;
+
+      if (distToP1 < 8) {
+        snapX = x1;
+        snapY = y1;
+        isVertex = true;
+      } else if (distToP2 < 8) {
+        snapX = x2;
+        snapY = y2;
+        isVertex = true;
+      }
+
       // Calculate lathe coordinate of the exact snapped point
-      const latheZ = (closestPoint.x - originX) / (zoom * zDirSign);
-      const latheRadius = -(closestPoint.y - originY) / zoom;
+      const latheZ = (snapX - originX) / (zoom * zDirSign);
+      const latheRadius = -(snapY - originY) / zoom;
       const latheX = latheRadius * 2; // Diameter
 
       // Find original line text
@@ -178,12 +214,13 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const rawText = lines[lineIdx] || "";
 
       setHoveredPoint({
-        canvasX: closestPoint.x,
-        canvasY: closestPoint.y,
+        canvasX: snapX,
+        canvasY: snapY,
         latheX,
         latheZ,
         gcodeLine: lineIdx,
-        gcodeText: rawText.trim()
+        gcodeText: rawText.trim(),
+        isVertex
       });
     } else {
       setHoveredPoint(null);
@@ -1305,29 +1342,153 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
       // Draw the reticle circle
       ctx.setLineDash([]);
-      ctx.strokeStyle = "#00f3ff";
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = hoveredPoint.isVertex ? "#ffea00" : "#00f3ff";
+      ctx.lineWidth = hoveredPoint.isVertex ? 2.5 : 1.5;
       ctx.beginPath();
-      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, 7, 0, Math.PI * 2);
+      const circleRadius = hoveredPoint.isVertex ? 12 : 7;
+      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, circleRadius, 0, Math.PI * 2);
       ctx.stroke();
 
       // Crosshairs inside reticle
       ctx.beginPath();
-      ctx.moveTo(hoveredPoint.canvasX - 12, hoveredPoint.canvasY);
-      ctx.lineTo(hoveredPoint.canvasX + 12, hoveredPoint.canvasY);
-      ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY - 12);
-      ctx.lineTo(hoveredPoint.canvasX, hoveredPoint.canvasY + 12);
+      const crosshairLength = hoveredPoint.isVertex ? 18 : 12;
+      ctx.moveTo(hoveredPoint.canvasX - crosshairLength, hoveredPoint.canvasY);
+      ctx.lineTo(hoveredPoint.canvasX + crosshairLength, hoveredPoint.canvasY);
+      ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY - crosshairLength);
+      ctx.lineTo(hoveredPoint.canvasX, hoveredPoint.canvasY + crosshairLength);
       ctx.stroke();
 
       // A small glowing center dot
-      ctx.fillStyle = "#39ff14";
+      ctx.fillStyle = hoveredPoint.isVertex ? "#ffea00" : "#39ff14";
       ctx.beginPath();
-      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, 2.5, 0, Math.PI * 2);
+      const dotRadius = hoveredPoint.isVertex ? 4 : 2.5;
+      ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, dotRadius, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
     }
 
+    // Draw Measurement Overlays (Ruler)
+    if (isMeasuring) {
+      ctx.save();
+
+      // Determine points
+      const p1CanvasX = measureStartPoint 
+        ? originX + measureStartPoint.latheZ * zoom * zDirSign 
+        : null;
+      const p1CanvasY = measureStartPoint 
+        ? originY - (measureStartPoint.latheX / 2) * zoom 
+        : null;
+
+      let p2CanvasX: number | null = null;
+      let p2CanvasY: number | null = null;
+
+      if (measureEndPoint) {
+        p2CanvasX = originX + measureEndPoint.latheZ * zoom * zDirSign;
+        p2CanvasY = originY - (measureEndPoint.latheX / 2) * zoom;
+      } else if (measureStartPoint && mousePos) {
+        if (hoveredPoint) {
+          p2CanvasX = hoveredPoint.canvasX;
+          p2CanvasY = hoveredPoint.canvasY;
+        } else {
+          p2CanvasX = mousePos.x;
+          p2CanvasY = mousePos.y;
+        }
+      }
+
+      // Draw dashed preview or solid connection line
+      if (p1CanvasX !== null && p1CanvasY !== null && p2CanvasX !== null && p2CanvasY !== null) {
+        ctx.strokeStyle = "#ec4899"; // Vibrant Pink/Rose
+        ctx.lineWidth = 1.5;
+        if (!measureEndPoint) {
+          ctx.setLineDash([4, 4]); // Dashed line for preview
+        } else {
+          ctx.setLineDash([]); // Solid line
+        }
+
+        // 1. Draw Direct Connection Line
+        ctx.beginPath();
+        ctx.moveTo(p1CanvasX, p1CanvasY);
+        ctx.lineTo(p2CanvasX, p2CanvasY);
+        ctx.stroke();
+
+        // 2. Draw Dimension leader lines (orthogonal triangle showing delta Z and delta X)
+        ctx.strokeStyle = "rgba(236, 72, 153, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+
+        // Draw horizontal line from P1 to corner (P2.z, P1.x)
+        ctx.beginPath();
+        ctx.moveTo(p1CanvasX, p1CanvasY);
+        ctx.lineTo(p2CanvasX, p1CanvasY);
+        ctx.stroke();
+
+        // Draw vertical line from corner (P2.z, P1.x) to P2
+        ctx.beginPath();
+        ctx.moveTo(p2CanvasX, p1CanvasY);
+        ctx.lineTo(p2CanvasX, p2CanvasY);
+        ctx.stroke();
+
+        // Draw text along horizontal delta Z dimension
+        const midZ_X = (p1CanvasX + p2CanvasX) / 2;
+        const midZ_Y = p1CanvasY - 6;
+        const dzVal = measureEndPoint 
+          ? (measureEndPoint.latheZ - measureStartPoint.latheZ) 
+          : (hoveredPoint ? hoveredPoint.latheZ - measureStartPoint.latheZ : (p2CanvasX - originX) / (zoom * zDirSign) - measureStartPoint.latheZ);
+        
+        ctx.fillStyle = isThemeDark ? "#111116" : "#ffffff";
+        ctx.font = "bold 9px monospace";
+        const dzText = `ΔZ: ${dzVal.toFixed(2)}`;
+        const dzWidth = ctx.measureText(dzText).width;
+        ctx.fillRect(midZ_X - dzWidth / 2 - 3, midZ_Y - 7, dzWidth + 6, 11);
+        ctx.fillStyle = "#f59e0b"; // Orange/Amber
+        ctx.textAlign = "center";
+        ctx.fillText(dzText, midZ_X, midZ_Y + 1);
+
+        // Draw text along vertical delta X dimension
+        const midX_X = p2CanvasX + 8;
+        const midX_Y = (p1CanvasY + p2CanvasY) / 2;
+        const dxVal = measureEndPoint
+          ? (measureEndPoint.latheX - measureStartPoint.latheX)
+          : (hoveredPoint ? hoveredPoint.latheX - measureStartPoint.latheX : (-(p2CanvasY - originY) / zoom * 2) - measureStartPoint.latheX);
+
+        ctx.fillStyle = isThemeDark ? "#111116" : "#ffffff";
+        const dxText = `ΔX: Ø${dxVal.toFixed(2)}`;
+        const dxWidth = ctx.measureText(dxText).width;
+        ctx.fillRect(midX_X - 1, midX_Y - 6, dxWidth + 4, 11);
+        ctx.fillStyle = "#22c55e"; // Green
+        ctx.textAlign = "left";
+        ctx.fillText(dxText, midX_X + 1, midX_Y + 2);
+      }
+
+      // Draw P1 Marker
+      if (p1CanvasX !== null && p1CanvasY !== null) {
+        ctx.fillStyle = "#ec4899";
+        ctx.beginPath();
+        ctx.arc(p1CanvasX, p1CanvasY, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 8px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("1", p1CanvasX, p1CanvasY);
+      }
+
+      // Draw P2 Marker
+      if (measureEndPoint && p2CanvasX !== null && p2CanvasY !== null) {
+        ctx.fillStyle = "#ec4899";
+        ctx.beginPath();
+        ctx.arc(p2CanvasX, p2CanvasY, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 8px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("2", p2CanvasX, p2CanvasY);
+      }
+
+      ctx.restore();
+    }
   };
 
   // Resize listener using ResizeObserver to handle container-specific resizing
@@ -1352,10 +1513,66 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   // Redraw whenever canvas size or any simulation variables change
   useEffect(() => {
     drawSimulation();
-  }, [canvasSize, gcodeText, zoom, panX, panY, simInvertZ, driverTick, activeLine, isThemeDark, hoveredPoint]);
+  }, [
+    canvasSize,
+    gcodeText,
+    zoom,
+    panX,
+    panY,
+    simInvertZ,
+    driverTick,
+    activeLine,
+    isThemeDark,
+    hoveredPoint,
+    isMeasuring,
+    measureStartPoint,
+    measureEndPoint,
+    mousePos,
+  ]);
 
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isMeasuring) {
+      let clickedPoint: { latheX: number; latheZ: number; canvasX: number; canvasY: number } | null = null;
+      if (hoveredPoint) {
+        clickedPoint = {
+          latheX: hoveredPoint.latheX,
+          latheZ: hoveredPoint.latheZ,
+          canvasX: hoveredPoint.canvasX,
+          canvasY: hoveredPoint.canvasY,
+        };
+      } else {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
+          const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
+          const zDirSign = simInvertZ ? -1 : 1;
+          const originX = canvas.width / 2 + 50 + panX;
+          const originY = canvas.height / 2 + 50 + panY;
+          const latheZ = (mouseX - originX) / (zoom * zDirSign);
+          const latheRadius = -(mouseY - originY) / zoom;
+          const latheX = latheRadius * 2;
+          clickedPoint = {
+            latheX,
+            latheZ,
+            canvasX: mouseX,
+            canvasY: mouseY,
+          };
+        }
+      }
+
+      if (clickedPoint) {
+        if (!measureStartPoint || (measureStartPoint && measureEndPoint)) {
+          setMeasureStartPoint(clickedPoint);
+          setMeasureEndPoint(null);
+        } else {
+          setMeasureEndPoint(clickedPoint);
+        }
+      }
+      return;
+    }
+
     if (hoveredPoint) {
       onLineChange(hoveredPoint.gcodeLine);
       return;
@@ -1458,8 +1675,73 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
   }, [driverTick, isDriverActive, linesWithDrawing, setIsDriverActive]);
 
+  // Handle window drag events for measuring panel
+  useEffect(() => {
+    if (!isDraggingMeasurePanel) return;
+
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      let newX = e.clientX - dragOffset.x;
+      let newY = e.clientY - dragOffset.y;
+
+      const container = canvasRef.current?.parentElement;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        // Constrain so it stays within the container's bounds
+        newX = Math.max(0, Math.min(newX, rect.width - 256)); // width is 256px (w-64)
+        newY = Math.max(0, Math.min(newY, rect.height - 180)); // estimated height
+      }
+
+      setMeasurePanelPos({ x: newX, y: newY });
+    };
+
+    const handleWindowMouseUp = () => {
+      setIsDraggingMeasurePanel(false);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [isDraggingMeasurePanel, dragOffset]);
+
+  const handleMeasurePanelMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button')) {
+      return;
+    }
+    setIsDraggingMeasurePanel(true);
+    setDragOffset({
+      x: e.clientX - measurePanelPos.x,
+      y: e.clientY - measurePanelPos.y
+    });
+    e.stopPropagation();
+  };
+
+  const toggleMeasuring = () => {
+    setIsMeasuring((prev) => {
+      const newVal = !prev;
+      if (newVal) {
+        setIsDriverActive(false); // Pause driver when measuring starts
+        setMeasurePanelPos({ x: 12, y: 100 }); // reset position to default
+      } else {
+        setMeasureStartPoint(null);
+        setMeasureEndPoint(null);
+        setMousePos(null);
+      }
+      return newVal;
+    });
+  };
+
   // Handle Play/Pause
   const togglePlay = () => {
+    if (isMeasuring) {
+      setIsMeasuring(false);
+      setMeasureStartPoint(null);
+      setMeasureEndPoint(null);
+      setMousePos(null);
+    }
     if (isDriverActive) {
       setIsDriverActive(false);
     } else {
@@ -1477,9 +1759,21 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     setIsDriverActive(false);
     setDriverTick(-1);
     onLineChange(0);
+    if (isMeasuring) {
+      setIsMeasuring(false);
+      setMeasureStartPoint(null);
+      setMeasureEndPoint(null);
+      setMousePos(null);
+    }
   };
 
   const handleStepForward = () => {
+    if (isMeasuring) {
+      setIsMeasuring(false);
+      setMeasureStartPoint(null);
+      setMeasureEndPoint(null);
+      setMousePos(null);
+    }
     setIsDriverActive(false);
     if (linesWithDrawing.length === 0) return;
 
@@ -1585,7 +1879,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         />
 
         {/* Precise Snapping Target Tooltip */}
-        {hoveredPoint && (
+        {hoveredPoint && !isMeasuring && (
           <div
             className="absolute pointer-events-none bg-[#111116]/95 border border-cyan-400 rounded-lg p-2.5 font-mono text-[11px] shadow-2xl z-30 select-none max-w-[260px] transition-all duration-75 flex flex-col gap-1 text-left"
             style={{
@@ -1624,6 +1918,72 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         <div className="absolute top-3 right-3 bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden sm:block">
           💡 Botão central + arrastar para mover | Scroll para Zoom
         </div>
+
+        {/* Measuring mode info floating box */}
+        {isMeasuring && (
+          <div 
+            onMouseDown={handleMeasurePanelMouseDown}
+            style={{ left: `${measurePanelPos.x}px`, top: `${measurePanelPos.y}px` }}
+            className="absolute bg-[#111116]/95 border border-pink-500 rounded-lg p-3 font-mono text-[11px] shadow-2xl z-40 select-none w-64 text-left cursor-grab active:cursor-grabbing"
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-1.5 mb-2 font-bold text-[10px] tracking-wider text-pink-400">
+              <span className="flex items-center gap-1.5">
+                <Ruler size={12} className="animate-pulse" />
+                RÉGUA DE MEDIÇÃO
+              </span>
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMeasureStartPoint(null);
+                  setMeasureEndPoint(null);
+                }}
+                className="text-[9px] text-zinc-500 hover:text-zinc-300 underline font-sans"
+              >
+                Limpar
+              </button>
+            </div>
+            {!measureStartPoint ? (
+              <div className="text-zinc-500 text-[10px] py-1 leading-relaxed font-sans">
+                Clique em qualquer ponto do perfil ou do gráfico para marcar o <b>Ponto 1</b>.
+              </div>
+            ) : !measureEndPoint ? (
+              <div className="flex flex-col gap-2">
+                <div className="text-zinc-300 text-[10px]">
+                  <span className="text-pink-400 font-bold">Ponto 1:</span> X Ø {measureStartPoint.latheX.toFixed(3)} | Z {measureStartPoint.latheZ.toFixed(3)}
+                </div>
+                <div className="text-zinc-400 text-[10px] animate-pulse font-sans">
+                  Clique em outro ponto para marcar o <b>Ponto 2</b> e ver a distância.
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className="grid grid-cols-2 gap-1 border-b border-zinc-800/40 pb-1.5 text-[9px] text-zinc-400">
+                  <div><span className="text-pink-400 font-bold">P1:</span> X Ø{measureStartPoint.latheX.toFixed(2)} Z{measureStartPoint.latheZ.toFixed(2)}</div>
+                  <div><span className="text-pink-400 font-bold">P2:</span> X Ø{measureEndPoint.latheX.toFixed(2)} Z{measureEndPoint.latheZ.toFixed(2)}</div>
+                </div>
+                
+                <div className="flex justify-between py-0.5 border-b border-zinc-800/30">
+                  <span className="text-zinc-400">ΔX (Diâmetro):</span>
+                  <span className="text-[#39ff14] font-bold">
+                    Ø {(measureEndPoint.latheX - measureStartPoint.latheX).toFixed(3)} mm
+                  </span>
+                </div>
+                <div className="flex justify-between py-0.5 border-b border-zinc-800/30">
+                  <span className="text-zinc-400">ΔX (Raio):</span>
+                  <span className="text-[#39ff14]/80 font-bold">
+                    {((measureEndPoint.latheX - measureStartPoint.latheX) / 2).toFixed(3)} mm
+                  </span>
+                </div>
+                <div className="flex justify-between py-0.5">
+                  <span className="text-zinc-400">ΔZ (Eixo Z):</span>
+                  <span className="text-orange-400 font-bold">
+                    {(measureEndPoint.latheZ - measureStartPoint.latheZ).toFixed(3)} mm
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* CNC Driver Controls panel */}
@@ -1658,6 +2018,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             title="Executar Bloco a Bloco (Single Block)"
           >
             <SkipForward className="w-3 h-3" />
+          </button>
+
+          <button
+            onClick={toggleMeasuring}
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition border ${
+              isMeasuring
+                ? "bg-pink-950/40 text-pink-400 border-pink-500/50 animate-pulse"
+                : "bg-[#1e1e24] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-850"
+            }`}
+            title="Régua de Medição (Dois Pontos)"
+          >
+            <Ruler className="w-3.5 h-3.5" />
           </button>
         </div>
 
