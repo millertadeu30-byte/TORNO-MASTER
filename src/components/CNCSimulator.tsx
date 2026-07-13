@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler } from "lucide-react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 
 interface CNCSimulatorProps {
@@ -37,6 +37,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Measuring overlay states
   const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
+  const [isMeasuringAngle, setIsMeasuringAngle] = useState<boolean>(false);
+  const [angleStartLine, setAngleStartLine] = useState<SimulationPlotItem | null>(null);
+  const [angleEndLine, setAngleEndLine] = useState<SimulationPlotItem | null>(null);
+  
   const [measureStartPoint, setMeasureStartPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
   const [measureEndPoint, setMeasureEndPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
   const [mousePos, setMousePos] = useState<Point2D | null>(null);
@@ -53,6 +57,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     gcodeLine: number;
     gcodeText: string;
     isVertex?: boolean;
+    plotItem?: SimulationPlotItem;
   }
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
 
@@ -149,7 +154,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
     const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
 
-    if (isMeasuring) {
+    if (isMeasuring || isMeasuringAngle) {
       setMousePos({ x: mouseX, y: mouseY });
     }
 
@@ -220,7 +225,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         latheZ,
         gcodeLine: lineIdx,
         gcodeText: rawText.trim(),
-        isVertex
+        isVertex,
+        plotItem: closestItem
       });
     } else {
       setHoveredPoint(null);
@@ -279,6 +285,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     let lastG71_Line1: { u: number; r: number; lineIndex: number } | null = null;
     let lastG74_Line1: { r: number; lineIndex: number } | null = null;
     let commands: GCodeCommand[] = [];
+    let skipTarget: number | null = null;
 
     // First, pass to gather clean commands
     lines.forEach((lineText, idx) => {
@@ -286,6 +293,40 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       if (trimmed.startsWith(";")) return; // Skip complete comment lines starting with semicolon
       let clean = trimmed.replace(/\(.*?\)/g, "").trim(); // Remove brackets comments
       if (!clean) return;
+
+      // Check if we are currently skipping because of a previous GOTO
+      if (skipTarget !== null) {
+        // Look for the sequence block starting with N target
+        const matchN = clean.match(/N\s*(\d+)/i);
+        if (matchN && parseInt(matchN[1], 10) === skipTarget) {
+          // Found target block! Stop skipping and process this N line
+          skipTarget = null;
+        } else {
+          // Still skipping
+          return;
+        }
+      }
+
+      // Check if this line itself triggers a GOTO jump
+      const gotoMatch = clean.match(/GOTO\s*(\d+)/i);
+      if (gotoMatch) {
+        const targetNum = parseInt(gotoMatch[1], 10);
+        // Ensure the target N exists ahead in the program so we don't skip forever on a typo
+        let targetExists = false;
+        for (let j = idx + 1; j < lines.length; j++) {
+          const checkTrimmed = lines[j].trim();
+          const checkClean = checkTrimmed.replace(/\(.*?\)/g, "").trim();
+          const checkN = checkClean.match(/N\s*(\d+)/i);
+          if (checkN && parseInt(checkN[1], 10) === targetNum) {
+            targetExists = true;
+            break;
+          }
+        }
+        if (targetExists) {
+          skipTarget = targetNum;
+          return; // Skip the GOTO command line itself
+        }
+      }
 
       const gMatches = clean.match(/G\s*(\d+)/g);
       if (gMatches) {
@@ -578,11 +619,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             const isInternal = depthU < 0 || allowanceU < 0; // Bore vs Turn
             const absDepth = Math.abs(depthU);
 
-            let passX = isInternal ? startX + absDepth : startX - absDepth;
+            const radAllowance = Math.abs(allowanceU) / 2;
             const limitX = isInternal 
-              ? Math.max(...profilePoints.map((pt) => pt.x)) 
-              : Math.min(...profilePoints.map((pt) => pt.x));
+              ? Math.max(...profilePoints.map((pt) => pt.x)) - radAllowance
+              : Math.min(...profilePoints.map((pt) => pt.x)) + radAllowance;
 
+            let passX = isInternal ? startX + absDepth : startX - absDepth;
             let passCount = 1;
 
             const isBetween = (val: number, a: number, b: number) => 
@@ -618,8 +660,19 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             while ((!isInternal && passX >= limitX) || (isInternal && passX <= limitX)) {
               if (absDepth <= 0.0001) break; // SAFETY
               if (passCount > 1000) break; // SAFETY
-              // Find Z boundary for this depth pass
-              const intersectionZ = getProfileIntersectionZ(passX + (isInternal ? -allowanceU / 2 : allowanceU / 2));
+
+              // Clamp to limitX for the final pass if we would jump over it
+              let isLastPass = false;
+              if (!isInternal && passX - absDepth < limitX) {
+                passX = limitX;
+                isLastPass = true;
+              } else if (isInternal && passX + absDepth > limitX) {
+                passX = limitX;
+                isLastPass = true;
+              }
+
+              const lookupX = isInternal ? passX + radAllowance : passX - radAllowance;
+              const intersectionZ = getProfileIntersectionZ(lookupX);
               const zLimit = intersectionZ !== null ? intersectionZ + allowanceW : endZ;
 
               // Step ID
@@ -659,6 +712,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
               if (!activeLineIndexes.includes(cmd.linhaOriginal)) {
                 activeLineIndexes.push(cmd.linhaOriginal);
+              }
+
+              if (isLastPass) {
+                break;
               }
 
               passX = isInternal ? passX + absDepth : passX - absDepth;
@@ -1489,6 +1546,169 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
       ctx.restore();
     }
+
+    // Draw Angular Measurement Overlays
+    if (isMeasuringAngle) {
+      ctx.save();
+
+      // Draw subtle dashed highlight over hovered line segment
+      if (hoveredPoint && hoveredPoint.plotItem) {
+        const hItem = hoveredPoint.plotItem;
+        const hx1 = originX + hItem.z1 * zoom * zDirSign;
+        const hy1 = originY - hItem.x1 * zoom;
+        const hx2 = originX + hItem.z2 * zoom * zDirSign;
+        const hy2 = originY - hItem.x2 * zoom;
+        
+        ctx.strokeStyle = "rgba(236, 72, 153, 0.5)";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(hx1, hy1);
+        ctx.lineTo(hx2, hy2);
+        ctx.stroke();
+      }
+
+      // Draw first selected segment (hot pink)
+      if (angleStartLine) {
+        const s1x = originX + angleStartLine.z1 * zoom * zDirSign;
+        const s1y = originY - angleStartLine.x1 * zoom;
+        const s2x = originX + angleStartLine.z2 * zoom * zDirSign;
+        const s2y = originY - angleStartLine.x2 * zoom;
+
+        ctx.strokeStyle = "#ec4899";
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = "round";
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(s1x, s1y);
+        ctx.lineTo(s2x, s2y);
+        ctx.stroke();
+
+        // Marker for Line 1
+        const mid1X = (s1x + s2x) / 2;
+        const mid1Y = (s1y + s2y) / 2;
+        ctx.fillStyle = "#ec4899";
+        ctx.beginPath();
+        ctx.arc(mid1X, mid1Y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 8px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("R1", mid1X, mid1Y);
+      }
+
+      // Draw second selected segment (neon cyan)
+      if (angleEndLine) {
+        const e1x = originX + angleEndLine.z1 * zoom * zDirSign;
+        const e1y = originY - angleEndLine.x1 * zoom;
+        const e2x = originX + angleEndLine.z2 * zoom * zDirSign;
+        const e2y = originY - angleEndLine.x2 * zoom;
+
+        ctx.strokeStyle = "#0ea5e9";
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = "round";
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(e1x, e1y);
+        ctx.lineTo(e2x, e2y);
+        ctx.stroke();
+
+        // Marker for Line 2
+        const mid2X = (e1x + e2x) / 2;
+        const mid2Y = (e1y + e2y) / 2;
+        ctx.fillStyle = "#0ea5e9";
+        ctx.beginPath();
+        ctx.arc(mid2X, mid2Y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 8px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("R2", mid2X, mid2Y);
+      }
+
+      // Draw arc at intersection / common vertex if it exists
+      if (angleStartLine && angleEndLine) {
+        const p1a = { z: angleStartLine.z1, x: angleStartLine.x1 };
+        const p1b = { z: angleStartLine.z2, x: angleStartLine.x2 };
+        const p2a = { z: angleEndLine.z1, x: angleEndLine.x1 };
+        const p2b = { z: angleEndLine.z2, x: angleEndLine.x2 };
+
+        let commonVertex = null;
+        let otherP1 = null;
+        let otherP2 = null;
+        const tol = 0.01;
+
+        if (Math.hypot(p1b.z - p2a.z, p1b.x - p2a.x) < tol) {
+          commonVertex = p1b;
+          otherP1 = p1a;
+          otherP2 = p2b;
+        } else if (Math.hypot(p1a.z - p2a.z, p1a.x - p2a.x) < tol) {
+          commonVertex = p1a;
+          otherP1 = p1b;
+          otherP2 = p2b;
+        } else if (Math.hypot(p1b.z - p2b.z, p1b.x - p2b.x) < tol) {
+          commonVertex = p1b;
+          otherP1 = p1a;
+          otherP2 = p2a;
+        } else if (Math.hypot(p1a.z - p2b.z, p1a.x - p2b.x) < tol) {
+          commonVertex = p1a;
+          otherP1 = p1b;
+          otherP2 = p2a;
+        }
+
+        if (commonVertex && otherP1 && otherP2) {
+          const vCanvasX = originX + commonVertex.z * zoom * zDirSign;
+          const vCanvasY = originY - commonVertex.x * zoom;
+          
+          const p1CanvasX = originX + otherP1.z * zoom * zDirSign;
+          const p1CanvasY = originY - otherP1.x * zoom;
+          
+          const p2CanvasX = originX + otherP2.z * zoom * zDirSign;
+          const p2CanvasY = originY - otherP2.x * zoom;
+          
+          const a1 = Math.atan2(p1CanvasY - vCanvasY, p1CanvasX - vCanvasX);
+          const a2 = Math.atan2(p2CanvasY - vCanvasY, p2CanvasX - vCanvasX);
+          
+          let diff = a2 - a1;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          
+          const theta = Math.abs(diff);
+          const isThetaAcute = theta <= Math.PI / 2;
+
+          // Sector 1: angle theta (between a1 and a2)
+          // Drawn with radius 28 if acute (green), radius 38 if obtuse (orange)
+          ctx.strokeStyle = isThetaAcute ? "#39ff14" : "#f97316";
+          ctx.lineWidth = isThetaAcute ? 2.5 : 2;
+          ctx.beginPath();
+          ctx.arc(vCanvasX, vCanvasY, isThetaAcute ? 28 : 38, a1, a1 + diff, diff < 0);
+          ctx.stroke();
+
+          // Sector 2: angle Math.PI - theta (supplementary, between a2 and a1_ext)
+          // Drawn with radius 38 if acute (green), radius 28 if obtuse (orange)
+          const a1_ext = a1 + Math.PI;
+          let diff2 = a1_ext - a2;
+          while (diff2 < -Math.PI) diff2 += Math.PI * 2;
+          while (diff2 > Math.PI) diff2 -= Math.PI * 2;
+
+          ctx.strokeStyle = isThetaAcute ? "#f97316" : "#39ff14";
+          ctx.lineWidth = isThetaAcute ? 2 : 2.5;
+          ctx.beginPath();
+          ctx.arc(vCanvasX, vCanvasY, isThetaAcute ? 38 : 28, a2, a2 + diff2, diff2 < 0);
+          ctx.stroke();
+
+          // Draw yellow vertex dot
+          ctx.fillStyle = "#fbbf24";
+          ctx.beginPath();
+          ctx.arc(vCanvasX, vCanvasY, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.restore();
+    }
   };
 
   // Resize listener using ResizeObserver to handle container-specific resizing
@@ -1525,6 +1745,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     isThemeDark,
     hoveredPoint,
     isMeasuring,
+    isMeasuringAngle,
+    angleStartLine,
+    angleEndLine,
     measureStartPoint,
     measureEndPoint,
     mousePos,
@@ -1569,6 +1792,27 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         } else {
           setMeasureEndPoint(clickedPoint);
         }
+      }
+      return;
+    }
+
+    if (isMeasuringAngle) {
+      if (hoveredPoint && hoveredPoint.plotItem) {
+        const item = hoveredPoint.plotItem;
+        if (!angleStartLine || (angleStartLine && angleEndLine)) {
+          setAngleStartLine(item);
+          setAngleEndLine(null);
+        } else {
+          if (angleStartLine.linhaId !== item.linhaId) {
+            setAngleEndLine(item);
+          } else {
+            setAngleStartLine(null);
+            setAngleEndLine(null);
+          }
+        }
+      } else {
+        setAngleStartLine(null);
+        setAngleEndLine(null);
       }
       return;
     }
@@ -1723,12 +1967,33 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     setIsMeasuring((prev) => {
       const newVal = !prev;
       if (newVal) {
+        setIsMeasuringAngle(false); // Disable angular
+        setAngleStartLine(null);
+        setAngleEndLine(null);
         setIsDriverActive(false); // Pause driver when measuring starts
         setMeasurePanelPos({ x: 12, y: 100 }); // reset position to default
       } else {
         setMeasureStartPoint(null);
         setMeasureEndPoint(null);
         setMousePos(null);
+      }
+      return newVal;
+    });
+  };
+
+  const toggleMeasuringAngle = () => {
+    setIsMeasuringAngle((prev) => {
+      const newVal = !prev;
+      if (newVal) {
+        setIsMeasuring(false); // Disable linear
+        setMeasureStartPoint(null);
+        setMeasureEndPoint(null);
+        setMousePos(null);
+        setIsDriverActive(false); // Pause driver when measuring starts
+        setMeasurePanelPos({ x: 12, y: 100 }); // reset position to default
+      } else {
+        setAngleStartLine(null);
+        setAngleEndLine(null);
       }
       return newVal;
     });
@@ -1741,6 +2006,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       setMeasureStartPoint(null);
       setMeasureEndPoint(null);
       setMousePos(null);
+    }
+    if (isMeasuringAngle) {
+      setIsMeasuringAngle(false);
+      setAngleStartLine(null);
+      setAngleEndLine(null);
     }
     if (isDriverActive) {
       setIsDriverActive(false);
@@ -1764,6 +2034,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       setMeasureStartPoint(null);
       setMeasureEndPoint(null);
       setMousePos(null);
+    }
+    if (isMeasuringAngle) {
+      setIsMeasuringAngle(false);
+      setAngleStartLine(null);
+      setAngleEndLine(null);
     }
   };
 
@@ -1903,16 +2178,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         )}
 
         {/* Real-time coordinates HUD overlays */}
-        <div className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
-          <div className="flex justify-between gap-4">
-            <span>DIÂMETRO X:</span>
-            <span className="text-[#39ff14] font-bold">Ø {(toolX * 2).toFixed(3)} mm</span>
+        {!isMeasuring && !isMeasuringAngle && (
+          <div className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
+            <div className="flex justify-between gap-4">
+              <span>DIÂMETRO X:</span>
+              <span className="text-[#39ff14] font-bold">Ø {(toolX * 2).toFixed(3)} mm</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span>POSIÇÃO Z:</span>
+              <span className="text-orange-400 font-bold">Z {toolZ.toFixed(3)} mm</span>
+            </div>
           </div>
-          <div className="flex justify-between gap-4">
-            <span>POSIÇÃO Z:</span>
-            <span className="text-orange-400 font-bold">Z {toolZ.toFixed(3)} mm</span>
-          </div>
-        </div>
+        )}
 
         {/* Helper overlay displaying interactive tip */}
         <div className="absolute top-3 right-3 bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden sm:block">
@@ -1984,6 +2261,93 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             )}
           </div>
         )}
+
+        {/* Measuring Angle mode info floating box */}
+        {isMeasuringAngle && (
+          <div 
+            onMouseDown={handleMeasurePanelMouseDown}
+            style={{ left: `${measurePanelPos.x}px`, top: `${measurePanelPos.y}px` }}
+            className="absolute bg-[#111116]/95 border border-amber-500 rounded-lg p-3 font-mono text-[11px] shadow-2xl z-40 select-none w-64 text-left cursor-grab active:cursor-grabbing"
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-1.5 mb-2 font-bold text-[10px] tracking-wider text-amber-400">
+              <span className="flex items-center gap-1.5">
+                <Compass size={12} className="animate-pulse" />
+                RÉGUA ANGULAR
+              </span>
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAngleStartLine(null);
+                  setAngleEndLine(null);
+                }}
+                className="text-[9px] text-zinc-500 hover:text-zinc-300 underline font-sans"
+              >
+                Limpar
+              </button>
+            </div>
+            {!angleStartLine ? (
+              <div className="text-zinc-500 text-[10px] py-1 leading-relaxed font-sans">
+                Clique em qualquer reta do perfil no gráfico para marcar a <b>Reta 1 (R1)</b>.
+              </div>
+            ) : !angleEndLine ? (
+              <div className="flex flex-col gap-2">
+                <div className="text-zinc-300 text-[10px] truncate">
+                  <span className="text-pink-400 font-bold">Reta 1 (R1):</span> {angleStartLine.text || `L${Math.floor(angleStartLine.linhaId)}`}
+                </div>
+                <div className="text-zinc-400 text-[10px] animate-pulse font-sans">
+                  Clique em outra reta para marcar a <b>Reta 2 (R2)</b> e medir o ângulo.
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-0.5 border-b border-zinc-800/40 pb-1.5 text-[9px] text-zinc-400">
+                  <div className="truncate"><span className="text-pink-400 font-bold">R1:</span> {angleStartLine.text || `L${Math.floor(angleStartLine.linhaId)}`}</div>
+                  <div className="truncate"><span className="text-[#0ea5e9] font-bold">R2:</span> {angleEndLine.text || `L${Math.floor(angleEndLine.linhaId)}`}</div>
+                </div>
+                
+                {(() => {
+                  const dz1 = angleStartLine.z2 - angleStartLine.z1;
+                  const dx1 = angleStartLine.x2 - angleStartLine.x1;
+                  const dz2 = angleEndLine.z2 - angleEndLine.z1;
+                  const dx2 = angleEndLine.x2 - angleEndLine.x1;
+
+                  const l1 = Math.hypot(dz1, dx1);
+                  const l2 = Math.hypot(dz2, dx2);
+
+                  if (l1 <= 0.0001 || l2 <= 0.0001) {
+                    return <div className="text-rose-400 font-bold text-center">Erro: reta sem comprimento</div>;
+                  }
+
+                  const dot = dz1 * dz2 + dx1 * dx2;
+                  const cosTheta = Math.max(-1, Math.min(1, dot / (l1 * l2)));
+                  const angleRad = Math.acos(cosTheta);
+                  const angleDeg = angleRad * (180 / Math.PI);
+                  const suppDeg = 180 - angleDeg;
+
+                  const angleMin = Math.min(angleDeg, suppDeg);
+                  const angleMax = Math.max(angleDeg, suppDeg);
+
+                  return (
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex justify-between py-0.5 border-b border-zinc-800/30">
+                        <span className="text-zinc-400">Ângulo Agudo:</span>
+                        <span className="text-[#39ff14] font-bold">
+                          {angleMin.toFixed(2)}°
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-0.5">
+                        <span className="text-zinc-400">Ângulo Obtuso:</span>
+                        <span className="text-orange-400 font-bold">
+                          {angleMax.toFixed(2)}°
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* CNC Driver Controls panel */}
@@ -2030,6 +2394,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             title="Régua de Medição (Dois Pontos)"
           >
             <Ruler className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={toggleMeasuringAngle}
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition border ${
+              isMeasuringAngle
+                ? "bg-amber-950/40 text-amber-400 border-amber-500/50 animate-pulse"
+                : "bg-[#1e1e24] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-850"
+            }`}
+            title="Régua Angular (Medir ângulo entre duas retas)"
+          >
+            <Compass className="w-3.5 h-3.5" />
           </button>
         </div>
 
