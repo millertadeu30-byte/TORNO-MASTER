@@ -1031,7 +1031,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     const dia = parseLocaleFloat(calcDia);
     if (p > 0 && dia > 0) {
       let minorDia = dia;
-      if (threadDirection === "externa") {
+      if (threadDirection === "externa" || threadProfile === "npt") {
         minorDia = dia - 2 * (outputThreadHeight / 1000);
       } else {
         minorDia = dia - 1.0825 * p; // standard minor diameter for internal threads
@@ -1039,7 +1039,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       return parseFloat(minorDia.toFixed(3));
     }
     return 0;
-  }, [calcPitch, calcDia, threadDirection, outputThreadHeight]);
+  }, [calcPitch, calcDia, threadDirection, outputThreadHeight, threadProfile]);
 
   const generateG76GCode = () => {
     const pitch = parseLocaleFloat(calcPitch);

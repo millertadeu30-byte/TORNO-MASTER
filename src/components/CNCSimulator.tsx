@@ -319,7 +319,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const activeLineIndexes: number[] = [];
     let skipUntil_N: number | null = null;
 
-    const renderStandardMove = (cmd: GCodeCommand, forceColor?: string, idOffset: number = 0) => {
+    const renderStandardMove = (cmd: GCodeCommand, forceColor?: string, idOffset: number = 0, cmdIndex?: number) => {
       if (cmd.x !== null || cmd.z !== null) {
         const tx = cmd.x !== null ? cmd.x / 2 : cx;
         const tz = cmd.z !== null ? cmd.z : cz;
@@ -332,7 +332,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         if (hasModifiers) {
           const val = cmd.commaR !== null ? cmd.commaR : cmd.commaC;
           // Look ahead to blend with next movement within commands
-          const nextIdx = commands.findIndex((c, idx) => idx > commands.indexOf(cmd) && (c.x !== null || c.z !== null));
+          const currentIdx = cmdIndex !== undefined ? cmdIndex : commands.indexOf(cmd);
+          const nextIdx = commands.findIndex((c, idx) => idx > currentIdx && (c.x !== null || c.z !== null));
           const nextCmd = nextIdx !== -1 ? commands[nextIdx] : undefined;
           
           if (nextCmd) {
@@ -362,12 +363,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               if (cmd.commaR !== null) {
                 plotList.push({
                   type: "arcTo", x1: p1x, z1: p1z, xc: tx, zc: tz, x2: p2x, z2: p2z,
-                  radius: safeVal, color: "#00f3ff", linhaId: cmd.linhaOriginal + 0.5 + idOffset,
+                  radius: safeVal, color: moveColor, linhaId: cmd.linhaOriginal + 0.5 + idOffset,
                 });
               } else {
                 plotList.push({
                   type: "line", x1: p1x, z1: p1z, x2: p2x, z2: p2z,
-                  color: "#00f3ff", linhaId: cmd.linhaOriginal + 0.5 + idOffset,
+                  color: moveColor, linhaId: cmd.linhaOriginal + 0.5 + idOffset,
                 });
               }
 
@@ -431,7 +432,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           // Trace profile
           for (let k = pIdx; k <= qIdx; k++) {
             const profileCmd = { ...commands[k], linhaOriginal: cmd.linhaOriginal };
-            renderStandardMove(profileCmd, "#39ff14", 0.01 * (k - pIdx));
+            renderStandardMove(profileCmd, "#39ff14", 0.01 * (k - pIdx), k);
           }
 
           // Return to start position of G70
@@ -470,11 +471,64 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             let px = cx;
             let pz = cz;
 
-            // Reconstruct the raw programmed profile
+            // Reconstruct the programmed profile, including chamfers (,C) and radii (,R)
             for (let k = pIdx; k <= qIdx; k++) {
               const contCmd = commands[k];
               const targetX = contCmd.x !== null ? contCmd.x / 2 : px;
               const targetZ = contCmd.z !== null ? contCmd.z : pz;
+
+              const isSingle = (contCmd.x !== null && contCmd.z === null) || (contCmd.z !== null && contCmd.x === null);
+              const hasModifiers = isSingle && (contCmd.commaR !== null || contCmd.commaC !== null);
+
+              if (hasModifiers) {
+                const val = contCmd.commaR !== null ? contCmd.commaR : contCmd.commaC;
+                // Find next coordinate change in profile
+                let nextCmd: GCodeCommand | undefined = undefined;
+                for (let nextK = k + 1; nextK <= qIdx; nextK++) {
+                  if (commands[nextK].x !== null || commands[nextK].z !== null) {
+                    nextCmd = commands[nextK];
+                    break;
+                  }
+                }
+
+                if (nextCmd && val !== null) {
+                  const tx = targetX;
+                  const tz = targetZ;
+                  const nx = nextCmd.x !== null ? nextCmd.x / 2 : tx;
+                  const nz = nextCmd.z !== null ? nextCmd.z : tz;
+
+                  const dx1 = tx - px;
+                  const dz1 = tz - pz;
+                  const len1 = Math.sqrt(dx1 * dx1 + dz1 * dz1);
+
+                  const dx2 = nx - tx;
+                  const dz2 = nz - tz;
+                  const len2 = Math.sqrt(dx2 * dx2 + dz2 * dz2);
+
+                  if (len1 > 0 && len2 > 0) {
+                    const safeVal = Math.min(val, len1, len2);
+                    const p1x = tx - (dx1 / len1) * safeVal;
+                    const p1z = tz - (dz1 / len1) * safeVal;
+                    const p2x = tx + (dx2 / len2) * safeVal;
+                    const p2z = tz + (dz2 / len2) * safeVal;
+
+                    profilePoints.push({ x: p1x, y: p1z });
+
+                    if (contCmd.commaR !== null) {
+                      // Approximate arc mid-point for radius calculation
+                      const arcMidX = p1x * 0.25 + tx * 0.5 + p2x * 0.25;
+                      const arcMidZ = p1z * 0.25 + tz * 0.5 + p2z * 0.25;
+                      profilePoints.push({ x: arcMidX, y: arcMidZ });
+                    }
+
+                    profilePoints.push({ x: p2x, y: p2z });
+                    px = p2x;
+                    pz = p2z;
+                    continue;
+                  }
+                }
+              }
+
               profilePoints.push({ x: targetX, y: targetZ });
               px = targetX;
               pz = targetZ;
@@ -502,6 +556,19 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               for (let k = profilePoints.length - 1; k > 0; k--) {
                 const p1 = profilePoints[k - 1];
                 const p2 = profilePoints[k];
+
+                // Skip cylinder segments (constant X) if the tool coordinate targetX is on or past them
+                if (Math.abs(p1.x - p2.x) < 0.001) {
+                  const cylinderRadius = p1.x;
+                  if (isInternal) {
+                    // Internal boring: skip if targetX is on/outside the cylinder
+                    if (targetX >= cylinderRadius - 0.001) continue;
+                  } else {
+                    // External turning: skip if targetX is on/inside the cylinder
+                    if (targetX <= cylinderRadius + 0.001) continue;
+                  }
+                }
+
                 if (isBetween(targetX, p1.x, p2.x)) {
                   if (Math.abs(p1.x - p2.x) < 0.001) return p2.y;
                   const factor = (targetX - p1.x) / (p2.x - p1.x);
@@ -992,7 +1059,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       }
 
       // STANDARD G00/G01/G02/G03 LINEAR & CIRCULAR ACTIONS
-      renderStandardMove(cmd);
+      renderStandardMove(cmd, undefined, 0, i);
     }
 
     return { plotList, activeLineIndexes };

@@ -107,7 +107,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   const outputThreadRoot = React.useMemo(() => {
     if (calcPitch > 0 && calcDia > 0) {
       let minorDia = calcDia;
-      if (threadDirection === "externa") {
+      if (threadDirection === "externa" || threadProfile === "npt") {
         minorDia = calcDia - 2 * (outputThreadHeight / 1000);
       } else {
         minorDia = calcDia - 1.0825 * calcPitch; // internal minor diameter
@@ -115,7 +115,7 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       return parseFloat(minorDia.toFixed(3));
     }
     return 0;
-  }, [calcPitch, calcDia, threadDirection, outputThreadHeight]);
+  }, [calcPitch, calcDia, threadDirection, outputThreadHeight, threadProfile]);
 
   const handleClearAll = () => {
     if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
