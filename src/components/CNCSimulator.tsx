@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass } from "lucide-react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 
 interface CNCSimulatorProps {
@@ -66,6 +66,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
   const [linesWithDrawing, setLinesWithDrawing] = useState<number[]>([]);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 500, height: 450 });
+
+  // Freeze Graphic State ("Congelar Gráfico")
+  const [isFrozen, setIsFrozen] = useState<boolean>(false);
 
   // Zoom on scroll wheel
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1170,6 +1173,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   const { plotList, activeLineIndexes, error: parseError } = parseGCode();
 
+  const toggleFrozen = () => {
+    setIsFrozen(!isFrozen);
+  };
+
   // Dynamic tool position calculation for the HUD overlay (Diameter, Z)
   let toolX = 0;
   let toolZ = 0;
@@ -1177,18 +1184,25 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     toolX = plotList[0].x1;
     toolZ = plotList[0].z1;
     for (const item of plotList) {
-      if (driverTick === -1 || item.linhaId <= driverTick) {
-        toolX = item.x2;
-        toolZ = item.z2;
+      if (isFrozen) {
+        if (item.linhaId <= activeLine) {
+          toolX = item.x2;
+          toolZ = item.z2;
+        }
+      } else {
+        if (driverTick === -1 || item.linhaId <= driverTick) {
+          toolX = item.x2;
+          toolZ = item.z2;
+        }
       }
     }
   }
 
   useEffect(() => {
-    if (onError && parseError) {
+    if (!isFrozen && onError && parseError) {
       onError(parseError);
     }
-  }, [parseError, onError]);
+  }, [parseError, onError, isFrozen]);
 
   // Draw simulation loop
   const drawSimulation = () => {
@@ -1288,7 +1302,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       }
 
       // If we are executing step by step (even paused), filter future strokes
-      if (driverTick !== -1 && item.linhaId > driverTick) {
+      if (!isFrozen && driverTick !== -1 && item.linhaId > driverTick) {
         return;
       }
 
@@ -1299,9 +1313,16 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const endPlotY = originY - item.x2 * zoom;
 
       // Track last tool point for crosshair
-      if (item.linhaId <= driverTick || driverTick === -1) {
-        currentAnimationX = item.x2;
-        currentAnimationZ = item.z2;
+      if (isFrozen) {
+        if (item.linhaId <= activeLine) {
+          currentAnimationX = item.x2;
+          currentAnimationZ = item.z2;
+        }
+      } else {
+        if (item.linhaId <= driverTick || driverTick === -1) {
+          currentAnimationX = item.x2;
+          currentAnimationZ = item.z2;
+        }
       }
 
       ctx.beginPath();
@@ -1756,6 +1777,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     measureStartPoint,
     measureEndPoint,
     mousePos,
+    isFrozen,
   ]);
 
   // Click on Canvas toolpath to highlight editor line
@@ -2411,6 +2433,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             title="Régua Angular (Medir ângulo entre duas retas)"
           >
             <Compass className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={toggleFrozen}
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition border ${
+              isFrozen
+                ? "bg-blue-950/40 text-blue-400 border-blue-500/50 animate-pulse font-bold"
+                : "bg-[#1e1e24] hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-850"
+            }`}
+            title="Congelar Gráfico (Manter desenho estático ao editar o código)"
+          >
+            <Snowflake className={`w-3.5 h-3.5 ${isFrozen ? 'animate-spin-slow' : ''}`} />
           </button>
         </div>
 
