@@ -1345,10 +1345,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         ctx.stroke();
       } else if (item.type === "arcTo") {
         ctx.moveTo(startPlotX, startPlotY);
-        if (item.xc !== undefined && item.zc !== undefined && item.radius) {
+        if (item.xc !== undefined && item.zc !== undefined) {
           const cornerPlotX = originX + item.zc * zoom * zDirSign;
           const cornerPlotY = originY - item.xc * zoom;
-          ctx.arcTo(cornerPlotX, cornerPlotY, endPlotX, endPlotY, item.radius * zoom);
+          ctx.quadraticCurveTo(cornerPlotX, cornerPlotY, endPlotX, endPlotY);
         }
         ctx.stroke();
       }

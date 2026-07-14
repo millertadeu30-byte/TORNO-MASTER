@@ -33,6 +33,9 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = React.useState(false);
   const [useHighlight, setUseHighlight] = React.useState(true);
+  const [isFindReplaceOpen, setIsFindReplaceOpen] = React.useState(false);
+  const [findText, setFindText] = React.useState("");
+  const [replaceText, setReplaceText] = React.useState("");
   const [fontSize, setFontSize] = React.useState<number>(() => {
     const saved = localStorage.getItem("cnc-editor-font-size");
     return saved ? parseInt(saved, 10) : 14;
@@ -70,26 +73,105 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     }
   };
 
-  // Find a term inside the G-code and highlight it
+  // Find and replace implementation
   const handleSearch = () => {
-    const term = prompt(`🔎 Buscar texto no Editor ${paneIndex + 1}:`);
+    setIsFindReplaceOpen(prev => !prev);
+  };
+
+  const handleFindNext = (direction: "forward" | "backward" = "forward", inputTerm?: string) => {
+    const term = inputTerm !== undefined ? inputTerm : findText;
     if (!term || !textareaRef.current) return;
 
-    const codeUpper = text.toUpperCase();
-    const termUpper = term.toUpperCase();
-    const index = codeUpper.indexOf(termUpper);
+    const textarea = textareaRef.current;
+    const currentText = textarea.value;
 
-    if (index !== -1) {
-      textareaRef.current.focus();
-      textareaRef.current.setSelectionRange(index, index + term.length);
-      
-      const lineIndex = text.substring(0, index).split(/\r?\n/).length - 1;
+    const termUpper = term.toUpperCase();
+    const textUpper = currentText.toUpperCase();
+
+    let foundIndex = -1;
+
+    if (direction === "forward") {
+      const searchStart = textarea.selectionEnd;
+      foundIndex = textUpper.indexOf(termUpper, searchStart);
+      if (foundIndex === -1) {
+        // Wrap around to start
+        foundIndex = textUpper.indexOf(termUpper, 0);
+      }
+    } else {
+      const searchStart = textarea.selectionStart - 1;
+      foundIndex = textUpper.lastIndexOf(termUpper, searchStart);
+      if (foundIndex === -1) {
+        // Wrap around to end
+        foundIndex = textUpper.lastIndexOf(termUpper);
+      }
+    }
+
+    if (foundIndex !== -1) {
+      textarea.focus();
+      textarea.setSelectionRange(foundIndex, foundIndex + term.length);
+
+      const lineIndex = currentText.substring(0, foundIndex).split(/\r?\n/).length - 1;
       onLineSelect(lineIndex);
 
       // Scroll to view
-      textareaRef.current.scrollTop = lineIndex * lineHeight - textareaRef.current.clientHeight / 2;
+      const viewHeight = textarea.clientHeight;
+      const targetScrollTop = lineIndex * lineHeight - viewHeight / 2;
+      textarea.scrollTop = Math.max(0, targetScrollTop);
+      handleScroll();
     } else {
-      alert("⚠️ Texto não localizado no editor!");
+      alert("⚠️ Texto não localizado!");
+    }
+  };
+
+  const handleReplace = () => {
+    if (!findText || !textareaRef.current) return;
+
+    const textarea = textareaRef.current;
+    const currentText = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    const selectedText = currentText.substring(start, end);
+    
+    if (selectedText.toUpperCase() === findText.toUpperCase()) {
+      const newText = currentText.substring(0, start) + replaceText + currentText.substring(end);
+      onChange(newText);
+      
+      // Set cursor right after the replacement and find next
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(start + replaceText.length, start + replaceText.length);
+          handleFindNext("forward");
+        }
+      }, 50);
+    } else {
+      // Find the first occurrence
+      handleFindNext("forward");
+    }
+  };
+
+  const handleReplaceAll = () => {
+    if (!findText) return;
+
+    const regex = new RegExp(findText.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), "gi");
+    const count = (text.match(regex) || []).length;
+
+    if (count > 0) {
+      if (window.confirm(`Deseja substituir todas as ${count} ocorrências de "${findText}" por "${replaceText}"?`)) {
+        const newText = text.replace(regex, replaceText);
+        onChange(newText);
+        alert(`✅ ${count} substituições realizadas com sucesso!`);
+      }
+    } else {
+      alert("⚠️ Nenhuma ocorrência encontrada para substituir!");
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      setIsFindReplaceOpen(true);
     }
   };
 
@@ -272,11 +354,30 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     >
       {/* Editor Header */}
       <div className={`flex justify-between items-center px-4 py-2 border-b ${isHighContrast ? 'bg-zinc-200 border-black' : 'bg-[#25252f] border-zinc-800'}`}>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className={`w-2 h-2 rounded-full ${isActive ? "bg-cyan-400 animate-pulse" : "bg-zinc-600"}`} />
           <span className={`text-xs tracking-wider uppercase ${isHighContrast ? 'text-black font-bold' : isActive ? "text-cyan-400" : "text-zinc-400"}`}>
             Editor {paneIndex + 1} {fileName ? `(${fileName})` : ""} {isActive && "(Ativo)"}
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsFindReplaceOpen(!isFindReplaceOpen);
+            }}
+            className={`ml-2 text-[10px] px-2 py-0.5 rounded transition duration-200 flex items-center gap-1 border border-dashed ${
+              isFindReplaceOpen
+                ? isHighContrast
+                  ? "bg-cyan-100 text-cyan-800 border-cyan-400 font-bold"
+                  : "bg-cyan-950/50 text-cyan-400 border-cyan-500/30 font-bold"
+                : isHighContrast
+                  ? "bg-zinc-100 text-zinc-800 border-zinc-350 hover:text-cyan-600 hover:border-cyan-400/50 font-medium"
+                  : "bg-zinc-900/40 text-zinc-400 border-zinc-800/80 hover:text-cyan-400 hover:border-cyan-500/30"
+            }`}
+            title="Abrir ferramenta de Localizar e Substituir"
+          >
+            <Search className="w-2.5 h-2.5" />
+            <span>Localizar / Substituir</span>
+          </button>
         </div>
         <div className="flex items-center gap-2">
           {/* Notepad / Syntax Highlight Toggle */}
@@ -383,6 +484,98 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
         </div>
       </div>
 
+      {/* Find & Replace Panel */}
+      {isFindReplaceOpen && (
+        <div className={`border-b px-4 py-2 flex flex-wrap items-center gap-3 text-xs transition-all duration-300 ${
+          isHighContrast ? "bg-zinc-100 border-zinc-300 text-black" : "bg-[#16161f] border-zinc-800 text-zinc-100"
+        }`}>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-zinc-400 font-medium font-mono text-[10px] uppercase">Localizar:</span>
+            <input
+              type="text"
+              value={findText}
+              onChange={(e) => setFindText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleFindNext("forward");
+                }
+              }}
+              placeholder="Texto a buscar..."
+              className={`rounded px-2 py-1 text-xs outline-none font-mono min-w-[140px] ${
+                isHighContrast
+                  ? "bg-white border border-zinc-300 text-black focus:border-cyan-500"
+                  : "bg-[#0d0d11] border border-zinc-800 text-zinc-100 focus:border-cyan-400"
+              }`}
+            />
+          </div>
+          
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-zinc-400 font-medium font-mono text-[10px] uppercase">Substituir:</span>
+            <input
+              type="text"
+              value={replaceText}
+              onChange={(e) => setReplaceText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleReplace();
+                }
+              }}
+              placeholder="Substituir por..."
+              className={`rounded px-2 py-1 text-xs outline-none font-mono min-w-[140px] ${
+                isHighContrast
+                  ? "bg-white border border-zinc-300 text-black focus:border-cyan-500"
+                  : "bg-[#0d0d11] border border-zinc-800 text-zinc-100 focus:border-cyan-400"
+              }`}
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => handleFindNext("forward")}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition duration-200 ${
+                isHighContrast
+                  ? "bg-cyan-600 hover:bg-cyan-700 text-white"
+                  : "bg-cyan-600 hover:bg-cyan-500 text-white"
+              }`}
+              title="Buscar próximo resultado"
+            >
+              Localizar
+            </button>
+            <button
+              onClick={handleReplace}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition duration-200 ${
+                isHighContrast
+                  ? "bg-zinc-200 hover:bg-zinc-300 text-black"
+                  : "bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
+              }`}
+              title="Substituir o item atual e buscar próximo"
+            >
+              Substituir
+            </button>
+            <button
+              onClick={handleReplaceAll}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition duration-200 ${
+                isHighContrast
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+              }`}
+              title="Substituir todas as ocorrências de uma só vez"
+            >
+              Subst. Tudo
+            </button>
+            <button
+              onClick={() => setIsFindReplaceOpen(false)}
+              className="text-zinc-500 hover:text-zinc-300 text-xs ml-1 font-mono transition"
+              title="Fechar painel"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Editor Canvas */}
       <div className={`flex-1 flex overflow-hidden relative text-base ${isHighContrast ? 'bg-white' : 'bg-[#0d0d11]'}`}>
         {/* Line Numbers column */}
@@ -453,6 +646,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
             onScroll={handleScroll}
             onClick={handleLineClick}
             onKeyUp={handleKeyUp}
+            onKeyDown={handleKeyDown}
             wrap="off"
             spellCheck="false"
             placeholder="Digite ou carregue seu código G-Code aqui..."
