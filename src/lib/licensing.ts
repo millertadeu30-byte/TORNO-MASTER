@@ -359,8 +359,9 @@ export async function registerSessionHeartbeat(
           // Check if the device is already in the list of active devices
           const isDeviceActive = activeDevices.includes(deviceId);
           
-          // If the device is NOT active, and we already reached the limit of 3 distinct active devices
-          if (!isDeviceActive && activeDevices.length >= 3) {
+          // If the device is NOT active, and we already reached the limit (1 if blockSharing is enabled, otherwise 3)
+          const limit = client.blockSharing ? 1 : 3;
+          if (!isDeviceActive && activeDevices.length >= limit) {
             isBlocked = true;
           } else {
             sessions.push({ sessionId, deviceId, lastActive: now });

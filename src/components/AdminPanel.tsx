@@ -28,6 +28,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const [editExpDate, setEditExpDate] = useState<string>("");
   const [editSupport, setEditSupport] = useState<string>("");
   const [editSubscriptionType, setEditSubscriptionType] = useState<"demo" | "mensal" | "semestral">("demo");
+  const [editBlockSharing, setEditBlockSharing] = useState<boolean>(false);
   const [clientToDelete, setClientToDelete] = useState<ClientToken | null>(null);
   const [loginError, setLoginError] = useState<string>("");
   const [formError, setFormError] = useState<string>("");
@@ -88,6 +89,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
       expirationDate: editExpDate || null,
       supportPhone: editSupport || globalSupport,
       subscriptionType: editSubscriptionType,
+      blockSharing: editBlockSharing,
     };
 
     let currentClients = getClients();
@@ -115,6 +117,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditExpDate("");
     setEditSupport("");
     setEditSubscriptionType("demo");
+    setEditBlockSharing(false);
     setFormError("");
     setTimeout(() => setActionMsg(""), 3000);
   };
@@ -145,6 +148,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditExpDate(c.expirationDate || "");
     setEditSupport(c.supportPhone || globalSupport);
     setEditSubscriptionType(c.subscriptionType || "demo");
+    setEditBlockSharing(!!c.blockSharing);
     setIsEditing(true);
   };
 
@@ -290,7 +294,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                         className="border-b border-zinc-800 hover:bg-zinc-900/40 transition"
                       >
                         <td className="p-3 font-sans text-zinc-100">
-                          <div className="font-semibold text-sm">{c.name}</div>
+                          <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
+                            <span>{c.name}</span>
+                            {c.blockSharing && (
+                              <span className="text-[9px] bg-red-950/40 text-red-400 border border-red-900/40 px-1.5 py-0.5 rounded font-mono font-bold" title="Dispositivo Único Ativo">
+                                🚫 DISP. ÚNICO
+                              </span>
+                            )}
+                          </div>
                           {c.email && (
                             <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
                               <span>📧 {c.email}</span>
@@ -511,6 +522,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                     placeholder="Ex: (18) 98765-4321"
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400"
                   />
+                </div>
+
+                <div className="flex items-center gap-2 py-2 border-y border-zinc-800/60 my-1">
+                  <input
+                    type="checkbox"
+                    id="blockSharing"
+                    checked={editBlockSharing}
+                    onChange={(e) => setEditBlockSharing(e.target.checked)}
+                    className="w-4 h-4 rounded border-zinc-850 text-red-500 bg-[#0d0d11] focus:ring-red-550 focus:ring-offset-0"
+                  />
+                  <label htmlFor="blockSharing" className="text-xs font-bold text-red-400 select-none cursor-pointer flex flex-col">
+                    <span>🚫 Bloquear Compartilhamento</span>
+                    <span className="text-[9px] text-zinc-500 font-normal">Limite para 1 dispositivo (Impede abrir a mesma conta em múltiplos aparelhos).</span>
+                  </label>
                 </div>
 
                 <div className="flex gap-2 mt-4">

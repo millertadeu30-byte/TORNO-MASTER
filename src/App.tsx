@@ -332,7 +332,7 @@ export default function App() {
   // Perform local user registration
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName.trim() || !regEmail.trim() || !regPhone.trim()) {
+    if (!regName.trim() || !regEmail.trim()) {
       setLoginError("Por favor, preencha todos os campos do cadastro.");
       return;
     }
@@ -340,7 +340,7 @@ export default function App() {
     setLoading(true);
     setLoginError("");
 
-    const res = localRegister(regName.trim(), regEmail.trim(), regPhone.trim());
+    const res = localRegister(regName.trim(), regEmail.trim(), "N/A");
 
     setLoading(false);
     if (res.sucesso) {
@@ -758,7 +758,7 @@ export default function App() {
                           type="text"
                           value={regName}
                           onChange={(e) => setRegName(e.target.value)}
-                          placeholder="Nome Completo"
+                          placeholder="Nome e Sobrenome"
                           className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
                           required
                         />
@@ -772,21 +772,7 @@ export default function App() {
                           type="email"
                           value={regEmail}
                           onChange={(e) => setRegEmail(e.target.value)}
-                          placeholder="Seu Melhor E-mail"
-                          className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
-                          required
-                        />
-                      </div>
-
-                      <div className="relative">
-                        <span className="absolute left-3 top-3.5 text-zinc-500">
-                          <Phone className="w-4 h-4 text-cyan-400" />
-                        </span>
-                        <input
-                          type="tel"
-                          value={regPhone}
-                          onChange={(e) => setRegPhone(e.target.value)}
-                          placeholder="WhatsApp / Celular com DDD"
+                          placeholder="E-mail"
                           className="w-full bg-[#0d0d11] border border-zinc-800 text-zinc-100 pl-10 pr-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-400 transition"
                           required
                         />
@@ -1094,6 +1080,8 @@ export default function App() {
                   fileName={fileNames[idx]}
                   onToggleFloatingCalculator={() => setIsFloatingCalcOpen(prev => !prev)}
                   isFloatingCalculatorOpen={isFloatingCalcOpen}
+                  allEditorTexts={editorTexts}
+                  layoutCount={layoutCount}
                 />
               ))}
             </div>

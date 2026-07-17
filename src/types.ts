@@ -11,6 +11,7 @@ export interface ClientToken {
   subscriptionType?: "demo" | "mensal" | "semestral";
   registrationDate?: string;
   sessions?: { sessionId: string; deviceId: string; lastActive: number }[];
+  blockSharing?: boolean;
 }
 
 export interface GCodeCommand {

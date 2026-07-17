@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon } from "lucide-react";
+import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon, X, Lock, ArrowRight } from "lucide-react";
 import { SENAI_MANUAL_CHAPTERS, SenaiManualChapter } from "../data/senaiManual";
 import FloatingCalculator from "./FloatingCalculator";
+import { 
+  fetchExperiencesFromCloud, 
+  saveExperienceToCloud, 
+  deleteExperienceFromCloud, 
+  fetchBlockedTokensFromCloud, 
+  saveBlockedTokensToCloud,
+  ExperienceData 
+} from "../lib/firebase";
+import { getClients } from "../lib/licensing";
 
 interface TableData {
   nome: string;
@@ -703,7 +712,132 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       }
     }
   };
-  const [activeMode, setActiveMode] = useState<"tables" | "senai-book">("tables");
+  const [activeMode, setActiveMode] = useState<"tables" | "senai-book" | "network-usinagem">("tables");
+  
+  // NETWORK USINAGEM STATES
+  const [experiences, setExperiences] = useState<ExperienceData[]>([]);
+  const [blockedTokens, setBlockedTokens] = useState<string[]>([]);
+  const [loadingExperiences, setLoadingExperiences] = useState<boolean>(false);
+  const [experiencesSearchQuery, setExperiencesSearchQuery] = useState<string>("");
+  const [selectedExperience, setSelectedExperience] = useState<ExperienceData | null>(null);
+  
+  // Custom confirmation states to bypass blocked browser confirm() inside iframe
+  const [confirmDeleteExp, setConfirmDeleteExp] = useState<ExperienceData | null>(null);
+  const [confirmBlockUser, setConfirmBlockUser] = useState<{ token: string; name: string; shouldBlock: boolean } | null>(null);
+  
+  const [showAddExperienceForm, setShowAddExperienceForm] = useState<boolean>(false);
+  const [showPasswordDialog, setShowPasswordDialog] = useState<boolean>(false);
+  const [passwordVerified, setPasswordVerified] = useState<boolean>(false);
+  const [passwordInput, setPasswordInput] = useState<string>("");
+  const [passwordError, setPasswordError] = useState<string>("");
+  const [verifiedUser, setVerifiedUser] = useState<any | null>(null);
+  
+  const [newExpTitle, setNewExpTitle] = useState<string>("");
+  const [newExpMessage, setNewExpMessage] = useState<string>("");
+  const [newExpImage, setNewExpImage] = useState<string>("");
+  const [postingExperience, setPostingExperience] = useState<boolean>(false);
+  const [postingError, setPostingError] = useState<string>("");
+
+  const loadExperiences = async () => {
+    setLoadingExperiences(true);
+    try {
+      const exps = await fetchExperiencesFromCloud();
+      const blocked = await fetchBlockedTokensFromCloud();
+      setExperiences(exps);
+      setBlockedTokens(blocked);
+      if (exps.length > 0) {
+        setSelectedExperience(exps[0]);
+      } else {
+        setSelectedExperience(null);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar rede de usinagem:", err);
+    } finally {
+      setLoadingExperiences(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeMode === "network-usinagem") {
+      loadExperiences();
+    }
+  }, [activeMode]);
+
+  const handleVerifyPassword = () => {
+    const clients = getClients();
+    const currentToken = localStorage.getItem("cnc_token") || "";
+    const entered = passwordInput.trim();
+
+    if (!entered) {
+      setPasswordError("Por favor, digite a sua senha de acesso.");
+      return;
+    }
+
+    // Match password: match both token and password
+    const matched = clients.find(c => 
+      (c.token === currentToken && c.password === entered) || 
+      (c.token === entered && c.token === currentToken)
+    );
+
+    if (!matched) {
+      setPasswordError("Senha incorreta! Digite a mesma senha que você usou para fazer login.");
+      return;
+    }
+
+    if (blockedTokens.includes(matched.token)) {
+      setPasswordError("Acesso Negado: Esta senha foi bloqueada pelo administrador para postagem de novas experiências.");
+      return;
+    }
+
+    if (matched.blockSharing) {
+      setPasswordError("Acesso Negado: Sua licença possui o bloqueio de compartilhamento de experiências ativo.");
+      return;
+    }
+
+    setVerifiedUser(matched);
+    setPasswordVerified(true);
+    setShowPasswordDialog(false);
+    setPasswordError("");
+  };
+
+  const handleSubmitExperience = async () => {
+    if (!newExpTitle.trim() || !newExpMessage.trim()) {
+      setPostingError("Título e mensagem são campos obrigatórios.");
+      return;
+    }
+
+    const newExp: ExperienceData = {
+      title: newExpTitle.trim(),
+      message: newExpMessage.trim(),
+      userName: verifiedUser?.name || localStorage.getItem("cnc_clientName") || "Operador CNC",
+      userToken: verifiedUser?.token || localStorage.getItem("cnc_token") || "",
+      image: newExpImage || undefined,
+      createdAt: new Date().toISOString()
+    };
+
+    setPostingExperience(true);
+    setPostingError("");
+    try {
+      const expId = await saveExperienceToCloud(newExp);
+      if (expId) {
+        setNewExpTitle("");
+        setNewExpMessage("");
+        setNewExpImage("");
+        setPasswordVerified(false);
+        setVerifiedUser(null);
+        setShowAddExperienceForm(false);
+        await loadExperiences();
+      } else {
+        setPostingError("Não foi possível registrar no Firestore. Verifique sua conexão.");
+      }
+    } catch (err) {
+      console.error(err);
+      setPostingError("Erro ao salvar experiência. Verifique as configurações de rede.");
+    } finally {
+      setPostingExperience(false);
+    }
+  };
+
   const [bookSearchQuery, setBookSearchQuery] = useState<string>("");
   const [selectedTopicId, setSelectedTopicId] = useState<string>("head");
   const [selectedChapterId, setSelectedChapterId] = useState<string>("all");
@@ -1123,6 +1257,560 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     setTimeout(() => setCopiedText(false), 2000);
   };
 
+  const renderNetworkUsinagemView = () => {
+    const filteredExps = experiences.filter(exp => {
+      if (!experiencesSearchQuery) return true;
+      const q = experiencesSearchQuery.toLowerCase();
+      return (
+        exp.title.toLowerCase().includes(q) ||
+        exp.message.toLowerCase().includes(q) ||
+        exp.userName.toLowerCase().includes(q)
+      );
+    });
+
+    const currentIsAdmin = localStorage.getItem("cnc_isAdmin") === "true";
+    const clients = getClients();
+    const currentToken = localStorage.getItem("cnc_token") || "";
+    const currentClient = clients.find(c => c.token === currentToken);
+    const isSharingBlocked = currentClient?.blockSharing === true;
+
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden h-full">
+        {/* Header section with total posts & quick info */}
+        <div className="mb-4 flex items-center justify-between pb-3 border-b border-zinc-800 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="p-2 bg-cyan-950/40 text-cyan-400 rounded-lg border border-cyan-800/30">
+              <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-.778.099-1.533.284-2.253" />
+              </svg>
+            </span>
+            <div>
+              <h4 className="text-sm font-bold text-zinc-150 uppercase tracking-wider">
+                NETWORK USINAGEM - Rede de Experiências
+              </h4>
+              <p className="text-[10px] text-zinc-500 font-mono">
+                Compartilhe e consulte conhecimentos práticos de usinagem com profissionais de torno CNC.
+              </p>
+            </div>
+          </div>
+          {currentIsAdmin && (
+            <span className="text-[9px] px-2 py-1 bg-red-950/40 text-red-400 border border-red-900/30 rounded font-mono font-bold uppercase">
+              Modo Administrador Ativo
+            </span>
+          )}
+        </div>
+
+        {/* Outer Split Layout */}
+        <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
+          
+          {/* Left Column: List and Search */}
+          <div className="w-[340px] shrink-0 flex flex-col gap-3 h-full border-r border-zinc-850 pr-4">
+            
+            {/* Search inputs */}
+            <div className="relative shrink-0">
+              <Search className="absolute left-3 top-3 text-cyan-400 w-4 h-4" />
+              <input
+                type="text"
+                value={experiencesSearchQuery}
+                onChange={(e) => setExperiencesSearchQuery(e.target.value)}
+                placeholder="Pesquisar termo na rede..."
+                className="w-full bg-[#131317] border border-zinc-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-zinc-100 placeholder-zinc-600 outline-none focus:border-[#00f3ff] transition font-sans"
+              />
+            </div>
+
+            {/* Post button */}
+            {isSharingBlocked ? (
+              <div className="w-full bg-red-950/25 border border-red-900/40 py-3 px-4 rounded-xl text-red-400 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 select-none" title="Bloqueio de compartilhamento de experiências ativo">
+                <Lock className="w-3.5 h-3.5" />
+                <span>Bloqueio de Compartilhamento</span>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setShowAddExperienceForm(true);
+                  setShowPasswordDialog(true);
+                  setPasswordVerified(false);
+                  setPasswordInput("");
+                  setPasswordError("");
+                }}
+                className="w-full bg-cyan-950/40 hover:bg-[#00f3ff] hover:text-zinc-950 text-[#00f3ff] border border-cyan-800/40 hover:border-cyan-400 py-3 px-4 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition shrink-0 shadow-lg shadow-cyan-950/30"
+              >
+                <span>➕ Compartilhar Experiência</span>
+              </button>
+            )}
+
+            {/* List label */}
+            <div className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider pt-2 border-t border-zinc-900 shrink-0 flex justify-between items-center">
+              <span>Experiências ({filteredExps.length}):</span>
+              <span className="text-[#00f3ff] font-bold">Total</span>
+            </div>
+
+            {/* Scrollable Feed list */}
+            <div className="flex-1 overflow-y-auto flex flex-col gap-2.5 pr-1 scrollbar-thin">
+              {loadingExperiences ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-zinc-550 text-xs font-mono">
+                  <div className="w-5 h-5 rounded-full border-2 border-t-cyan-400 border-zinc-800 animate-spin" />
+                  <span>Sincronizando experiências...</span>
+                </div>
+              ) : filteredExps.map((exp, idx) => (
+                <button
+                  key={exp.id || idx}
+                  onClick={() => setSelectedExperience(exp)}
+                  className={`text-left p-3.5 rounded-xl border transition flex flex-col gap-2 ${
+                    selectedExperience?.id === exp.id
+                      ? "bg-cyan-950/20 text-[#00f3ff] border-cyan-400/40 shadow-lg shadow-cyan-950/10"
+                      : "bg-[#111116] border-zinc-850/60 text-zinc-350 hover:text-zinc-200 hover:bg-zinc-900/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between w-full gap-2">
+                    <div className="font-bold text-xs sm:text-sm text-zinc-100 truncate flex-1">{exp.title}</div>
+                    {exp.image && (
+                      <span className="text-[8px] bg-cyan-950/40 border border-cyan-900/40 text-cyan-400 px-1.5 py-0.5 rounded font-mono font-bold shrink-0">
+                        📷 FOTO
+                      </span>
+                    )}
+                  </div>
+                  
+                  <p className="text-xs text-zinc-450 line-clamp-2 w-full leading-relaxed break-words">
+                    {exp.message}
+                  </p>
+
+                  <div className="flex justify-between items-center w-full mt-1 border-t border-zinc-850/50 pt-2 text-[10px] text-zinc-500 font-mono">
+                    <span className="truncate max-w-[140px] font-bold text-zinc-400 flex items-center gap-1">
+                      👤 {exp.userName}
+                    </span>
+                    <span>
+                      {exp.createdAt ? new Date(exp.createdAt).toLocaleDateString("pt-BR") : ""}
+                    </span>
+                  </div>
+                </button>
+              ))}
+
+              {!loadingExperiences && filteredExps.length === 0 && (
+                <div className="text-zinc-650 text-center py-16 text-xs font-mono px-4">
+                  Nenhuma experiência de usinagem encontrada para a pesquisa.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column: Experience Detail View */}
+          <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-[#111115] border border-zinc-850 rounded-2xl relative shadow-2xl">
+            {selectedExperience ? (
+              <div className="flex-1 flex flex-col justify-between h-full overflow-hidden p-6">
+                {/* Header detail */}
+                <div className="shrink-0 pb-4 border-b border-zinc-800 flex justify-between items-start gap-4">
+                  <div>
+                    <h3 className="text-lg font-extrabold text-zinc-100 leading-snug">
+                      {selectedExperience.title}
+                    </h3>
+                    <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500 font-mono">
+                      <span className="font-bold text-cyan-400 bg-cyan-950/30 border border-cyan-900/30 px-2 py-0.5 rounded">
+                        👤 Autor: {selectedExperience.userName}
+                      </span>
+                      <span>
+                        📅 {selectedExperience.createdAt ? new Date(selectedExperience.createdAt).toLocaleString("pt-BR") : ""}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {/* Administrator actions directly on active post */}
+                  {currentIsAdmin && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setConfirmDeleteExp(selectedExperience);
+                        }}
+                        className="p-2 bg-red-950/40 hover:bg-red-900 text-red-400 hover:text-white border border-red-900/40 rounded-xl transition flex items-center gap-1.5 text-xs font-bold font-sans"
+                        title="Apagar Experiência"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Apagar Post</span>
+                      </button>
+                      
+                      {/* Block User Button */}
+                      <button
+                        onClick={() => {
+                          const isBlocked = blockedTokens.includes(selectedExperience.userToken);
+                          setConfirmBlockUser({
+                            token: selectedExperience.userToken,
+                            name: selectedExperience.userName,
+                            shouldBlock: !isBlocked
+                          });
+                        }}
+                        className={`px-3 py-2 border rounded-xl font-bold transition text-xs font-sans ${
+                          blockedTokens.includes(selectedExperience.userToken)
+                            ? "border-emerald-800 bg-emerald-950/20 text-emerald-400 hover:bg-emerald-900/30"
+                            : "border-red-800 bg-red-950/20 text-red-400 hover:bg-red-900/30"
+                        }`}
+                      >
+                        {blockedTokens.includes(selectedExperience.userToken) ? "🔓 Desbloquear" : "🚫 Bloquear Autor"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Content detail panel */}
+                <div className="flex-1 overflow-y-auto my-4 pr-1 scrollbar-thin flex flex-col gap-6">
+                  {/* Experience description message */}
+                  <div className="text-zinc-300 text-sm leading-relaxed whitespace-pre-wrap font-sans bg-[#0c0c0f] p-5 rounded-xl border border-zinc-850/60 break-words">
+                    {selectedExperience.message}
+                  </div>
+
+                  {/* Large visual attachment photo if available */}
+                  {selectedExperience.image ? (
+                    <div className="flex flex-col gap-2 mt-2">
+                      <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold font-mono">
+                        📷 Foto Anexa:
+                      </span>
+                      <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/40 p-2 flex justify-center shadow-inner group transition-all duration-300">
+                        <img
+                          src={selectedExperience.image}
+                          alt={selectedExperience.title}
+                          className="max-h-[300px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-zinc-650 font-mono text-center text-xs border border-dashed border-zinc-800/40 p-6 rounded-xl bg-zinc-950/20">
+                      Nenhuma foto foi anexada a esta experiência.
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer detail panel info */}
+                <div className="shrink-0 border-t border-zinc-850/60 pt-3 text-[10px] text-zinc-500 font-mono flex items-center justify-between">
+                  <span>TORNO MASTER • COMPARTILHAMENTO DE CONHECIMENTO</span>
+                  <span>ID do Post: {selectedExperience.id}</span>
+                </div>
+              </div>
+            ) : (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-zinc-500 font-mono">
+                  <svg className="w-12 h-12 text-zinc-700 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 111.063.852l-.708 2.836a.75.75 0 001.063.852l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  <span>Nenhuma experiência selecionada.</span>
+                  <span>Escolha um post ao lado ou compartilhe o seu!</span>
+                </div>
+              )}
+          </div>
+
+        </div>
+
+        {/* MODAL overlay for password validation dialog */}
+        {showPasswordDialog && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-[#16161c] border border-cyan-400/30 rounded-2xl p-6 shadow-2xl relative">
+              <button
+                onClick={() => {
+                  setShowPasswordDialog(false);
+                  setShowAddExperienceForm(false);
+                }}
+                className="absolute top-4 right-4 text-zinc-500 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2.5 bg-cyan-950/50 text-[#00f3ff] rounded-xl border border-cyan-800/30">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-zinc-100 uppercase tracking-wider">
+                    Confirmação de Identidade
+                  </h4>
+                  <p className="text-xs text-zinc-450 mt-0.5 font-sans">Digite a sua senha de acesso para continuar.</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 my-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2 font-mono">
+                    Senha de Acesso (mesma do Login)
+                  </label>
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Digite sua senha de 5 dígitos..."
+                    className="w-full bg-[#0d0d11] text-zinc-100 px-4 py-3 rounded-xl border border-zinc-800 text-sm outline-none focus:border-cyan-400 transition font-sans"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleVerifyPassword();
+                    }}
+                  />
+                  {passwordError && (
+                    <p className="text-xs text-red-400 mt-2 font-semibold flex items-center gap-1.5 font-sans">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+                      <span>{passwordError}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => {
+                    setShowPasswordDialog(false);
+                    setShowAddExperienceForm(false);
+                  }}
+                  className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-bold rounded-xl text-xs uppercase tracking-wider transition font-sans"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleVerifyPassword}
+                  className="px-5 py-2.5 bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-black rounded-xl text-xs uppercase tracking-wider transition flex items-center gap-1.5 font-sans"
+                >
+                  <span>Verificar Senha</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL overlay for creating/submitting experience form */}
+        {showAddExperienceForm && passwordVerified && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+            <div className="w-full max-w-2xl bg-[#16161c] border border-cyan-400/40 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+              <button
+                onClick={() => {
+                  setShowAddExperienceForm(false);
+                  setPasswordVerified(false);
+                }}
+                className="absolute top-4 right-4 text-zinc-500 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4 shrink-0 border-b border-zinc-850 pb-4">
+                <div className="p-2.5 bg-cyan-950/50 text-[#00f3ff] rounded-xl border border-cyan-800/30">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-zinc-100 uppercase tracking-wider">
+                    Compartilhar Experiência Prática
+                  </h4>
+                  <p className="text-xs text-zinc-450 mt-0.5 font-sans">
+                    Preenchendo como: <span className="text-[#00f3ff] font-bold">{verifiedUser?.name}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Form content scroll container */}
+              <div className="flex-1 overflow-y-auto space-y-4 pr-1 my-3 scrollbar-thin">
+                {postingError && (
+                  <div className="p-3 bg-red-950/30 border border-red-900/30 rounded-xl text-red-400 text-xs font-semibold flex items-center gap-2 font-sans">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+                    <span>{postingError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-450 uppercase mb-1 font-mono">
+                    Título do Assunto (ex: "Alinhamento G76", "Vibração pastilha")
+                  </label>
+                  <input
+                    type="text"
+                    value={newExpTitle}
+                    onChange={(e) => setNewExpTitle(e.target.value)}
+                    placeholder="Seja curto e direto ao assunto..."
+                    className="w-full bg-[#0d0d11] text-zinc-100 px-4 py-2.5 rounded-xl border border-zinc-800 text-xs outline-none focus:border-cyan-400 transition font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-450 uppercase mb-1 font-mono">
+                    Mensagem / Dica Prática (O que você aprendeu ou quer compartilhar)
+                  </label>
+                  <textarea
+                    value={newExpMessage}
+                    onChange={(e) => setNewExpMessage(e.target.value)}
+                    placeholder="Descreva detalhadamente o problema e como você resolveu na prática..."
+                    rows={8}
+                    className="w-full bg-[#0d0d11] text-zinc-100 px-4 py-3 rounded-xl border border-zinc-800 text-xs outline-none focus:border-cyan-400 transition font-sans resize-none"
+                  />
+                </div>
+
+                {/* Upload attachment Section */}
+                <div className="border border-dashed border-zinc-800 rounded-xl p-4 bg-zinc-950/20">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h5 className="text-xs font-bold text-zinc-300 font-sans">Anexar Foto da Peça ou Desenho</h5>
+                      <p className="text-[10px] text-zinc-500 mt-0.5 font-mono">Selecione uma imagem (JPEG/PNG) de até 2MB</p>
+                    </div>
+                    <label className="shrink-0 px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-[10px] font-bold cursor-pointer transition flex items-center gap-1.5 uppercase font-sans">
+                      <UploadCloud className="w-4 h-4 text-cyan-400" />
+                      <span>Selecionar Imagem</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            if (file.size > 2 * 1024 * 1024) {
+                              alert("A imagem é muito grande! Escolha um arquivo menor que 2MB.");
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setNewExpImage(reader.result as string);
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {newExpImage && (
+                    <div className="mt-3 flex items-center justify-between bg-zinc-900/60 p-2 rounded-lg border border-zinc-800">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <img src={newExpImage} alt="Anexo" className="w-10 h-10 object-cover rounded-md border border-zinc-800" referrerPolicy="no-referrer" />
+                        <span className="text-[10px] text-zinc-400 truncate font-mono">Imagem carregada com sucesso!</span>
+                      </div>
+                      <button
+                        onClick={() => setNewExpImage("")}
+                        className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 hover:text-red-300 transition text-[10px] font-bold font-sans"
+                      >
+                        Remover
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex justify-end gap-3 pt-3 shrink-0 border-t border-zinc-850">
+                <button
+                  onClick={() => {
+                    setShowAddExperienceForm(false);
+                    setPasswordVerified(false);
+                  }}
+                  className="px-5 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-bold rounded-xl text-xs uppercase tracking-wider transition font-sans"
+                >
+                  Cancelar
+                </button>
+                <button
+                  disabled={postingExperience || !newExpTitle.trim() || !newExpMessage.trim()}
+                  onClick={handleSubmitExperience}
+                  className="px-6 py-2.5 bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-black rounded-xl text-xs uppercase tracking-wider transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed font-sans"
+                >
+                  {postingExperience ? (
+                    <>
+                      <div className="w-4 h-4 rounded-full border-2 border-t-zinc-950 border-cyan-950 animate-spin" />
+                      <span>Publicando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Publicar na Rede</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Custom Confirmation Overlays */}
+        {confirmDeleteExp && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+            <div className="bg-[#17171e] border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-3 text-red-400 mb-4">
+                <AlertTriangle className="w-6 h-6 shrink-0" />
+                <h4 className="text-sm font-bold uppercase tracking-wider font-sans">Apagar Experiência?</h4>
+              </div>
+              <p className="text-xs text-zinc-350 mb-6 leading-relaxed font-sans">
+                Você tem certeza que deseja excluir permanentemente o post <strong className="text-zinc-100">"{confirmDeleteExp.title}"</strong>? Esta ação é irreversível e removerá a postagem para todos os usuários.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setConfirmDeleteExp(null)}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-bold transition font-sans"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    const expId = confirmDeleteExp.id;
+                    setConfirmDeleteExp(null);
+                    if (expId) {
+                      await deleteExperienceFromCloud(expId);
+                      setSelectedExperience(null);
+                      await loadExperiences();
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition font-sans"
+                >
+                  Confirmar Exclusão
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {confirmBlockUser && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+            <div className="bg-[#17171e] border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-3 text-red-400 mb-4">
+                <Lock className="w-6 h-6 shrink-0" />
+                <h4 className="text-sm font-bold uppercase tracking-wider font-sans">
+                  {confirmBlockUser.shouldBlock ? "Bloquear Autor?" : "Desbloquear Autor?"}
+                </h4>
+              </div>
+              <p className="text-xs text-zinc-350 mb-6 leading-relaxed font-sans">
+                {confirmBlockUser.shouldBlock ? (
+                  <span>
+                    Deseja realmente <strong className="text-red-400">BLOQUEAR</strong> o autor <strong className="text-zinc-100">"{confirmBlockUser.name}"</strong>? Ele será impedido de publicar novas experiências na rede.
+                  </span>
+                ) : (
+                  <span>
+                    Deseja <strong className="text-emerald-400">DESBLOQUEAR</strong> o autor <strong className="text-zinc-100">"{confirmBlockUser.name}"</strong> para permitir que ele publique novas experiências?
+                  </span>
+                )}
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setConfirmBlockUser(null)}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-bold transition font-sans"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    const { token, shouldBlock } = confirmBlockUser;
+                    setConfirmBlockUser(null);
+                    let updated: string[];
+                    if (shouldBlock) {
+                      updated = [...blockedTokens, token];
+                    } else {
+                      updated = blockedTokens.filter(t => t !== token);
+                    }
+                    await saveBlockedTokensToCloud(updated);
+                    setBlockedTokens(updated);
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition font-sans ${
+                    confirmBlockUser.shouldBlock
+                      ? "bg-red-600 hover:bg-red-700 text-white"
+                      : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  }`}
+                >
+                  {confirmBlockUser.shouldBlock ? "Confirmar Bloqueio" : "Confirmar Desbloqueio"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const activeTable = tables[activeTab];
 
   return (
@@ -1221,6 +1909,32 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
           {/* Left Sidebar Menu */}
           <div className="w-64 border-r border-zinc-800 bg-[#16161c] p-4 overflow-y-auto flex flex-col gap-4">
             
+            {/* NETWORK USINAGEM TAB */}
+            <div>
+              <h4 className="text-xs font-bold text-cyan-400 tracking-wider mb-2 uppercase flex items-center gap-1.5">
+                <span>🌐 Rede CNC</span>
+              </h4>
+              <button
+                onClick={() => {
+                  setActiveMode("network-usinagem");
+                }}
+                className={`text-left text-xs p-3 rounded-xl border transition font-bold w-full flex items-center justify-between ${
+                  activeMode === "network-usinagem"
+                    ? "bg-cyan-950/40 text-[#00f3ff] border-[#00f3ff] shadow-lg shadow-cyan-950/25 font-black"
+                    : "bg-[#1f1f26]/80 border-zinc-800/80 text-zinc-350 hover:text-white hover:border-zinc-750"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                  </span>
+                  <span>🌐 NETWORK USINAGEM</span>
+                </span>
+                <ChevronRight className={`w-3.5 h-3.5 transition ${activeMode === "network-usinagem" ? "text-cyan-400 translate-x-0.5" : "text-zinc-600"}`} />
+              </button>
+            </div>
+
             {/* References list */}
             <div>
               <h4 className="text-xs font-bold text-zinc-500 tracking-wider mb-2 uppercase">
@@ -1384,7 +2098,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
 
           {/* Right main panel split */}
           <div className="flex-1 flex flex-col p-6 overflow-hidden bg-[#0d0d11]">
-            {false ? (
+            {activeMode === "network-usinagem" ? (
+              renderNetworkUsinagemView()
+            ) : false ? (
               <div className="flex-1 flex flex-col overflow-hidden h-full">
                 
                 {/* Book Header */}

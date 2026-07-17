@@ -41,12 +41,45 @@
           "type": "string"
         }
       }
+    },
+    "Experience": {
+      "title": "Experience",
+      "description": "A shared machining experience posted by an operator",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "userName": { "type": "string" },
+        "userToken": { "type": "string" },
+        "image": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "message", "userName", "userToken", "createdAt"]
+    },
+    "ExperiencesConfig": {
+      "title": "ExperiencesConfig",
+      "description": "Moderation settings and blocked user tokens list",
+      "type": "object",
+      "properties": {
+        "blockedTokens": {
+          "type": "array"
+        }
+      }
     }
   },
   "firestore": {
     "/licensing/{docId}": {
       "schema": "LicensingConfig",
       "description": "Configuration document for licensing clients list"
+    },
+    "/experiences/{experienceId}": {
+      "schema": "Experience",
+      "description": "Collection of shared operator experiences"
+    },
+    "/experiences_config/{docId}": {
+      "schema": "ExperiencesConfig",
+      "description": "Moderation configuration for experiences"
     }
   }
 }

@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc, addDoc } from "firebase/firestore";
 import { ClientToken } from "../types";
 
 const firebaseConfig = {
@@ -100,6 +100,103 @@ export async function saveLicensingToCloud(clients: ClientToken[], supportPhone?
     return true;
   } catch (err) {
     console.error("Erro ao persistir licenças no Firebase Firestore:", err);
+    handleFirestoreError(err, OperationType.WRITE, path);
+    return false;
+  }
+}
+
+export interface ExperienceData {
+  id?: string;
+  title: string;
+  message: string;
+  userName: string;
+  userToken: string;
+  image?: string; // base64 string
+  createdAt: string;
+}
+
+/**
+ * Fetches all experiences from persistent Firestore, ordered by createdAt descending.
+ */
+export async function fetchExperiencesFromCloud(): Promise<ExperienceData[]> {
+  const path = "experiences";
+  try {
+    const colRef = collection(db, "experiences");
+    const querySnap = await getDocs(colRef);
+    const list: ExperienceData[] = [];
+    querySnap.forEach((docSnap) => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as ExperienceData);
+    });
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } catch (err) {
+    console.error("Erro ao carregar experiências do Firestore:", err);
+    handleFirestoreError(err, OperationType.GET, path);
+    return [];
+  }
+}
+
+/**
+ * Adds a new experience to the cloud Firestore.
+ */
+export async function saveExperienceToCloud(exp: ExperienceData): Promise<string | null> {
+  const path = "experiences";
+  try {
+    const colRef = collection(db, "experiences");
+    const sanitized = JSON.parse(JSON.stringify(exp));
+    const docRef = await addDoc(colRef, sanitized);
+    return docRef.id;
+  } catch (err) {
+    console.error("Erro ao salvar experiência no Firestore:", err);
+    handleFirestoreError(err, OperationType.WRITE, path);
+    return null;
+  }
+}
+
+/**
+ * Deletes an experience from cloud Firestore.
+ */
+export async function deleteExperienceFromCloud(id: string): Promise<boolean> {
+  const path = `experiences/${id}`;
+  try {
+    const docRef = doc(db, "experiences", id);
+    await deleteDoc(docRef);
+    return true;
+  } catch (err) {
+    console.error("Erro ao deletar experiência no Firestore:", err);
+    handleFirestoreError(err, OperationType.DELETE, path);
+    return false;
+  }
+}
+
+/**
+ * Fetches blocked tokens list.
+ */
+export async function fetchBlockedTokensFromCloud(): Promise<string[]> {
+  const path = "experiences_config/moderation";
+  try {
+    const docRef = doc(db, "experiences_config", "moderation");
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().blockedTokens || [];
+    }
+  } catch (err) {
+    console.error("Erro ao ler tokens bloqueados:", err);
+    handleFirestoreError(err, OperationType.GET, path);
+  }
+  return [];
+}
+
+/**
+ * Saves/updates blocked tokens list.
+ */
+export async function saveBlockedTokensToCloud(blockedTokens: string[]): Promise<boolean> {
+  const path = "experiences_config/moderation";
+  try {
+    const docRef = doc(db, "experiences_config", "moderation");
+    await setDoc(docRef, { blockedTokens }, { merge: true });
+    return true;
+  } catch (err) {
+    console.error("Erro ao salvar tokens bloqueados:", err);
     handleFirestoreError(err, OperationType.WRITE, path);
     return false;
   }

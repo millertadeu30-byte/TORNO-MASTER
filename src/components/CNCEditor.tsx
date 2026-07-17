@@ -13,6 +13,8 @@ interface CNCEditorProps {
   fileName?: string;
   onToggleFloatingCalculator?: () => void;
   isFloatingCalculatorOpen?: boolean;
+  allEditorTexts?: string[];
+  layoutCount?: number;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -27,6 +29,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   fileName,
   onToggleFloatingCalculator,
   isFloatingCalculatorOpen,
+  allEditorTexts,
+  layoutCount,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -36,6 +40,78 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   const [isFindReplaceOpen, setIsFindReplaceOpen] = React.useState(false);
   const [findText, setFindText] = React.useState("");
   const [replaceText, setReplaceText] = React.useState("");
+
+  // Handler to align channels on a specific M-code
+  const handleAlignSync = (mCode: number, clickedLineIdx: number) => {
+    if (!allEditorTexts || !layoutCount) return;
+
+    for (let p = 0; p < layoutCount; p++) {
+      const pText = allEditorTexts[p];
+      if (!pText) continue;
+
+      const pLines = pText.split(/\r?\n/);
+      
+      // Find all line indices where this mCode occurs
+      const matchingIndices: number[] = [];
+      for (let i = 0; i < pLines.length; i++) {
+        const cleanLine = pLines[i].split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+        const matches = cleanLine.match(new RegExp(`\\bM\\s*${mCode}\\b`));
+        if (matches) {
+          matchingIndices.push(i);
+        }
+      }
+
+      if (matchingIndices.length > 0) {
+        // Find the matching index closest to clickedLineIdx
+        let closestIdx = matchingIndices[0];
+        let minDiff = Math.abs(closestIdx - clickedLineIdx);
+        for (const idx of matchingIndices) {
+          const diff = Math.abs(idx - clickedLineIdx);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestIdx = idx;
+          }
+        }
+
+        const textarea = document.getElementById(`gcode-textarea-${p}`) as HTMLTextAreaElement;
+        if (textarea) {
+          const viewHeight = textarea.clientHeight;
+          // Centering the matched line inside the viewport
+          const targetScrollTop = closestIdx * lineHeight - (viewHeight / 2) + (lineHeight / 2);
+          textarea.scrollTop = Math.max(0, targetScrollTop);
+          textarea.dispatchEvent(new Event('scroll'));
+        }
+      }
+    }
+  };
+
+  // Find all sync M-codes in each open editor
+  const syncCodesByPane = React.useMemo(() => {
+    if (!allEditorTexts || !layoutCount || layoutCount <= 1) return [];
+    return allEditorTexts.slice(0, layoutCount).map((text) => {
+      const codes = new Set<number>();
+      if (!text) return codes;
+      const linesList = text.split(/\r?\n/);
+      for (const line of linesList) {
+        const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+        const matches = cleanLine.matchAll(/\bM\s*(\d+)\b/g);
+        for (const match of matches) {
+          const num = parseInt(match[1], 10);
+          if (num >= 200) {
+            codes.add(num);
+          }
+        }
+      }
+      return codes;
+    });
+  }, [allEditorTexts, layoutCount]);
+
+  // Helper to check if an M-code is synchronized
+  const checkSyncCode = (mNum: number): boolean => {
+    if (syncCodesByPane.length <= 1) return true; // default if 1 or 0 open editors
+    return syncCodesByPane.every((set) => set.has(mNum));
+  };
+
   const [fontSize, setFontSize] = React.useState<number>(() => {
     const saved = localStorage.getItem("cnc-editor-font-size");
     return saved ? parseInt(saved, 10) : 14;
@@ -244,7 +320,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           return (
             <span
               key={tIdx}
-              className={isHighContrast ? "text-red-700" : "text-red-400"}
+              className={isHighContrast ? "text-yellow-600 font-bold" : "text-yellow-400 font-bold"}
             >
               {token}
             </span>
@@ -306,7 +382,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
             key={tIdx} 
             className={`${
               hasToolCall 
-                ? isHighContrast ? "text-red-900" : "text-red-200"
+                ? isHighContrast ? "text-yellow-800" : "text-yellow-100"
                 : isHighContrast ? "text-zinc-800" : "text-zinc-350"
             }`}
           >
@@ -584,19 +660,36 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           style={{ fontSize: `${fontSize - 1}px`, lineHeight: `${lineHeight}px` }}
           className={`w-12 text-right pr-2 font-mono select-none overflow-hidden py-4 border-r ${isHighContrast ? 'bg-zinc-100 text-black border-black' : 'bg-[#08080c] text-zinc-600 border-zinc-900/60'}`}
         >
-          {lines.map((_, i) => (
-            <div
-              key={i}
-              style={{ height: `${lineHeight}px` }}
-              className={`flex items-center justify-end px-1 ${
-                i === Math.floor(activeLine) && isActive 
-                  ? "bg-cyan-950/40 text-cyan-400 border-r-2 border-cyan-400" 
-                  : ""
-              }`}
-            >
-              {i + 1}
-            </div>
-          ))}
+          {lines.map((line, i) => {
+            const isActiveLine = i === Math.floor(activeLine) && isActive;
+            let lineNumClass = "";
+            const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+            const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+            if (mMatch && !isActiveLine && layoutCount && layoutCount > 1) {
+              const mNum = parseInt(mMatch[1], 10);
+              if (mNum >= 200) {
+                const isSync = checkSyncCode(mNum);
+                if (isSync) {
+                  lineNumClass = isHighContrast ? "bg-emerald-100 text-emerald-900 border-r-2 border-emerald-600 font-bold" : "bg-emerald-400/30 text-emerald-300 border-r-2 border-emerald-400 font-bold";
+                } else {
+                  lineNumClass = isHighContrast ? "bg-red-100 text-red-900 border-r-2 border-red-600 font-bold" : "bg-red-400/30 text-red-300 border-r-2 border-red-400 font-bold";
+                }
+              }
+            }
+            return (
+              <div
+                key={i}
+                style={{ height: `${lineHeight}px` }}
+                className={`flex items-center justify-end px-1 ${
+                  isActiveLine 
+                    ? "bg-cyan-950/40 text-cyan-400 border-r-2 border-cyan-400" 
+                    : lineNumClass
+                }`}
+              >
+                {i + 1}
+              </div>
+            );
+          })}
         </div>
 
         {/* Textarea & Highlighter Grid */}
@@ -619,16 +712,38 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
             {lines.map((line, i) => {
               const hasTool = /T\d+/i.test(line) && !line.trim().startsWith("(");
               const isActiveLine = i === Math.floor(activeLine) && isActive;
+              
+              let syncBgClass = "";
+              const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+              const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+              if (mMatch && layoutCount && layoutCount > 1) {
+                const mNum = parseInt(mMatch[1], 10);
+                if (mNum >= 200) {
+                  const isSync = checkSyncCode(mNum);
+                  if (isSync) {
+                    syncBgClass = isHighContrast 
+                      ? "bg-emerald-100 border-l-4 border-emerald-600 pl-1 text-emerald-950 font-medium" 
+                      : "bg-emerald-500/25 text-emerald-50 border-l-4 border-emerald-400 pl-1 font-medium";
+                  } else {
+                    syncBgClass = isHighContrast 
+                      ? "bg-red-100 border-l-4 border-red-600 pl-1 text-red-950 font-medium" 
+                      : "bg-red-500/25 text-red-50 border-l-4 border-red-400 pl-1 font-medium";
+                  }
+                }
+              }
+
               return (
                 <div
                   key={i}
                   style={{ height: `${lineHeight}px` }}
                   className={`min-w-max ${
                     isActiveLine 
-                      ? isHighContrast ? "bg-yellow-100" : "bg-cyan-950/45"
-                      : hasTool 
-                        ? isHighContrast ? "bg-red-50" : "bg-red-950/20"
-                        : ""
+                      ? isHighContrast ? "bg-cyan-100" : "bg-cyan-950/45"
+                      : syncBgClass
+                        ? syncBgClass
+                        : hasTool 
+                          ? isHighContrast ? "bg-yellow-50" : "bg-yellow-500/10"
+                          : ""
                   }`}
                 >
                   {highlightLineText(line, isActiveLine)}

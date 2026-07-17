@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, Move } from "lucide-react";
+import { X, Move, Maximize2, Minimize2 } from "lucide-react";
 
 interface FloatingWindowProps {
   title: string;
@@ -33,6 +33,7 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   const [position, setPosition] = useState({ x: defaultX, y: defaultY });
   const [size, setSize] = useState({ width: defaultWidth, height: defaultHeight });
   const [isDragging, setIsDragging] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
 
@@ -70,6 +71,7 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   }, [id, defaultWidth, defaultHeight]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (isMaximized) return; // Disable dragging when maximized
     const target = e.target as HTMLElement;
     // Only drag from the header or element inside the header with drag handle class
     if (target.closest(".drag-handle") && !target.closest("button")) {
@@ -89,7 +91,7 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (isDragging) {
+    if (isDragging && !isMaximized) {
       const newX = e.clientX - dragStartRef.current.x;
       const newY = e.clientY - dragStartRef.current.y;
       
@@ -119,20 +121,21 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
       }}
       className={`fixed rounded-xl border flex flex-col overflow-hidden shadow-2xl transition-all duration-150 ${
         isActive
-          ? "border-cyan-400 shadow-cyan-950/40 z-[999]"
-          : "border-zinc-800 shadow-black/80 z-[80] opacity-95"
+          ? "border-cyan-400 shadow-cyan-950/40"
+          : "border-zinc-800 shadow-black/80 opacity-95"
       }`}
       style={{
-        top: `${position.y}px`,
-        left: `${position.x}px`,
-        width: size.width,
-        height: size.height,
-        resize: "both",
-        minWidth: minWidth,
-        minHeight: minHeight,
-        maxWidth: "98vw",
-        maxHeight: "92vh",
+        top: isMaximized ? "0px" : `${position.y}px`,
+        left: isMaximized ? "0px" : `${position.x}px`,
+        width: isMaximized ? "100vw" : size.width,
+        height: isMaximized ? "100vh" : size.height,
+        resize: isMaximized ? "none" : "both",
+        minWidth: isMaximized ? "100vw" : minWidth,
+        minHeight: isMaximized ? "100vh" : minHeight,
+        maxWidth: "100vw",
+        maxHeight: "100vh",
         backgroundColor: "#17171e",
+        zIndex: isMaximized ? 99999 : (isActive ? 999 : 80),
       }}
     >
       {/* Window Header / Drag Handle */}
@@ -151,8 +154,22 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
         
         <div className="flex items-center gap-1">
           <span className="text-[9px] text-zinc-600 font-mono hidden md:inline mr-2">
-            ✥ ARRASTE PARA MOVER | 🎚 CANTO PARA REDIMENSIONAR
+            {isMaximized ? "✥ TELA INTEIRA ATIVADA" : "✥ ARRASTE PARA MOVER | 🎚 CANTO PARA REDIMENSIONAR"}
           </span>
+          
+          {/* Maximize Toggle Button */}
+          <button
+            onClick={() => setIsMaximized(!isMaximized)}
+            className="text-zinc-400 hover:text-[#00f3ff] p-1 hover:bg-zinc-800/60 rounded-md transition"
+            title={isMaximized ? "Restaurar Janela" : "Maximizar / Tela Inteira"}
+          >
+            {isMaximized ? (
+              <Minimize2 className="w-4 h-4" />
+            ) : (
+              <Maximize2 className="w-4 h-4" />
+            )}
+          </button>
+
           <button
             onClick={onClose}
             className="text-zinc-400 hover:text-red-400 p-1 hover:bg-zinc-800/60 rounded-md transition"
