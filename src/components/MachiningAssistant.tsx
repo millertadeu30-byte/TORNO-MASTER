@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon, X, Lock, ArrowRight } from "lucide-react";
+import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon, X, Lock, ArrowRight, Edit, Check } from "lucide-react";
 import { SENAI_MANUAL_CHAPTERS, SenaiManualChapter } from "../data/senaiManual";
 import FloatingCalculator from "./FloatingCalculator";
 import { 
   fetchExperiencesFromCloud, 
   saveExperienceToCloud, 
   deleteExperienceFromCloud, 
+  updateExperienceInCloud,
   fetchBlockedTokensFromCloud, 
   saveBlockedTokensToCloud,
   ExperienceData 
@@ -382,6 +383,45 @@ export function fractionalInchToMm(inchStr: string): number {
   return parseFloat((totalInches * 25.4).toFixed(3));
 }
 
+// Helper to downscale and compress images on the client side
+const compressAndResizeImage = (base64Str: string, maxWidth = 1000, maxHeight = 1000, quality = 0.75): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let width = img.width;
+      let height = img.height;
+
+      // Keep aspect ratio
+      if (width > height) {
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+      } else {
+        if (height > maxHeight) {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      } else {
+        resolve(base64Str);
+      }
+    };
+    img.onerror = () => {
+      resolve(base64Str);
+    };
+  });
+};
+
 export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   onClose,
   onInsertCode,
@@ -737,6 +777,18 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [newExpImage, setNewExpImage] = useState<string>("");
   const [postingExperience, setPostingExperience] = useState<boolean>(false);
   const [postingError, setPostingError] = useState<string>("");
+
+  // EDIT EXPERIENCE STATES (FOR ADM)
+  const [isEditingSelectedExp, setIsEditingSelectedExp] = useState<boolean>(false);
+  const [editSelectedExpTitle, setEditSelectedExpTitle] = useState<string>("");
+  const [editSelectedExpMessage, setEditSelectedExpMessage] = useState<string>("");
+  const [editSelectedExpImage, setEditSelectedExpImage] = useState<string>("");
+  const [savingEditExp, setSavingEditExp] = useState<boolean>(false);
+  const [editExpError, setEditExpError] = useState<string>("");
+
+  // Drag and Drop States
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+  const [isDraggingOverEdit, setIsDraggingOverEdit] = useState<boolean>(false);
 
   const loadExperiences = async () => {
     setLoadingExperiences(true);
@@ -1257,6 +1309,41 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     setTimeout(() => setCopiedText(false), 2000);
   };
 
+  const handleSaveEditExperience = async () => {
+    if (!editSelectedExpTitle.trim() || !editSelectedExpMessage.trim()) {
+      setEditExpError("O título e a mensagem não podem estar vazios.");
+      return;
+    }
+    setSavingEditExp(true);
+    setEditExpError("");
+    try {
+      if (selectedExperience && selectedExperience.id) {
+        const success = await updateExperienceInCloud(selectedExperience.id, {
+          title: editSelectedExpTitle,
+          message: editSelectedExpMessage,
+          image: editSelectedExpImage
+        });
+        if (success) {
+          const updated = {
+            ...selectedExperience,
+            title: editSelectedExpTitle,
+            message: editSelectedExpMessage,
+            image: editSelectedExpImage
+          };
+          setSelectedExperience(updated);
+          setIsEditingSelectedExp(false);
+          await loadExperiences();
+        } else {
+          setEditExpError("Erro ao salvar as alterações no servidor.");
+        }
+      }
+    } catch (err) {
+      setEditExpError("Erro ao salvar: " + String(err));
+    } finally {
+      setSavingEditExp(false);
+    }
+  };
+
   const renderNetworkUsinagemView = () => {
     const filteredExps = experiences.filter(exp => {
       if (!experiencesSearchQuery) return true;
@@ -1355,7 +1442,10 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
               ) : filteredExps.map((exp, idx) => (
                 <button
                   key={exp.id || idx}
-                  onClick={() => setSelectedExperience(exp)}
+                  onClick={() => {
+                    setSelectedExperience(exp);
+                    setIsEditingSelectedExp(false);
+                  }}
                   className={`text-left p-3.5 rounded-xl border transition flex flex-col gap-2 ${
                     selectedExperience?.id === exp.id
                       ? "bg-cyan-950/20 text-[#00f3ff] border-cyan-400/40 shadow-lg shadow-cyan-950/10"
@@ -1400,82 +1490,252 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
               <div className="flex-1 flex flex-col justify-between h-full overflow-hidden p-6">
                 {/* Header detail */}
                 <div className="shrink-0 pb-4 border-b border-zinc-800 flex justify-between items-start gap-4">
-                  <div>
-                    <h3 className="text-lg font-extrabold text-zinc-100 leading-snug">
-                      {selectedExperience.title}
-                    </h3>
-                    <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500 font-mono">
-                      <span className="font-bold text-cyan-400 bg-cyan-950/30 border border-cyan-900/30 px-2 py-0.5 rounded">
-                        👤 Autor: {selectedExperience.userName}
-                      </span>
-                      <span>
-                        📅 {selectedExperience.createdAt ? new Date(selectedExperience.createdAt).toLocaleString("pt-BR") : ""}
-                      </span>
+                  {isEditingSelectedExp ? (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 px-2.5 py-0.5 rounded-full font-mono font-bold uppercase tracking-wider animate-pulse">
+                          Modo Edição (ADM)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500 font-mono">
+                        <span className="font-bold text-cyan-400 bg-cyan-950/30 border border-cyan-900/30 px-2 py-0.5 rounded">
+                          👤 Autor original: {selectedExperience.userName}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div>
+                      <h3 className="text-lg font-extrabold text-zinc-100 leading-snug">
+                        {selectedExperience.title}
+                      </h3>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500 font-mono">
+                        <span className="font-bold text-cyan-400 bg-cyan-950/30 border border-cyan-900/30 px-2 py-0.5 rounded">
+                          👤 Autor: {selectedExperience.userName}
+                        </span>
+                        <span>
+                          📅 {selectedExperience.createdAt ? new Date(selectedExperience.createdAt).toLocaleString("pt-BR") : ""}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Administrator actions directly on active post */}
                   {currentIsAdmin && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setConfirmDeleteExp(selectedExperience);
-                        }}
-                        className="p-2 bg-red-950/40 hover:bg-red-900 text-red-400 hover:text-white border border-red-900/40 rounded-xl transition flex items-center gap-1.5 text-xs font-bold font-sans"
-                        title="Apagar Experiência"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Apagar Post</span>
-                      </button>
-                      
-                      {/* Block User Button */}
-                      <button
-                        onClick={() => {
-                          const isBlocked = blockedTokens.includes(selectedExperience.userToken);
-                          setConfirmBlockUser({
-                            token: selectedExperience.userToken,
-                            name: selectedExperience.userName,
-                            shouldBlock: !isBlocked
-                          });
-                        }}
-                        className={`px-3 py-2 border rounded-xl font-bold transition text-xs font-sans ${
-                          blockedTokens.includes(selectedExperience.userToken)
-                            ? "border-emerald-800 bg-emerald-950/20 text-emerald-400 hover:bg-emerald-900/30"
-                            : "border-red-800 bg-red-950/20 text-red-400 hover:bg-red-900/30"
-                        }`}
-                      >
-                        {blockedTokens.includes(selectedExperience.userToken) ? "🔓 Desbloquear" : "🚫 Bloquear Autor"}
-                      </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isEditingSelectedExp ? (
+                        <>
+                          <button
+                            onClick={() => setIsEditingSelectedExp(false)}
+                            className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl transition text-xs font-bold font-sans flex items-center gap-1.5 border border-zinc-700 cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            disabled={savingEditExp}
+                            onClick={handleSaveEditExperience}
+                            className="px-3.5 py-2 bg-[#00f3ff] hover:bg-cyan-400 text-zinc-950 rounded-xl transition text-xs font-extrabold font-sans flex items-center gap-1.5 shadow-lg shadow-cyan-950/40 disabled:opacity-50 cursor-pointer"
+                          >
+                            {savingEditExp ? (
+                              <div className="w-3.5 h-3.5 border-2 border-t-zinc-950 border-cyan-750 rounded-full animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>Salvar</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setEditSelectedExpTitle(selectedExperience.title);
+                              setEditSelectedExpMessage(selectedExperience.message);
+                              setEditSelectedExpImage(selectedExperience.image || "");
+                              setIsEditingSelectedExp(true);
+                              setEditExpError("");
+                            }}
+                            className="p-2 bg-cyan-950/40 hover:bg-[#00f3ff] hover:text-zinc-950 text-[#00f3ff] border border-cyan-900/40 rounded-xl transition flex items-center gap-1.5 text-xs font-bold font-sans cursor-pointer"
+                            title="Editar Post"
+                          >
+                            <Edit className="w-4 h-4" />
+                            <span>Editar</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setConfirmDeleteExp(selectedExperience);
+                            }}
+                            className="p-2 bg-red-950/40 hover:bg-red-900 text-red-400 hover:text-white border border-red-900/40 rounded-xl transition flex items-center gap-1.5 text-xs font-bold font-sans cursor-pointer"
+                            title="Apagar Experiência"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Apagar Post</span>
+                          </button>
+                          
+                          {/* Block User Button */}
+                          <button
+                            onClick={() => {
+                              const isBlocked = blockedTokens.includes(selectedExperience.userToken);
+                              setConfirmBlockUser({
+                                token: selectedExperience.userToken,
+                                name: selectedExperience.userName,
+                                shouldBlock: !isBlocked
+                              });
+                            }}
+                            className={`px-3 py-2 border rounded-xl font-bold transition text-xs font-sans cursor-pointer ${
+                              blockedTokens.includes(selectedExperience.userToken)
+                                ? "border-emerald-800 bg-emerald-950/20 text-emerald-400 hover:bg-emerald-900/30"
+                                : "border-red-800 bg-red-950/20 text-red-400 hover:bg-red-900/30"
+                            }`}
+                          >
+                            {blockedTokens.includes(selectedExperience.userToken) ? "🔓 Desbloquear" : "🚫 Bloquear Autor"}
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
 
                 {/* Content detail panel */}
                 <div className="flex-1 overflow-y-auto my-4 pr-1 scrollbar-thin flex flex-col gap-6">
-                  {/* Experience description message */}
-                  <div className="text-zinc-300 text-sm leading-relaxed whitespace-pre-wrap font-sans bg-[#0c0c0f] p-5 rounded-xl border border-zinc-850/60 break-words">
-                    {selectedExperience.message}
-                  </div>
+                  {isEditingSelectedExp ? (
+                    <div className="space-y-4 font-sans text-xs">
+                      {editExpError && (
+                        <div className="p-3 bg-red-950/30 border border-red-900/30 rounded-xl text-red-400 font-semibold flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+                          <span>{editExpError}</span>
+                        </div>
+                      )}
 
-                  {/* Large visual attachment photo if available */}
-                  {selectedExperience.image ? (
-                    <div className="flex flex-col gap-2 mt-2">
-                      <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold font-mono">
-                        📷 Foto Anexa:
-                      </span>
-                      <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/40 p-2 flex justify-center shadow-inner group transition-all duration-300">
-                        <img
-                          src={selectedExperience.image}
-                          alt={selectedExperience.title}
-                          className="max-h-[300px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300"
-                          referrerPolicy="no-referrer"
+                      <div>
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1 font-mono">
+                          Título do Assunto
+                        </label>
+                        <input
+                          type="text"
+                          value={editSelectedExpTitle}
+                          onChange={(e) => setEditSelectedExpTitle(e.target.value)}
+                          placeholder="Digite o título..."
+                          className="w-full bg-[#0d0d11] text-zinc-100 px-4 py-2.5 rounded-xl border border-zinc-800 text-xs outline-none focus:border-cyan-400 transition font-bold"
                         />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1 font-mono">
+                          Mensagem / Dica Prática
+                        </label>
+                        <textarea
+                          value={editSelectedExpMessage}
+                          onChange={(e) => setEditSelectedExpMessage(e.target.value)}
+                          placeholder="Descreva o problema e a solução..."
+                          rows={6}
+                          className="w-full bg-[#0d0d11] text-zinc-100 px-4 py-3 rounded-xl border border-zinc-800 text-xs outline-none focus:border-cyan-400 transition resize-none font-sans"
+                        />
+                      </div>
+
+                      <div className="border border-dashed border-zinc-850 rounded-xl p-4 bg-zinc-950/20">
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-2 font-mono">
+                          Foto da Peça ou Desenho (Arraste ou clique abaixo)
+                        </label>
+                        
+                        <div 
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsDraggingOverEdit(true);
+                          }}
+                          onDragLeave={() => setIsDraggingOverEdit(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsDraggingOverEdit(false);
+                            const file = e.dataTransfer.files?.[0];
+                            if (file) {
+                              if (!file.type.startsWith("image/")) {
+                                alert("Por favor, selecione ou arraste apenas arquivos de imagem.");
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onloadend = async () => {
+                                const originalBase64 = reader.result as string;
+                                const compressedBase64 = await compressAndResizeImage(originalBase64);
+                                setEditSelectedExpImage(compressedBase64);
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className={`border border-dashed rounded-xl p-4 transition-all duration-150 text-center flex flex-col items-center justify-center gap-2 relative cursor-pointer ${
+                            isDraggingOverEdit 
+                              ? "border-[#00f3ff] bg-cyan-950/20" 
+                              : "border-zinc-850 bg-[#0d0d11]/40 hover:border-zinc-700"
+                          }`}
+                        >
+                          <UploadCloud className="w-5 h-5 text-zinc-500" />
+                          <span className="text-[10px] text-zinc-400">Arraste uma nova foto aqui ou</span>
+                          <label className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-lg text-[9px] font-bold cursor-pointer transition uppercase">
+                            <span>Alterar Foto</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = async () => {
+                                    const originalBase64 = reader.result as string;
+                                    const compressedBase64 = await compressAndResizeImage(originalBase64);
+                                    setEditSelectedExpImage(compressedBase64);
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                        
+                        {editSelectedExpImage && (
+                          <div className="mt-3 flex items-center justify-between bg-zinc-900/60 p-2 rounded-lg border border-zinc-800">
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <img src={editSelectedExpImage} alt="Anexo" className="w-8 h-8 object-cover rounded-md border border-zinc-750" referrerPolicy="no-referrer" />
+                              <span className="text-[10px] text-zinc-400 truncate">Foto anexada</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setEditSelectedExpImage("")}
+                              className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 text-[10px] font-bold"
+                            >
+                              Remover Foto
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
-                    <div className="text-zinc-650 font-mono text-center text-xs border border-dashed border-zinc-800/40 p-6 rounded-xl bg-zinc-950/20">
-                      Nenhuma foto foi anexada a esta experiência.
-                    </div>
+                    <>
+                      {/* Experience description message */}
+                      <div className="text-zinc-300 text-sm leading-relaxed whitespace-pre-wrap font-sans bg-[#0c0c0f] p-5 rounded-xl border border-zinc-850/60 break-words">
+                        {selectedExperience.message}
+                      </div>
+
+                      {/* Large visual attachment photo if available */}
+                      {selectedExperience.image ? (
+                        <div className="flex flex-col gap-2 mt-2">
+                          <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold font-mono">
+                            📷 Foto Anexa:
+                          </span>
+                          <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/40 p-2 flex justify-center shadow-inner group transition-all duration-300">
+                            <img
+                              src={selectedExperience.image}
+                              alt={selectedExperience.title}
+                              className="max-h-[300px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-zinc-650 font-mono text-center text-xs border border-dashed border-zinc-800/40 p-6 rounded-xl bg-zinc-950/20">
+                          Nenhuma foto foi anexada a esta experiência.
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -1637,46 +1897,80 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                 </div>
 
                 {/* Upload attachment Section */}
-                <div className="border border-dashed border-zinc-800 rounded-xl p-4 bg-zinc-950/20">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <h5 className="text-xs font-bold text-zinc-300 font-sans">Anexar Foto da Peça ou Desenho</h5>
-                      <p className="text-[10px] text-zinc-500 mt-0.5 font-mono">Selecione uma imagem (JPEG/PNG) de até 2MB</p>
-                    </div>
-                    <label className="shrink-0 px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-[10px] font-bold cursor-pointer transition flex items-center gap-1.5 uppercase font-sans">
-                      <UploadCloud className="w-4 h-4 text-cyan-400" />
-                      <span>Selecionar Imagem</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            if (file.size > 2 * 1024 * 1024) {
-                              alert("A imagem é muito grande! Escolha um arquivo menor que 2MB.");
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                              setNewExpImage(reader.result as string);
-                            };
-                            reader.readAsDataURL(file);
-                          }
-                        }}
-                        className="hidden"
-                      />
-                    </label>
+                <div 
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingOver(true);
+                  }}
+                  onDragLeave={() => setIsDraggingOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDraggingOver(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      if (!file.type.startsWith("image/")) {
+                        alert("Por favor, selecione ou arraste apenas arquivos de imagem.");
+                        return;
+                      }
+                      const reader = new FileReader();
+                      reader.onloadend = async () => {
+                        const originalBase64 = reader.result as string;
+                        const compressedBase64 = await compressAndResizeImage(originalBase64);
+                        setNewExpImage(compressedBase64);
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className={`border border-dashed rounded-xl p-5 transition-all duration-150 text-center flex flex-col items-center justify-center gap-2 relative cursor-pointer ${
+                    isDraggingOver 
+                      ? "border-[#00f3ff] bg-cyan-950/20 scale-[1.01]" 
+                      : "border-zinc-800 bg-[#0d0d11]/40 hover:border-zinc-700"
+                  }`}
+                >
+                  <UploadCloud className={`w-8 h-8 transition-colors ${isDraggingOver ? "text-[#00f3ff]" : "text-zinc-500"}`} />
+                  <div className="flex flex-col gap-1">
+                    <h5 className="text-xs font-bold text-zinc-300 font-sans">
+                      Arraste e solte uma foto ou clique abaixo
+                    </h5>
+                    <p className="text-[10px] text-zinc-500 font-mono leading-normal">
+                      Imagens são redimensionadas para resolução otimizada para manter o sistema leve e rápido.
+                    </p>
                   </div>
 
+                  <label className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-[10px] font-bold cursor-pointer transition flex items-center gap-1.5 uppercase font-sans">
+                    <span>Selecionar do Aparelho</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = async () => {
+                            const originalBase64 = reader.result as string;
+                            const compressedBase64 = await compressAndResizeImage(originalBase64);
+                            setNewExpImage(compressedBase64);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+
                   {newExpImage && (
-                    <div className="mt-3 flex items-center justify-between bg-zinc-900/60 p-2 rounded-lg border border-zinc-800">
+                    <div className="w-full mt-2 flex items-center justify-between bg-zinc-900/80 p-2 rounded-lg border border-zinc-800/80">
                       <div className="flex items-center gap-2 overflow-hidden">
-                        <img src={newExpImage} alt="Anexo" className="w-10 h-10 object-cover rounded-md border border-zinc-800" referrerPolicy="no-referrer" />
-                        <span className="text-[10px] text-zinc-400 truncate font-mono">Imagem carregada com sucesso!</span>
+                        <img src={newExpImage} alt="Anexo" className="w-10 h-10 object-cover rounded-md border border-zinc-700" referrerPolicy="no-referrer" />
+                        <span className="text-[10px] text-[#00f3ff] truncate font-mono font-bold">✓ Foto Otimizada e Carregada!</span>
                       </div>
                       <button
-                        onClick={() => setNewExpImage("")}
-                        className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 hover:text-red-300 transition text-[10px] font-bold font-sans"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNewExpImage("");
+                        }}
+                        className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 hover:text-red-300 transition text-[10px] font-bold font-sans cursor-pointer"
                       >
                         Remover
                       </button>

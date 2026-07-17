@@ -169,6 +169,23 @@ export async function deleteExperienceFromCloud(id: string): Promise<boolean> {
 }
 
 /**
+ * Updates an experience in the cloud Firestore.
+ */
+export async function updateExperienceInCloud(id: string, updates: Partial<ExperienceData>): Promise<boolean> {
+  const path = `experiences/${id}`;
+  try {
+    const docRef = doc(db, "experiences", id);
+    const sanitized = JSON.parse(JSON.stringify(updates));
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (err) {
+    console.error("Erro ao atualizar experiência no Firestore:", err);
+    handleFirestoreError(err, OperationType.UPDATE, path);
+    return false;
+  }
+}
+
+/**
  * Fetches blocked tokens list.
  */
 export async function fetchBlockedTokensFromCloud(): Promise<string[]> {
