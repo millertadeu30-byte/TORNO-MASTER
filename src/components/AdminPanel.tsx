@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User, Plus, Trash2, Edit2, Calendar, Phone, RefreshCw, Check, Key } from "lucide-react";
+import { User, Plus, Trash2, Edit2, Calendar, Phone, RefreshCw, Check, Key, X } from "lucide-react";
 import { ClientToken } from "../types";
 import { getClients, saveClients, getGlobalSupportPhone, clearAllSessions, syncLicensingWithServer } from "../lib/licensing";
 
@@ -16,6 +16,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const [globalSupport, setGlobalSupport] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [actionMsg, setActionMsg] = useState<string>("");
+
+  // Inline editing states for client names
+  const [inlineEditingToken, setInlineEditingToken] = useState<string | null>(null);
+  const [inlineName, setInlineName] = useState<string>("");
+
+  const handleSaveInlineName = (token: string) => {
+    if (!inlineName.trim()) return;
+    const currentClients = getClients();
+    const idx = currentClients.findIndex(c => c.token === token);
+    if (idx !== -1) {
+      currentClients[idx].name = inlineName.trim();
+      saveClients(currentClients);
+      setInlineEditingToken(null);
+      fetchRoster();
+      setActionMsg(`✅ Nome atualizado para "${inlineName.trim()}"!`);
+      setTimeout(() => setActionMsg(""), 3000);
+    }
+  };
 
   // Create/Edit client modal state
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -294,22 +312,83 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                         className="border-b border-zinc-800 hover:bg-zinc-900/40 transition"
                       >
                         <td className="p-3 font-sans text-zinc-100">
-                          <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
-                            <span>{c.name}</span>
-                            {c.blockSharing && (
-                              <span className="text-[9px] bg-red-950/40 text-red-400 border border-red-900/40 px-1.5 py-0.5 rounded font-mono font-bold" title="Dispositivo Único Ativo">
-                                🚫 DISP. ÚNICO
-                              </span>
-                            )}
-                          </div>
-                          {c.email && (
-                            <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                              <span>📧 {c.email}</span>
+                          {inlineEditingToken === c.token ? (
+                            <div className="flex items-center gap-1.5 py-1">
+                              <input
+                                type="text"
+                                value={inlineName}
+                                onChange={(e) => setInlineName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveInlineName(c.token);
+                                  if (e.key === "Escape") setInlineEditingToken(null);
+                                }}
+                                className="bg-[#0d0d11] text-zinc-100 p-1.5 rounded border border-cyan-400 text-xs font-sans focus:outline-none w-full max-w-[180px]"
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSaveInlineName(c.token);
+                                }}
+                                className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition cursor-pointer"
+                                title="Salvar Nome"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setInlineEditingToken(null);
+                                }}
+                                className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-lg transition cursor-pointer"
+                                title="Cancelar"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
                             </div>
-                          )}
-                          {c.phone && (
-                            <div className="text-[10px] text-cyan-400 font-mono mt-0.5">
-                              <span>📞 {c.phone}</span>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap group/name">
+                                <span 
+                                  onClick={() => {
+                                    setInlineEditingToken(c.token);
+                                    setInlineName(c.name);
+                                  }}
+                                  className="cursor-pointer hover:text-[#00f3ff] border-b border-dashed border-transparent hover:border-cyan-400/50 transition-colors"
+                                  title="Clique para editar nome rapidamente"
+                                >
+                                  {c.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setInlineEditingToken(c.token);
+                                    setInlineName(c.name);
+                                  }}
+                                  className="opacity-60 hover:opacity-100 text-zinc-400 hover:text-cyan-400 p-0.5 transition cursor-pointer"
+                                  title="Editar Nome inline"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                {c.blockSharing && (
+                                  <span className="text-[9px] bg-red-950/40 text-red-400 border border-red-900/40 px-1.5 py-0.5 rounded font-mono font-bold" title="Dispositivo Único Ativo">
+                                    🚫 DISP. ÚNICO
+                                  </span>
+                                )}
+                              </div>
+                              {c.email && (
+                                <div className="text-[10px] text-zinc-400 font-mono">
+                                  <span>📧 {c.email}</span>
+                                </div>
+                              )}
+                              {c.phone && (
+                                <div className="text-[10px] text-cyan-400 font-mono">
+                                  <span>📞 {c.phone}</span>
+                                </div>
+                              )}
                             </div>
                           )}
                         </td>

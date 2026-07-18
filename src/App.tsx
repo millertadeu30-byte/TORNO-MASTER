@@ -45,6 +45,7 @@ import { RPMCalculator } from "./components/RPMCalculator";
 import { FeedCalculator } from "./components/FeedCalculator";
 import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
+import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone, registerSessionHeartbeat, getOrCreateDeviceId } from "./lib/licensing";
@@ -143,6 +144,7 @@ export default function App() {
   const [showFeedCalc, setShowFeedCalc] = useState<boolean>(false);
   const [showThreadCalc, setShowThreadCalc] = useState<boolean>(false);
   const [showDrillingCalc, setShowDrillingCalc] = useState<boolean>(false);
+  const [showToleranceCalc, setShowToleranceCalc] = useState<boolean>(false);
   const [isFloatingCalcOpen, setIsFloatingCalcOpen] = useState<boolean>(false);
 
   // Floating Window management states
@@ -150,7 +152,7 @@ export default function App() {
   const [showRibbon, setShowRibbon] = useState<boolean>(true);
 
   // Floating TV Simulator Layout States
-  const [simMode, setSimMode] = useState<"tv" | "fixed" | "off">("tv");
+  const [simMode, setSimMode] = useState<"tv" | "fixed" | "off">("fixed");
   const [showLibraries, setShowLibraries] = useState<boolean>(false);
   const [hasTut, setHasTut] = useState<boolean>(false);
   const [fileNames, setFileNames] = useState<string[]>(["", "", ""]);
@@ -1193,6 +1195,7 @@ export default function App() {
                   else if (type === "thread") { setShowThreadCalc(true); setActiveWindowId("thread"); }
                   else if (type === "polygon") { setShowPolygonCalc(true); setActiveWindowId("polygon"); }
                   else if (type === "drilling") { setShowDrillingCalc(true); setActiveWindowId("drilling"); }
+                  else if (type === "tolerance") { setShowToleranceCalc(true); setActiveWindowId("tolerance"); }
                 }}
               />
             </FloatingWindow>
@@ -1318,6 +1321,27 @@ export default function App() {
             >
               <DrillingCalculator
                 onClose={() => setShowDrillingCalc(false)}
+                onInsertCode={handleInsertCalculatedCode}
+                isHighContrast={isHighContrast}
+              />
+            </FloatingWindow>
+          )}
+
+          {/* Tolerance & Fit Calculator modal */}
+          {showToleranceCalc && (
+            <FloatingWindow
+              id="tolerance"
+              title="Ajustes e Tolerâncias ISO / Cota Ideal"
+              onClose={() => setShowToleranceCalc(false)}
+              activeWindowId={activeWindowId}
+              onFocus={setActiveWindowId}
+              defaultWidth="900px"
+              defaultHeight="650px"
+              minWidth="450px"
+              minHeight="350px"
+            >
+              <ToleranceCalculator
+                onClose={() => setShowToleranceCalc(false)}
                 onInsertCode={handleInsertCalculatedCode}
                 isHighContrast={isHighContrast}
               />

@@ -112,6 +112,7 @@ export interface ExperienceData {
   userName: string;
   userToken: string;
   image?: string; // base64 string
+  images?: string[]; // array of base64 strings
   createdAt: string;
 }
 

@@ -135,7 +135,7 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
         maxWidth: "100vw",
         maxHeight: "100vh",
         backgroundColor: "#17171e",
-        zIndex: isMaximized ? 99999 : (isActive ? 999 : 80),
+        zIndex: isActive ? (isMaximized ? 99999 : 99998) : (isMaximized ? 90 : 80),
       }}
     >
       {/* Window Header / Drag Handle */}

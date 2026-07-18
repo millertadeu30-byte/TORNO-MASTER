@@ -51,7 +51,7 @@ interface MachiningAssistantProps {
   activeGCode?: string;
   isHighContrast: boolean;
   diagnosticError: string | null;
-  onOpenCalculator?: (type: "rpm" | "feed" | "thread" | "polygon" | "drilling") => void;
+  onOpenCalculator?: (type: "rpm" | "feed" | "thread" | "polygon" | "drilling" | "tolerance") => void;
   onToggleFloatingCalculator?: () => void;
   isFloatingCalculatorOpen?: boolean;
 }
@@ -774,7 +774,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   
   const [newExpTitle, setNewExpTitle] = useState<string>("");
   const [newExpMessage, setNewExpMessage] = useState<string>("");
-  const [newExpImage, setNewExpImage] = useState<string>("");
+  const [newExpImages, setNewExpImages] = useState<string[]>([]);
   const [postingExperience, setPostingExperience] = useState<boolean>(false);
   const [postingError, setPostingError] = useState<string>("");
 
@@ -782,9 +782,57 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [isEditingSelectedExp, setIsEditingSelectedExp] = useState<boolean>(false);
   const [editSelectedExpTitle, setEditSelectedExpTitle] = useState<string>("");
   const [editSelectedExpMessage, setEditSelectedExpMessage] = useState<string>("");
-  const [editSelectedExpImage, setEditSelectedExpImage] = useState<string>("");
+  const [editSelectedExpImages, setEditSelectedExpImages] = useState<string[]>([]);
   const [savingEditExp, setSavingEditExp] = useState<boolean>(false);
   const [editExpError, setEditExpError] = useState<string>("");
+
+  // Helper to add multiple images/screenshots for New Experience
+  const handleAddImagesToNewExp = async (files: FileList | File[]) => {
+    const validFiles = Array.from(files).filter(file => file.type.startsWith("image/"));
+    if (validFiles.length === 0) return;
+    try {
+      const processed = await Promise.all(
+        validFiles.map(async (file) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              const originalBase64 = reader.result as string;
+              const compressedBase64 = await compressAndResizeImage(originalBase64);
+              resolve(compressedBase64);
+            };
+            reader.readAsDataURL(file);
+          });
+        })
+      );
+      setNewExpImages(prev => [...prev, ...processed]);
+    } catch (err) {
+      console.error("Erro ao processar fotos para a nova experiência:", err);
+    }
+  };
+
+  // Helper to add multiple images/screenshots for Editing Experience
+  const handleAddImagesToEditExp = async (files: FileList | File[]) => {
+    const validFiles = Array.from(files).filter(file => file.type.startsWith("image/"));
+    if (validFiles.length === 0) return;
+    try {
+      const processed = await Promise.all(
+        validFiles.map(async (file) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              const originalBase64 = reader.result as string;
+              const compressedBase64 = await compressAndResizeImage(originalBase64);
+              resolve(compressedBase64);
+            };
+            reader.readAsDataURL(file);
+          });
+        })
+      );
+      setEditSelectedExpImages(prev => [...prev, ...processed]);
+    } catch (err) {
+      console.error("Erro ao processar fotos para edição da experiência:", err);
+    }
+  };
 
   // Drag and Drop States
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
@@ -814,6 +862,44 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       loadExperiences();
     }
   }, [activeMode]);
+
+  // Clipboard Paste (Ctrl+V) listener for Experiences
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      const isCreateOpen = showAddExperienceForm;
+      const isEditOpen = activeMode === "network-usinagem" && isEditingSelectedExp;
+
+      if (!isCreateOpen && !isEditOpen) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            imageFiles.push(file);
+          }
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        if (isCreateOpen) {
+          await handleAddImagesToNewExp(imageFiles);
+        } else if (isEditOpen) {
+          await handleAddImagesToEditExp(imageFiles);
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [showAddExperienceForm, isEditingSelectedExp, activeMode]);
 
   const handleVerifyPassword = () => {
     const clients = getClients();
@@ -863,7 +949,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       message: newExpMessage.trim(),
       userName: verifiedUser?.name || localStorage.getItem("cnc_clientName") || "Operador CNC",
       userToken: verifiedUser?.token || localStorage.getItem("cnc_token") || "",
-      image: newExpImage || undefined,
+      images: newExpImages,
+      image: newExpImages[0] || "",
       createdAt: new Date().toISOString()
     };
 
@@ -874,7 +961,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       if (expId) {
         setNewExpTitle("");
         setNewExpMessage("");
-        setNewExpImage("");
+        setNewExpImages([]);
         setPasswordVerified(false);
         setVerifiedUser(null);
         setShowAddExperienceForm(false);
@@ -1321,14 +1408,16 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
         const success = await updateExperienceInCloud(selectedExperience.id, {
           title: editSelectedExpTitle,
           message: editSelectedExpMessage,
-          image: editSelectedExpImage
+          images: editSelectedExpImages,
+          image: editSelectedExpImages[0] || ""
         });
         if (success) {
           const updated = {
             ...selectedExperience,
             title: editSelectedExpTitle,
             message: editSelectedExpMessage,
-            image: editSelectedExpImage
+            images: editSelectedExpImages,
+            image: editSelectedExpImages[0] || ""
           };
           setSelectedExperience(updated);
           setIsEditingSelectedExp(false);
@@ -1454,9 +1543,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                 >
                   <div className="flex items-center justify-between w-full gap-2">
                     <div className="font-bold text-xs sm:text-sm text-zinc-100 truncate flex-1">{exp.title}</div>
-                    {exp.image && (
+                    {(exp.image || (exp.images && exp.images.length > 0)) && (
                       <span className="text-[8px] bg-cyan-950/40 border border-cyan-900/40 text-cyan-400 px-1.5 py-0.5 rounded font-mono font-bold shrink-0">
-                        📷 FOTO
+                        📷 FOTO {exp.images && exp.images.length > 1 ? `(${exp.images.length})` : ""}
                       </span>
                     )}
                   </div>
@@ -1549,7 +1638,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                             onClick={() => {
                               setEditSelectedExpTitle(selectedExperience.title);
                               setEditSelectedExpMessage(selectedExperience.message);
-                              setEditSelectedExpImage(selectedExperience.image || "");
+                              setEditSelectedExpImages(selectedExperience.images || (selectedExperience.image ? [selectedExperience.image] : []));
                               setIsEditingSelectedExp(true);
                               setEditExpError("");
                             }}
@@ -1646,19 +1735,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           onDrop={(e) => {
                             e.preventDefault();
                             setIsDraggingOverEdit(false);
-                            const file = e.dataTransfer.files?.[0];
-                            if (file) {
-                              if (!file.type.startsWith("image/")) {
-                                alert("Por favor, selecione ou arraste apenas arquivos de imagem.");
-                                return;
-                              }
-                              const reader = new FileReader();
-                              reader.onloadend = async () => {
-                                const originalBase64 = reader.result as string;
-                                const compressedBase64 = await compressAndResizeImage(originalBase64);
-                                setEditSelectedExpImage(compressedBase64);
-                              };
-                              reader.readAsDataURL(file);
+                            const files = e.dataTransfer.files;
+                            if (files && files.length > 0) {
+                              handleAddImagesToEditExp(files);
                             }
                           }}
                           className={`border border-dashed rounded-xl p-4 transition-all duration-150 text-center flex flex-col items-center justify-center gap-2 relative cursor-pointer ${
@@ -1668,22 +1747,17 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           }`}
                         >
                           <UploadCloud className="w-5 h-5 text-zinc-500" />
-                          <span className="text-[10px] text-zinc-400">Arraste uma nova foto aqui ou</span>
+                          <span className="text-[10px] text-zinc-400">Arraste novas fotos aqui, clique em Adicionar ou use Ctrl+V</span>
                           <label className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-lg text-[9px] font-bold cursor-pointer transition uppercase">
-                            <span>Alterar Foto</span>
+                            <span>Adicionar Fotos</span>
                             <input
                               type="file"
                               accept="image/*"
+                              multiple
                               onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  const reader = new FileReader();
-                                  reader.onloadend = async () => {
-                                    const originalBase64 = reader.result as string;
-                                    const compressedBase64 = await compressAndResizeImage(originalBase64);
-                                    setEditSelectedExpImage(compressedBase64);
-                                  };
-                                  reader.readAsDataURL(file);
+                                const files = e.target.files;
+                                if (files && files.length > 0) {
+                                  handleAddImagesToEditExp(files);
                                 }
                               }}
                               className="hidden"
@@ -1691,19 +1765,30 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                           </label>
                         </div>
                         
-                        {editSelectedExpImage && (
-                          <div className="mt-3 flex items-center justify-between bg-zinc-900/60 p-2 rounded-lg border border-zinc-800">
-                            <div className="flex items-center gap-2 overflow-hidden">
-                              <img src={editSelectedExpImage} alt="Anexo" className="w-8 h-8 object-cover rounded-md border border-zinc-750" referrerPolicy="no-referrer" />
-                              <span className="text-[10px] text-zinc-400 truncate">Foto anexada</span>
+                        {editSelectedExpImages.length > 0 && (
+                          <div className="mt-3 flex flex-col gap-2">
+                            <div className="text-[10px] font-bold text-[#00f3ff] uppercase tracking-wider font-mono flex items-center justify-between">
+                              <span>✓ {editSelectedExpImages.length} {editSelectedExpImages.length === 1 ? 'Foto anexada' : 'Fotos anexadas'}</span>
+                              <span className="text-zinc-500 font-normal">Aceita Ctrl+V</span>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => setEditSelectedExpImage("")}
-                              className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 text-[10px] font-bold"
-                            >
-                              Remover Foto
-                            </button>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                              {editSelectedExpImages.map((imgSrc, idx) => (
+                                <div key={idx} className="relative group rounded-lg overflow-hidden border border-zinc-850 bg-[#0d0d11]/40 p-1 flex flex-col items-center">
+                                  <img src={imgSrc} alt={`Anexo ${idx + 1}`} className="w-full h-12 object-cover rounded" referrerPolicy="no-referrer" />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditSelectedExpImages(prev => prev.filter((_, i) => i !== idx));
+                                    }}
+                                    className="absolute top-1 right-1 bg-red-950/80 hover:bg-red-900 text-red-400 hover:text-white p-1 rounded transition cursor-pointer"
+                                    title="Remover"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1716,18 +1801,56 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                       </div>
 
                       {/* Large visual attachment photo if available */}
-                      {selectedExperience.image ? (
-                        <div className="flex flex-col gap-2 mt-2">
-                          <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold font-mono">
-                            📷 Foto Anexa:
+                      {((selectedExperience.images && selectedExperience.images.length > 0) || selectedExperience.image) ? (
+                        <div className="flex flex-col gap-2 mt-4">
+                          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold font-mono">
+                            📷 {((selectedExperience.images && selectedExperience.images.length > 1) || (!selectedExperience.images && selectedExperience.image)) ? "Fotos Anexas:" : "Foto Anexa:"}
                           </span>
-                          <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/40 p-2 flex justify-center shadow-inner group transition-all duration-300">
-                            <img
-                              src={selectedExperience.image}
-                              alt={selectedExperience.title}
-                              className="max-h-[300px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300"
-                              referrerPolicy="no-referrer"
-                            />
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {selectedExperience.images && selectedExperience.images.length > 0 ? (
+                              selectedExperience.images.map((imgSrc, idx) => (
+                                <div key={idx} className="rounded-xl overflow-hidden border border-zinc-850 bg-[#0d0d12] p-2 flex flex-col justify-center items-center shadow-inner group transition-all duration-300 relative">
+                                  <img
+                                    src={imgSrc}
+                                    alt={`Foto ${idx + 1}`}
+                                    className="max-h-[250px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300 cursor-zoom-in"
+                                    referrerPolicy="no-referrer"
+                                    onClick={() => {
+                                      try {
+                                        const w = window.open();
+                                        if (w) {
+                                          w.document.write(`<img src="${imgSrc}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                                          w.document.title = `Visualizar Foto ${idx + 1}`;
+                                        }
+                                      } catch (err) {
+                                        console.warn("Popup blocked or iframe restriction", err);
+                                      }
+                                    }}
+                                  />
+                                  <span className="text-[9px] text-zinc-500 font-mono mt-1">Foto {idx + 1} (clique para ampliar)</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded-xl overflow-hidden border border-zinc-850 bg-[#0d0d12] p-2 flex flex-col justify-center items-center shadow-inner group transition-all duration-300 relative">
+                                <img
+                                  src={selectedExperience.image}
+                                  alt={selectedExperience.title}
+                                  className="max-h-[250px] object-contain rounded-lg shadow-md hover:scale-[1.02] transition duration-300 cursor-zoom-in"
+                                  referrerPolicy="no-referrer"
+                                  onClick={() => {
+                                    try {
+                                      const w = window.open();
+                                      if (w) {
+                                        w.document.write(`<img src="${selectedExperience.image}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                                        w.document.title = selectedExperience.title;
+                                      }
+                                    } catch (err) {
+                                      console.warn("Popup blocked or iframe restriction", err);
+                                    }
+                                  }}
+                                />
+                              </div>
+                            )}
                           </div>
                         </div>
                       ) : (
@@ -1906,19 +2029,9 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                   onDrop={(e) => {
                     e.preventDefault();
                     setIsDraggingOver(false);
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) {
-                      if (!file.type.startsWith("image/")) {
-                        alert("Por favor, selecione ou arraste apenas arquivos de imagem.");
-                        return;
-                      }
-                      const reader = new FileReader();
-                      reader.onloadend = async () => {
-                        const originalBase64 = reader.result as string;
-                        const compressedBase64 = await compressAndResizeImage(originalBase64);
-                        setNewExpImage(compressedBase64);
-                      };
-                      reader.readAsDataURL(file);
+                    const files = e.dataTransfer.files;
+                    if (files && files.length > 0) {
+                      handleAddImagesToNewExp(files);
                     }
                   }}
                   className={`border border-dashed rounded-xl p-5 transition-all duration-150 text-center flex flex-col items-center justify-center gap-2 relative cursor-pointer ${
@@ -1930,10 +2043,10 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                   <UploadCloud className={`w-8 h-8 transition-colors ${isDraggingOver ? "text-[#00f3ff]" : "text-zinc-500"}`} />
                   <div className="flex flex-col gap-1">
                     <h5 className="text-xs font-bold text-zinc-300 font-sans">
-                      Arraste e solte uma foto ou clique abaixo
+                      Arraste e solte fotos, clique em Selecionar ou use Ctrl+V para colar capturas de tela
                     </h5>
                     <p className="text-[10px] text-zinc-500 font-mono leading-normal">
-                      Imagens são redimensionadas para resolução otimizada para manter o sistema leve e rápido.
+                      Aceita várias fotos simultaneamente. Imagens são redimensionadas para resolução otimizada.
                     </p>
                   </div>
 
@@ -1942,38 +2055,42 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
                       onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onloadend = async () => {
-                            const originalBase64 = reader.result as string;
-                            const compressedBase64 = await compressAndResizeImage(originalBase64);
-                            setNewExpImage(compressedBase64);
-                          };
-                          reader.readAsDataURL(file);
+                        const files = e.target.files;
+                        if (files && files.length > 0) {
+                          handleAddImagesToNewExp(files);
                         }
                       }}
                       className="hidden"
                     />
                   </label>
 
-                  {newExpImage && (
-                    <div className="w-full mt-2 flex items-center justify-between bg-zinc-900/80 p-2 rounded-lg border border-zinc-800/80">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <img src={newExpImage} alt="Anexo" className="w-10 h-10 object-cover rounded-md border border-zinc-700" referrerPolicy="no-referrer" />
-                        <span className="text-[10px] text-[#00f3ff] truncate font-mono font-bold">✓ Foto Otimizada e Carregada!</span>
+                  {newExpImages.length > 0 && (
+                    <div className="w-full mt-3 flex flex-col gap-2">
+                      <div className="text-[10px] font-bold text-[#00f3ff] uppercase tracking-wider font-mono flex items-center justify-between">
+                        <span>✓ {newExpImages.length} {newExpImages.length === 1 ? 'Foto Otimizada e Carregada!' : 'Fotos Otimizadas e Carregadas!'}</span>
+                        <span className="text-zinc-500 font-normal">Suporta colar com Ctrl+V</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setNewExpImage("");
-                        }}
-                        className="px-2 py-1 hover:bg-red-950/50 rounded text-red-400 hover:text-red-300 transition text-[10px] font-bold font-sans cursor-pointer"
-                      >
-                        Remover
-                      </button>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {newExpImages.map((imgSrc, idx) => (
+                          <div key={idx} className="relative group rounded-lg overflow-hidden border border-zinc-800 bg-[#0c0c10] p-1.5 flex flex-col items-center">
+                            <img src={imgSrc} alt={`Anexo ${idx + 1}`} className="w-full h-16 object-cover rounded" referrerPolicy="no-referrer" />
+                            <span className="text-[8px] text-zinc-500 font-mono mt-1">Foto {idx + 1}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setNewExpImages(prev => prev.filter((_, i) => i !== idx));
+                              }}
+                              className="absolute top-1 right-1 bg-red-950/80 hover:bg-red-900 text-red-400 hover:text-white p-1 rounded-md transition cursor-pointer"
+                              title="Remover"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2359,6 +2476,19 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                 >
                   <Hexagon className="w-3.5 h-3.5 text-[#00f3ff]" />
                   Calculadora Polígono (G12.1)
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (onOpenCalculator) {
+                      onOpenCalculator("tolerance");
+                    }
+                  }}
+                  className="text-left text-xs p-2.5 rounded-lg border border-zinc-800 transition flex items-center gap-2 bg-[#1f1f26] text-zinc-400 hover:text-zinc-200 hover:border-amber-500/30"
+                  title="Cota Ideal, Ajuste com Interferência e Tolerâncias ISO"
+                >
+                  <Calculator className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="font-bold text-amber-400/90">Ajustes & Tolerâncias (ISO)</span>
                 </button>
               </div>
             </div>

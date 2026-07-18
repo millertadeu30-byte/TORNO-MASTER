@@ -53,6 +53,7 @@
         "userName": { "type": "string" },
         "userToken": { "type": "string" },
         "image": { "type": "string" },
+        "images": { "type": "array" },
         "createdAt": { "type": "string" }
       },
       "required": ["title", "message", "userName", "userToken", "createdAt"]

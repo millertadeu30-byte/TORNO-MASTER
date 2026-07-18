@@ -235,7 +235,7 @@ export default function FloatingCalculator({ onClose, onInsertValue }: FloatingC
       style={{
         transform: `translate(${position.x}px, ${position.y}px)`,
         position: "absolute",
-        zIndex: 9999,
+        zIndex: 100000,
       }}
       className={`w-72 select-none bg-[#101015]/95 border border-zinc-800 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col font-sans ${
         isMinimized ? "h-11" : "h-[432px]"
