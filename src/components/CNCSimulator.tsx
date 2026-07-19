@@ -27,6 +27,15 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
+  // Touch references for zooming/panning on mobile and tablet
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(8);
+  const touchStartPanRef = useRef<Point2D>({ x: 0, y: 0 });
+  const touchDragStartRef = useRef<Point2D>({ x: 0, y: 0 });
+  const isTouchPanningRef = useRef<boolean>(false);
+  const touchHasMovedRef = useRef<boolean>(false);
+  const touchStartPosRef = useRef<Point2D>({ x: 0, y: 0 });
+  
   // Transform / Camera State
   const [zoom, setZoom] = useState<number>(8);
   const [panX, setPanX] = useState<number>(0);
@@ -106,6 +115,115 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     if (e.button === 0 || e.button === 1) {
       setIsPanning(true);
       setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+    }
+  };
+
+  // Touch handlers for mobile and tablet zooming/panning
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    touchHasMovedRef.current = false;
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      isTouchPanningRef.current = true;
+      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 2) {
+      isTouchPanningRef.current = false;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoom;
+      touchStartPanRef.current = { x: panX, y: panY };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (e.touches.length === 1 && isTouchPanningRef.current) {
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchStartPosRef.current.x;
+      const dy = touch.clientY - touchStartPosRef.current.y;
+      
+      if (Math.hypot(dx, dy) > 5) {
+        touchHasMovedRef.current = true;
+      }
+
+      if (touchHasMovedRef.current) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        setPanX(touch.clientX - touchDragStartRef.current.x);
+        setPanY(touch.clientY - touchDragStartRef.current.y);
+        setHoveredPoint(null);
+      }
+    } else if (e.touches.length === 2 && touchStartDistRef.current !== null) {
+      touchHasMovedRef.current = true;
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      if (currentDist === 0) return;
+
+      const zoomFactor = currentDist / touchStartDistRef.current;
+      
+      setZoom((prevZoom) => {
+        const newZoom = Math.min(Math.max(touchStartZoomRef.current * zoomFactor, 0.2), 300);
+        if (newZoom === prevZoom) return prevZoom;
+
+        const rect = canvas.getBoundingClientRect();
+        const midX = (t1.clientX + t2.clientX) / 2;
+        const midY = (t1.clientY + t2.clientY) / 2;
+        
+        const canvasX = midX - rect.left;
+        const canvasY = midY - rect.top;
+
+        const cX = canvas.width / 2 + 50;
+        const cY = canvas.height / 2 + 50;
+
+        const initPanX = touchStartPanRef.current.x;
+        const initPanY = touchStartPanRef.current.y;
+        const initZoom = touchStartZoomRef.current;
+
+        setPanX(initPanX + (canvasX - cX - initPanX) * (1 - newZoom / initZoom));
+        setPanY(initPanY + (canvasY - cY - initPanY) * (1 - newZoom / initZoom));
+
+        return newZoom;
+      });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (touchHasMovedRef.current && e.cancelable) {
+      e.preventDefault();
+    }
+
+    if (e.touches.length === 0) {
+      isTouchPanningRef.current = false;
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      isTouchPanningRef.current = true;
+      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 2) {
+      isTouchPanningRef.current = false;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoom;
+      touchStartPanRef.current = { x: panX, y: panY };
     }
   };
 
@@ -2177,7 +2295,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={() => setHoveredPoint(null)}
           onClick={handleCanvasClick}
-          className="w-full h-full block"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+          className="w-full h-full block touch-none"
+          style={{ touchAction: 'none' }}
         />
 
         {/* Precise Snapping Target Tooltip */}
