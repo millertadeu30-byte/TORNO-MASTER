@@ -747,6 +747,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
             let passX = isInternal ? startX + absDepth : startX - absDepth;
             let passCount = 1;
+            let lastToolX = startX;
+            let lastToolZ = startZ;
 
             const isBetween = (val: number, a: number, b: number) => 
               val >= Math.min(a, b) - 0.001 && val <= Math.max(a, b) + 0.001;
@@ -831,6 +833,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 linhaId: stepId + 0.0004,
               });
 
+              lastToolX = isInternal ? passX - retractR : passX + retractR;
+              lastToolZ = zLimit + retractR;
+
               if (!activeLineIndexes.includes(cmd.linhaOriginal)) {
                 activeLineIndexes.push(cmd.linhaOriginal);
               }
@@ -841,6 +846,19 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
               passX = isInternal ? passX + absDepth : passX - absDepth;
               passCount++;
+            }
+
+            // Return to starting (approach) position at the end of the G71 cycle (G00 rapid move)
+            if (lastToolX !== startX || lastToolZ !== startZ) {
+              plotList.push({
+                type: "line",
+                x1: lastToolX,
+                z1: lastToolZ,
+                x2: startX,
+                z2: startZ,
+                color: "#ff2a2a", // Rapid movement color (red)
+                linhaId: cmd.linhaOriginal + 0.99,
+              });
             }
             
             // Skip the profile blocks in main execution
