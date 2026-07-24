@@ -15,6 +15,7 @@ interface CNCEditorProps {
   isFloatingCalculatorOpen?: boolean;
   allEditorTexts?: string[];
   layoutCount?: number;
+  syncCodesAnalysis?: any;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -31,6 +32,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   isFloatingCalculatorOpen,
   allEditorTexts,
   layoutCount,
+  syncCodesAnalysis,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -94,10 +96,23 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       const linesList = text.split(/\r?\n/);
       for (const line of linesList) {
         const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        const matches = cleanLine.matchAll(/\bM\s*(\d+)\b/g);
+        const matches = cleanLine.matchAll(/\b(M\d+)(?:P([123]{2,3}))?\b/gi);
         for (const match of matches) {
-          const num = parseInt(match[1], 10);
+          const mCode = match[1].toUpperCase();
+          const numStr = mCode.substring(1);
+          const num = parseInt(numStr, 10);
+          const pVal = match[2] || "";
+          
           if (num >= 200) {
+            // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
+            if (num >= 400 && num <= 499) {
+              continue;
+            }
+
+            // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
+            if (numStr.length >= 4 && !pVal) {
+              continue;
+            }
             codes.add(num);
           }
         }
@@ -110,6 +125,38 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   const checkSyncCode = (mNum: number): boolean => {
     if (syncCodesByPane.length <= 1) return true; // default if 1 or 0 open editors
     return syncCodesByPane.every((set) => set.has(mNum));
+  };
+
+  // Check synchronization status of a specific line's M-code
+  const getLineSyncStatus = (lineText: string) => {
+    const cleanLine = lineText.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+    const match = cleanLine.match(/\b(M\d+)(?:P([123]{2,3}))?\b/i);
+    if (!match) return null;
+
+    const mCode = match[1];
+    const mNum = parseInt(mCode.substring(1), 10);
+    if (isNaN(mNum) || mNum < 200) return null;
+
+    // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
+    if (mNum >= 400 && mNum <= 499) {
+      return null;
+    }
+
+    const pVal = match[2] || "";
+    if (mCode.substring(1).length >= 4 && !pVal) {
+      return null; // Ignore 4 digit M-codes without P suffix
+    }
+
+    const syncInfo = syncCodesAnalysis ? syncCodesAnalysis[mCode] : null;
+    if (!syncInfo || syncInfo.isIgnored) return null;
+
+    return {
+      isSyncCode: true,
+      isSynchronized: syncInfo.isSynchronized,
+      pVal: syncInfo.pVal,
+      missing: syncInfo.missingChannels,
+      mismatched: syncInfo.mismatchedChannels,
+    };
   };
 
   const [fontSize, setFontSize] = React.useState<number>(() => {
@@ -429,61 +476,34 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       }`}
     >
       {/* Editor Header */}
-      <div className={`flex justify-between items-center px-4 py-2 border-b ${isHighContrast ? 'bg-zinc-200 border-black' : 'bg-[#25252f] border-zinc-800'}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={`w-2 h-2 rounded-full ${isActive ? "bg-cyan-400 animate-pulse" : "bg-zinc-600"}`} />
-          <span className={`text-xs tracking-wider uppercase ${isHighContrast ? 'text-black font-bold' : isActive ? "text-cyan-400" : "text-zinc-400"}`}>
-            Editor {paneIndex + 1} {fileName ? `(${fileName})` : ""} {isActive && "(Ativo)"}
+      <div className={`flex justify-between items-center px-2.5 py-1.5 border-b gap-1.5 ${isHighContrast ? 'bg-zinc-200 border-black' : 'bg-[#25252f] border-zinc-800'}`}>
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? "bg-cyan-400 animate-pulse" : "bg-zinc-600"}`} />
+          <span className={`text-[11px] font-mono tracking-wider uppercase truncate ${isHighContrast ? 'text-black font-bold' : isActive ? "text-cyan-400 font-bold" : "text-zinc-400"}`}>
+            {layoutCount === 3 
+              ? `C${paneIndex + 1}${fileName ? ` - ${fileName.substring(0, 8)}` : ""}` 
+              : `Canal ${paneIndex + 1}${fileName ? ` (${fileName})` : ""}`
+            }
           </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsFindReplaceOpen(!isFindReplaceOpen);
-            }}
-            className={`ml-2 text-[10px] px-2 py-0.5 rounded transition duration-200 flex items-center gap-1 border border-dashed ${
-              isFindReplaceOpen
-                ? isHighContrast
-                  ? "bg-cyan-100 text-cyan-800 border-cyan-400 font-bold"
-                  : "bg-cyan-950/50 text-cyan-400 border-cyan-500/30 font-bold"
-                : isHighContrast
-                  ? "bg-zinc-100 text-zinc-800 border-zinc-350 hover:text-cyan-600 hover:border-cyan-400/50 font-medium"
-                  : "bg-zinc-900/40 text-zinc-400 border-zinc-800/80 hover:text-cyan-400 hover:border-cyan-500/30"
-            }`}
-            title="Abrir ferramenta de Localizar e Substituir"
-          >
-            <Search className="w-2.5 h-2.5" />
-            <span>Localizar / Substituir</span>
-          </button>
+          {isActive && (
+            <span className="text-[9px] px-1 bg-cyan-950 text-cyan-400 border border-cyan-800 rounded font-bold shrink-0 hidden sm:inline">
+              ATIVO
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          {/* Notepad / Syntax Highlight Toggle */}
-          <button
-            onClick={() => setUseHighlight(!useHighlight)}
-            className={`text-[10px] px-2.5 py-1 rounded font-mono border transition-all duration-200 flex items-center gap-1 ${
-              useHighlight
-                ? isHighContrast
-                  ? "bg-cyan-100 text-cyan-800 border-cyan-300 hover:bg-cyan-200 font-bold"
-                  : "bg-cyan-950/50 text-cyan-400 border-cyan-500/30 hover:bg-cyan-900/40"
-                : isHighContrast
-                  ? "bg-zinc-100 text-zinc-850 border-zinc-350 hover:bg-zinc-200 font-bold"
-                  : "bg-zinc-900/60 text-zinc-400 border-zinc-800/80 hover:bg-zinc-850/60"
-            }`}
-            title="Alternar entre visualização colorida e modo bloco de notas simples"
-          >
-            {useHighlight ? "🎨 Colorido" : "✍️ Bloco de Notas"}
-          </button>
 
-          {/* Scientific Calculator Toggle Button */}
+        <div className="flex items-center gap-1 shrink-0 flex-wrap">
+          {/* Scientific Calculator Button */}
           {onToggleFloatingCalculator && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleFloatingCalculator();
               }}
-              className={`text-[10px] px-2.5 py-1 rounded font-mono border transition-all duration-200 flex items-center gap-1.5 ${
+              className={`p-1 rounded border transition-all duration-200 flex items-center justify-center ${
                 isFloatingCalculatorOpen
                   ? isHighContrast
-                    ? "bg-cyan-100 text-cyan-800 border-cyan-400 hover:bg-cyan-200 font-bold"
+                    ? "bg-cyan-100 text-cyan-800 border-cyan-400 font-bold"
                     : "bg-[#00f3ff]/20 text-[#00f3ff] border-[#00f3ff]/50 shadow-[0_0_8px_rgba(0,243,255,0.25)] font-bold animate-pulse"
                   : isHighContrast
                     ? "bg-zinc-100 text-zinc-850 border-zinc-350 hover:bg-zinc-250 font-bold"
@@ -492,12 +512,53 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               title="Abrir/Fechar Calculadora Científica Flutuante"
             >
               <Calculator className="w-3.5 h-3.5 text-[#00f3ff]" />
-              <span>🧮 Calculadora</span>
+              {layoutCount === 1 && <span className="text-[10px] ml-1 font-mono">Calculadora</span>}
             </button>
           )}
 
+          {/* Localizar/Substituir Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsFindReplaceOpen(!isFindReplaceOpen);
+            }}
+            className={`p-1 rounded border transition duration-200 flex items-center justify-center ${
+              isFindReplaceOpen
+                ? isHighContrast
+                  ? "bg-cyan-100 text-cyan-800 border-cyan-400 font-bold"
+                  : "bg-cyan-950/50 text-cyan-400 border-cyan-500/30 font-bold"
+                : isHighContrast
+                  ? "bg-zinc-100 text-zinc-800 border-zinc-350 hover:text-cyan-600 hover:border-cyan-400/50"
+                  : "bg-zinc-900/40 text-zinc-400 border-zinc-800/80 hover:text-cyan-400 hover:border-cyan-500/30"
+            }`}
+            title="Abrir/Fechar Localizar e Substituir (Ctrl+F)"
+          >
+            <Search className="w-3.5 h-3.5" />
+            {layoutCount === 1 && <span className="text-[10px] ml-1 font-mono">Buscar</span>}
+          </button>
+
+          {/* Notepad / Syntax Highlight Toggle */}
+          <button
+            onClick={() => setUseHighlight(!useHighlight)}
+            className={`p-1 rounded border transition-all duration-200 flex items-center justify-center ${
+              useHighlight
+                ? isHighContrast
+                  ? "bg-cyan-100 text-cyan-800 border-cyan-300 font-bold"
+                  : "bg-cyan-950/50 text-cyan-400 border-cyan-500/30 hover:bg-cyan-900/40"
+                : isHighContrast
+                  ? "bg-zinc-100 text-zinc-805 border-zinc-350 font-bold"
+                  : "bg-zinc-900/60 text-zinc-400 border-zinc-800/80 hover:bg-zinc-850/60"
+            }`}
+            title={useHighlight ? "Mudar para Modo Bloco de Notas simples" : "Mudar para Visualização Colorida (Sintaxe)"}
+          >
+            <span className="text-xs font-mono select-none leading-none">
+              {useHighlight ? "🎨" : "📝"}
+            </span>
+            {layoutCount === 1 && <span className="text-[10px] ml-1 font-mono">{useHighlight ? "Colorido" : "Simples"}</span>}
+          </button>
+
           {/* Font Size Adjuster Control */}
-          <div className={`flex items-center border rounded px-2 py-1 gap-1.5 select-none ${isHighContrast ? 'bg-zinc-100 border-zinc-400 text-black' : 'bg-[#15151b] border-zinc-850 text-zinc-400'}`}>
+          <div className={`flex items-center border rounded px-1.5 py-0.5 gap-1 select-none ${isHighContrast ? 'bg-zinc-100 border-zinc-400 text-black' : 'bg-[#15151b] border-zinc-850 text-zinc-400'}`}>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -507,13 +568,13 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                   return val;
                 });
               }}
-              title="Diminuir tamanho da fonte"
+              title="Diminuir fonte"
               className={`p-0.5 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'hover:bg-zinc-300 text-black' : 'text-zinc-400 hover:text-white'}`}
             >
               <Minus className="w-2.5 h-2.5" />
             </button>
-            <span className="text-[10px] font-mono font-bold leading-none min-w-[22px] text-center">
-              {fontSize}px
+            <span className="text-[9px] font-mono font-bold leading-none min-w-[14px] text-center">
+              {fontSize}
             </span>
             <button
               onClick={(e) => {
@@ -524,38 +585,36 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                   return val;
                 });
               }}
-              title="Aumentar tamanho da fonte"
+              title="Aumentar fonte"
               className={`p-0.5 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'hover:bg-zinc-300 text-black' : 'text-zinc-400 hover:text-white'}`}
             >
               <Plus className="w-2.5 h-2.5" />
             </button>
           </div>
 
+          {/* Copy Button */}
           <button
             onClick={handleCopy}
             title="Copiar Código"
             className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-white'}`}
           >
-            {copied ? <CheckCircle2 className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+            {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
-          <button
-            onClick={handleSearch}
-            title="Buscar texto neste Editor"
-            className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-cyan-400'}`}
-          >
-            <Search className="w-4 h-4" />
-          </button>
+
+          {/* Clear Button */}
           <button
             onClick={() => {
-              onChange("");
-              if (textareaRef.current) {
-                textareaRef.current.focus();
+              if (window.confirm("Deseja apagar todo o código deste canal?")) {
+                onChange("");
+                if (textareaRef.current) {
+                  textareaRef.current.focus();
+                }
               }
             }}
             title="Apagar todo o código"
-            className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-red-400'}`}
+            className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-rose-400'}`}
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -663,16 +722,30 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           {lines.map((line, i) => {
             const isActiveLine = i === Math.floor(activeLine) && isActive;
             let lineNumClass = "";
-            const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-            const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
-            if (mMatch && !isActiveLine && layoutCount && layoutCount > 1) {
-              const mNum = parseInt(mMatch[1], 10);
-              if (mNum >= 200) {
-                const isSync = checkSyncCode(mNum);
-                if (isSync) {
-                  lineNumClass = isHighContrast ? "bg-emerald-100 text-emerald-900 border-r-2 border-emerald-600 font-bold" : "bg-emerald-400/30 text-emerald-300 border-r-2 border-emerald-400 font-bold";
-                } else {
-                  lineNumClass = isHighContrast ? "bg-red-100 text-red-900 border-r-2 border-red-600 font-bold" : "bg-red-400/30 text-red-300 border-r-2 border-red-400 font-bold";
+            
+            const syncStatus = getLineSyncStatus(line);
+            if (syncStatus && !isActiveLine && layoutCount && layoutCount > 1) {
+              if (syncStatus.isSynchronized) {
+                lineNumClass = isHighContrast 
+                  ? "bg-emerald-100 text-emerald-900 border-r-2 border-emerald-600 font-bold" 
+                  : "bg-emerald-500/15 text-emerald-300 border-r-2 border-emerald-500/80 font-bold";
+              } else {
+                lineNumClass = isHighContrast 
+                  ? "bg-rose-100 text-rose-900 border-r-2 border-rose-600 font-bold animate-pulse" 
+                  : "bg-rose-500/20 text-rose-300 border-r-2 border-rose-500/80 font-bold animate-pulse";
+              }
+            } else if (!isActiveLine && layoutCount && layoutCount > 1) {
+              const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+              const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+              if (mMatch) {
+                const mNum = parseInt(mMatch[1], 10);
+                if (mNum >= 200) {
+                  const isSync = checkSyncCode(mNum);
+                  if (isSync) {
+                    lineNumClass = isHighContrast ? "bg-emerald-100 text-emerald-900 border-r-2 border-emerald-600 font-bold" : "bg-emerald-500/15 text-emerald-300 border-r-2 border-emerald-500/80 font-bold";
+                  } else {
+                    lineNumClass = isHighContrast ? "bg-rose-100 text-rose-900 border-r-2 border-rose-600 font-bold animate-pulse" : "bg-rose-500/20 text-rose-300 border-r-2 border-rose-500/80 font-bold animate-pulse";
+                  }
                 }
               }
             }
@@ -714,20 +787,33 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               const isActiveLine = i === Math.floor(activeLine) && isActive;
               
               let syncBgClass = "";
-              const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-              const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
-              if (mMatch && layoutCount && layoutCount > 1) {
-                const mNum = parseInt(mMatch[1], 10);
-                if (mNum >= 200) {
-                  const isSync = checkSyncCode(mNum);
-                  if (isSync) {
-                    syncBgClass = isHighContrast 
-                      ? "bg-emerald-100 border-l-4 border-emerald-600 pl-1 text-emerald-950 font-medium" 
-                      : "bg-emerald-500/25 text-emerald-50 border-l-4 border-emerald-400 pl-1 font-medium";
-                  } else {
-                    syncBgClass = isHighContrast 
-                      ? "bg-red-100 border-l-4 border-red-600 pl-1 text-red-950 font-medium" 
-                      : "bg-red-500/25 text-red-50 border-l-4 border-red-400 pl-1 font-medium";
+              const syncStatus = getLineSyncStatus(line);
+              if (syncStatus && layoutCount && layoutCount > 1) {
+                if (syncStatus.isSynchronized) {
+                  syncBgClass = isHighContrast 
+                    ? "bg-emerald-100 border-l-4 border-emerald-600 pl-1 text-emerald-950 font-medium" 
+                    : "bg-emerald-500/15 text-emerald-100 border-l-4 border-emerald-500 pl-1 font-medium";
+                } else {
+                  syncBgClass = isHighContrast 
+                    ? "bg-rose-100 border-l-4 border-rose-600 pl-1 text-rose-950 font-medium" 
+                    : "bg-rose-500/20 text-rose-100 border-l-4 border-rose-500 pl-1 font-medium";
+                }
+              } else if (layoutCount && layoutCount > 1) {
+                const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+                const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+                if (mMatch) {
+                  const mNum = parseInt(mMatch[1], 10);
+                  if (mNum >= 200) {
+                    const isSync = checkSyncCode(mNum);
+                    if (isSync) {
+                      syncBgClass = isHighContrast 
+                        ? "bg-emerald-100 border-l-4 border-emerald-600 pl-1 text-emerald-950 font-medium" 
+                        : "bg-emerald-500/15 text-emerald-100 border-l-4 border-emerald-500 pl-1 font-medium";
+                    } else {
+                      syncBgClass = isHighContrast 
+                        ? "bg-rose-100 border-l-4 border-rose-600 pl-1 text-rose-950 font-medium" 
+                        : "bg-rose-500/20 text-rose-100 border-l-4 border-rose-500 pl-1 font-medium";
+                    }
                   }
                 }
               }

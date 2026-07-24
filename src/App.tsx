@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   FilePlus, 
   Wrench, 
@@ -109,6 +109,16 @@ export default function App() {
 
   // Editors & Workspace Layout State
   const [layoutCount, setLayoutCount] = useState<number>(1); // 1, 2, or 3 panes
+  const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
+  const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
+  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 290, height: 260 });
+  const [isSyncWidgetResizing, setIsSyncWidgetResizing] = useState(false);
+  const syncWidgetResizeStart = useRef({ width: 0, height: 0, x: 0, y: 0 });
+  const [isSyncWidgetDragging, setIsSyncWidgetDragging] = useState(false);
+  const syncWidgetDragStart = useRef({ x: 0, y: 0 });
+  const syncWidgetClickStartPos = useRef({ x: 0, y: 0 });
+  const [ignoredSyncCodes, setIgnoredSyncCodes] = useState<string[]>([]);
+  const [codeToConfirmIgnore, setCodeToConfirmIgnore] = useState<string | null>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [isHighContrast, setIsHighContrast] = useState<boolean>(false);
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
@@ -135,6 +145,233 @@ export default function App() {
     return localStorage.getItem("cnc_autoSaveActive") === "true";
   });
   const [lastAutoSaveTime, setLastAutoSaveTime] = useState<string>("");
+
+  // Helper to parse all sync declarations from all active editors (M >= 200)
+  const syncCodesAnalysis = useMemo(() => {
+    const analysis: {
+      [mCode: string]: {
+        pVal: string;
+        declaredIn: { [channelIdx: number]: { line: number; text: string } };
+        targets: number[]; // 1-based channel numbers, e.g., [1, 2, 3]
+        isSynchronized: boolean;
+        missingChannels: number[];
+        mismatchedChannels: number[];
+        isIgnored: boolean;
+      };
+    } = {};
+
+    if (!editorTexts || !layoutCount) return analysis;
+
+    // First pass: gather all Mxxx declarations where number >= 200
+    for (let c = 0; c < layoutCount; c++) {
+      const textVal = editorTexts[c];
+      if (!textVal) continue;
+      const linesList = textVal.split(/\r?\n/);
+
+      linesList.forEach((line, idx) => {
+        const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+        // Match both MxxxP123 and simply Mxxx
+        const match = cleanLine.match(/\b(M\d+)(?:P([123]{2,3}))?\b/i);
+        if (match) {
+          const mCode = match[1].toUpperCase(); // e.g. "M2005" or "M300"
+          const mNum = parseInt(mCode.substring(1), 10);
+          if (mNum >= 200) {
+            // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
+            if (mNum >= 400 && mNum <= 499) {
+              return;
+            }
+
+            const pVal = match[2] || ""; // e.g. "123"
+
+            // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
+            if (mCode.substring(1).length >= 4 && !pVal) {
+              return;
+            }
+
+            if (!analysis[mCode]) {
+              analysis[mCode] = {
+                pVal: pVal,
+                declaredIn: {},
+                targets: [],
+                isSynchronized: false,
+                missingChannels: [],
+                mismatchedChannels: [],
+                isIgnored: ignoredSyncCodes.includes(mCode),
+              };
+            }
+
+            if (pVal && !analysis[mCode].pVal) {
+              analysis[mCode].pVal = pVal;
+            }
+
+            analysis[mCode].declaredIn[c] = {
+              line: idx + 1,
+              text: line.trim(),
+            };
+          }
+        }
+      });
+    }
+
+    // Second pass: evaluate synchronization status for each Mxxx code >= 200
+    Object.keys(analysis).forEach((mCode) => {
+      const syncInfo = analysis[mCode];
+      const pVal = syncInfo.pVal;
+
+      const targets: number[] = [];
+      if (pVal) {
+        for (const char of pVal) {
+          const num = parseInt(char, 10);
+          if (!isNaN(num) && !targets.includes(num)) {
+            targets.push(num);
+          }
+        }
+      } else {
+        for (let i = 1; i <= layoutCount; i++) {
+          targets.push(i);
+        }
+      }
+      syncInfo.targets = targets.sort();
+
+      const missingChannels: number[] = [];
+      const mismatchedChannels: number[] = [];
+
+      targets.forEach((channelNum) => {
+        const channelIdx = channelNum - 1;
+        if (channelIdx < layoutCount) {
+          const decl = syncInfo.declaredIn[channelIdx];
+          if (!decl) {
+            missingChannels.push(channelNum);
+          } else {
+            const cleanLine = decl.text.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+            const match = cleanLine.match(/\bM\d+P([123]{2,3})\b/i);
+            const thisPVal = match ? match[1] : "";
+            if (pVal && thisPVal && thisPVal !== pVal) {
+              mismatchedChannels.push(channelNum);
+            }
+          }
+        } else {
+          missingChannels.push(channelNum);
+        }
+      });
+
+      for (let c = 0; c < layoutCount; c++) {
+        const channelNum = c + 1;
+        if (syncInfo.declaredIn[c] && !targets.includes(channelNum)) {
+          mismatchedChannels.push(channelNum);
+        }
+      }
+
+      syncInfo.missingChannels = missingChannels;
+      syncInfo.mismatchedChannels = mismatchedChannels;
+      syncInfo.isSynchronized = missingChannels.length === 0 && mismatchedChannels.length === 0;
+    });
+
+    return analysis;
+  }, [editorTexts, layoutCount, ignoredSyncCodes]);
+
+  // Helper to align all open editors on a specific sync M-code
+  const handleAlignAllEditorsToMCode = (mCode: string) => {
+    for (let p = 0; p < layoutCount; p++) {
+      const pText = editorTexts[p];
+      if (!pText) continue;
+
+      const pLines = pText.split(/\r?\n/);
+      let targetIdx = -1;
+      for (let i = 0; i < pLines.length; i++) {
+        const cleanLine = pLines[i].split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
+        if (cleanLine.includes(mCode)) {
+          targetIdx = i;
+          break;
+        }
+      }
+
+      if (targetIdx !== -1) {
+        const textarea = document.getElementById(`gcode-textarea-${p}`) as HTMLTextAreaElement;
+        if (textarea) {
+          const viewHeight = textarea.clientHeight;
+          const fontSizeSaved = localStorage.getItem("cnc-editor-font-size");
+          const fontSize = fontSizeSaved ? parseInt(fontSizeSaved, 10) : 14;
+          const lineHeight = Math.round(fontSize * 1.714);
+
+          const targetScrollTop = targetIdx * lineHeight - (viewHeight / 2) + (lineHeight / 2);
+          textarea.scrollTop = Math.max(0, targetScrollTop);
+          textarea.dispatchEvent(new Event('scroll'));
+        }
+      }
+    }
+  };
+
+  // Drag and click handlers for the floating sync widget
+  const handleSyncWidgetPointerDown = (e: React.PointerEvent) => {
+    const target = e.target as HTMLElement;
+    // Only drag if clicking the handle or if minimized (the whole thing is a handle when minimized)
+    if (isSyncWidgetMinimized || (target.closest(".drag-handle") && !target.closest("button"))) {
+      setIsSyncWidgetDragging(true);
+      syncWidgetDragStart.current = { x: e.clientX - syncWidgetPos.x, y: e.clientY - syncWidgetPos.y };
+      syncWidgetClickStartPos.current = { x: e.clientX, y: e.clientY };
+      target.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+  };
+
+  const handleSyncWidgetPointerMove = (e: React.PointerEvent) => {
+    if (isSyncWidgetDragging) {
+      const newX = e.clientX - syncWidgetDragStart.current.x;
+      const newY = e.clientY - syncWidgetDragStart.current.y;
+      
+      // Keep inside bounds of the screen
+      const boundX = Math.max(10, Math.min(window.innerWidth - 120, newX));
+      const boundY = Math.max(40, Math.min(window.innerHeight - 80, newY));
+      setSyncWidgetPos({ x: boundX, y: boundY });
+    }
+  };
+
+  const handleSyncWidgetPointerUp = (e: React.PointerEvent) => {
+    if (isSyncWidgetDragging) {
+      setIsSyncWidgetDragging(false);
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+
+      // If they clicked it and didn't move it much, toggle minimize/maximize
+      const distance = Math.hypot(e.clientX - syncWidgetClickStartPos.current.x, e.clientY - syncWidgetClickStartPos.current.y);
+      if (distance < 5 && isSyncWidgetMinimized) {
+        setIsSyncWidgetMinimized(false);
+      }
+    }
+  };
+
+  const handleResizePointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    setIsSyncWidgetResizing(true);
+    syncWidgetResizeStart.current = {
+      width: syncWidgetSize.width,
+      height: syncWidgetSize.height,
+      x: e.clientX,
+      y: e.clientY,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleResizePointerMove = (e: React.PointerEvent) => {
+    if (isSyncWidgetResizing) {
+      e.stopPropagation();
+      const deltaX = e.clientX - syncWidgetResizeStart.current.x;
+      const deltaY = e.clientY - syncWidgetResizeStart.current.y;
+      
+      const newWidth = Math.max(220, Math.min(800, syncWidgetResizeStart.current.width + deltaX));
+      const newHeight = Math.max(150, Math.min(600, syncWidgetResizeStart.current.height + deltaY));
+      
+      setSyncWidgetSize({ width: newWidth, height: newHeight });
+    }
+  };
+
+  const handleResizePointerUp = (e: React.PointerEvent) => {
+    if (isSyncWidgetResizing) {
+      e.stopPropagation();
+      setIsSyncWidgetResizing(false);
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    }
+  };
 
   // Modals
   const [showAssistant, setShowAssistant] = useState<boolean>(false);
@@ -1066,6 +1303,192 @@ export default function App() {
               )}
             </AnimatePresence>
 
+            {/* Multi-channel Sync Codes Floating Widget */}
+            {layoutCount > 1 && Object.keys(syncCodesAnalysis).length > 0 && (
+              <div
+                onPointerDown={handleSyncWidgetPointerDown}
+                onPointerMove={handleSyncWidgetPointerMove}
+                onPointerUp={handleSyncWidgetPointerUp}
+                style={{
+                  position: "fixed",
+                  left: `${syncWidgetPos.x}px`,
+                  top: `${syncWidgetPos.y}px`,
+                  width: isSyncWidgetMinimized ? "auto" : `${syncWidgetSize.width}px`,
+                  height: isSyncWidgetMinimized ? "auto" : `${syncWidgetSize.height}px`,
+                  zIndex: 100000,
+                  touchAction: "none",
+                }}
+                className={`flex flex-col shadow-2xl transition-shadow duration-200 pointer-events-auto select-none relative ${
+                  isSyncWidgetMinimized 
+                    ? "rounded-full border border-cyan-500/30 bg-[#121217]/95 p-1.5 px-3 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-[#181822]/95" 
+                    : "rounded-xl border border-zinc-850 bg-[#121217]/95 p-3 cursor-default"
+                }`}
+              >
+                {isSyncWidgetMinimized ? (
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-2 w-2">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                        Object.values(syncCodesAnalysis).every((info: any) => info.isSynchronized) 
+                          ? "bg-emerald-400" 
+                          : "bg-rose-400"
+                      }`} />
+                      <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                        Object.values(syncCodesAnalysis).every((info: any) => info.isSynchronized) 
+                          ? "bg-emerald-500" 
+                          : "bg-rose-500"
+                      }`} />
+                    </span>
+                    <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider font-mono cursor-pointer">
+                      Sincronismo ({Object.keys(syncCodesAnalysis).filter(k => !syncCodesAnalysis[k].isIgnored).length})
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col h-full w-full relative overflow-hidden">
+                    {/* Header */}
+                    <div className="drag-handle flex items-center justify-between pb-2 border-b border-zinc-800/80 mb-2 cursor-grab active:cursor-grabbing shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="relative flex h-2 w-2">
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                            Object.values(syncCodesAnalysis).every((info: any) => info.isSynchronized) 
+                              ? "bg-emerald-400" 
+                              : "bg-rose-400"
+                          }`} />
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                            Object.values(syncCodesAnalysis).every((info: any) => info.isSynchronized) 
+                              ? "bg-emerald-500" 
+                              : "bg-rose-500"
+                          }`} />
+                        </span>
+                        <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider font-mono">
+                          Sincronismo de Canais
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setIsSyncWidgetMinimized(true)}
+                        className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded transition"
+                        title="Minimizar painel"
+                      >
+                        <Minimize2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-[10px] text-zinc-500 mb-2 font-sans leading-snug shrink-0">
+                      Clique em um código abaixo para alinhar todas as telas de programa nele.
+                    </p>
+
+                    {/* Code List */}
+                    <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 min-h-0">
+                      {Object.keys(syncCodesAnalysis)
+                        .sort()
+                        .filter((mCode) => !syncCodesAnalysis[mCode].isIgnored)
+                        .map((mCode) => {
+                          const info = syncCodesAnalysis[mCode];
+                          const label = info.pVal ? `${mCode}P${info.pVal}` : mCode;
+                          
+                          if (codeToConfirmIgnore === mCode) {
+                            return (
+                              <div key={mCode} className="text-[11px] w-full p-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 flex flex-col gap-1.5 shrink-0">
+                                <span className="font-sans text-yellow-200 text-[10px] leading-tight">Ignorar sincronismo do {label}?</span>
+                                <div className="flex gap-2 justify-end">
+                                  <button
+                                    onClick={() => setCodeToConfirmIgnore(null)}
+                                    className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:text-white text-[9px] font-sans"
+                                  >
+                                    Não
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setIgnoredSyncCodes(prev => [...prev, mCode]);
+                                      setCodeToConfirmIgnore(null);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-rose-600 text-white hover:bg-rose-700 text-[9px] font-sans font-bold"
+                                  >
+                                    Sim, ignorar
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div
+                              key={mCode}
+                              onClick={() => handleAlignAllEditorsToMCode(mCode)}
+                              className={`text-[11px] w-full px-2 py-1.5 rounded-lg font-mono font-bold transition duration-200 flex items-center justify-between border shrink-0 cursor-pointer ${
+                                info.isSynchronized
+                                  ? "bg-emerald-500/5 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/15"
+                                  : "bg-rose-500/5 text-rose-400 border-rose-500/20 hover:bg-rose-500/15"
+                              }`}
+                              title={
+                                info.isSynchronized
+                                  ? `✓ Sincronizado nos Canais ${info.targets.join(", ")}. Clique para alinhar.`
+                                  : `⚠️ Problema no Sincronismo!\n` +
+                                    (info.missingChannels.length > 0 ? `• Faltando nos Canais: ${info.missingChannels.join(", ")}\n` : "") +
+                                    (info.mismatchedChannels.length > 0 ? `• Divergente nos Canais: ${info.mismatchedChannels.join(", ")}\n` : "") +
+                                    `Clique para tentar alinhar.`
+                              }
+                            >
+                              <div className="flex items-center gap-2">
+                                <div onClick={(e) => e.stopPropagation()} className="flex items-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={true}
+                                    onChange={() => setCodeToConfirmIgnore(mCode)}
+                                    className="w-3.5 h-3.5 rounded border-zinc-700 text-cyan-500 focus:ring-0 cursor-pointer bg-zinc-900 shrink-0"
+                                    title="Desconsiderar sincronismo"
+                                  />
+                                </div>
+                                <span className="flex items-center gap-1.5 text-left">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${info.isSynchronized ? "bg-emerald-400" : "bg-rose-400"}`} />
+                                  <span>{label}</span>
+                                </span>
+                              </div>
+                              <span className="text-[9px] opacity-75 font-normal px-1 bg-black/30 rounded shrink-0">
+                                {info.isSynchronized ? "OK" : info.missingChannels.length > 0 ? `Falta C${info.missingChannels.join(",")}` : "Diverg."}
+                              </span>
+                            </div>
+                          );
+                        })}
+
+                      {Object.keys(syncCodesAnalysis).filter((mCode) => !syncCodesAnalysis[mCode].isIgnored).length === 0 && (
+                        <div className="flex flex-col items-center justify-center py-6 text-zinc-500 text-[11px] font-sans text-center">
+                          Nenhum código de sincronismo ativo.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Sincronizar de Novo button if there are ignored codes */}
+                    {ignoredSyncCodes.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-zinc-800/50 shrink-0">
+                        <button
+                          onClick={() => setIgnoredSyncCodes([])}
+                          className="w-full text-[10px] text-cyan-400 hover:text-cyan-300 font-sans flex items-center justify-center gap-1 py-1 px-2 border border-cyan-500/20 rounded-md bg-cyan-500/5 hover:bg-cyan-500/10 transition-all"
+                        >
+                          <RotateCw className="w-3 h-3" />
+                          <span>Sincronizar de novo ({ignoredSyncCodes.length})</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Discrete resizing handle in bottom right */}
+                    <div
+                      onPointerDown={handleResizePointerDown}
+                      onPointerMove={handleResizePointerMove}
+                      onPointerUp={handleResizePointerUp}
+                      className="absolute bottom-[-10px] right-[-10px] cursor-se-resize w-6 h-6 flex items-end justify-end p-1 text-zinc-500 hover:text-cyan-400 transition"
+                      title="Arraste para redimensionar"
+                    >
+                      <svg width="8" height="8" viewBox="0 0 8 8" className="fill-current text-zinc-600 hover:text-cyan-400">
+                        <path d="M6 0 L8 0 L8 8 L0 8 L0 6 L4 6 L4 4 L2 4 L2 2 L4 2 L4 0 Z" opacity="0.3" />
+                        <path d="M8 8 L0 8 L8 0 Z" />
+                      </svg>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Left side Split Editors Column */}
             <div className="flex-1 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1">
               {Array.from({ length: layoutCount }).map((_, idx) => (
@@ -1084,6 +1507,7 @@ export default function App() {
                   isFloatingCalculatorOpen={isFloatingCalcOpen}
                   allEditorTexts={editorTexts}
                   layoutCount={layoutCount}
+                  syncCodesAnalysis={syncCodesAnalysis}
                 />
               ))}
             </div>
