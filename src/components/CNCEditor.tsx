@@ -55,9 +55,10 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       
       // Find all line indices where this mCode occurs
       const matchingIndices: number[] = [];
+      const targetMNum = String(mCode).replace(/^M/i, "");
       for (let i = 0; i < pLines.length; i++) {
         const cleanLine = pLines[i].split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        const matches = cleanLine.match(new RegExp(`\\bM\\s*${mCode}\\b`));
+        const matches = cleanLine.match(new RegExp(`(?<![A-Z])M\\s*${targetMNum}(?!\\d)`, "i"));
         if (matches) {
           matchingIndices.push(i);
         }
@@ -96,7 +97,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       const linesList = text.split(/\r?\n/);
       for (const line of linesList) {
         const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        const matches = cleanLine.matchAll(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/gi);
+        const matches = cleanLine.matchAll(/(?<![A-Z])(M\s*\d+)\s*(?:P\s*([123]{2,3}))?(?!\d)/gi);
         for (const match of matches) {
           const mCode = match[1].replace(/\s+/g, "").toUpperCase();
           const numStr = mCode.substring(1);
@@ -131,34 +132,35 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   // Check synchronization status of a specific line's M-code
   const getLineSyncStatus = (lineText: string) => {
     const cleanLine = lineText.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-    const match = cleanLine.match(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/i);
-    if (!match) return null;
+    const matches = cleanLine.matchAll(/(?<![A-Z])(M\s*\d+)\s*(?:P\s*([123]{2,3}))?(?!\d)/gi);
+    for (const match of matches) {
+      const mCode = match[1].replace(/\s+/g, "").toUpperCase();
+      const mNum = parseInt(mCode.substring(1), 10);
+      if (isNaN(mNum) || mNum < 200) continue;
 
-    const mCode = match[1].replace(/\s+/g, "");
-    const mNum = parseInt(mCode.substring(1), 10);
-    if (isNaN(mNum) || mNum < 200) return null;
+      // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
+      if (mNum >= 400 && mNum <= 499) {
+        continue;
+      }
 
-    // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
-    if (mNum >= 400 && mNum <= 499) {
-      return null;
+      const rawP = match[2] || "";
+      const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
+      if (mCode.substring(1).length >= 4 && !pVal) {
+        continue; // Ignore 4 digit M-codes without P suffix
+      }
+
+      const syncInfo = syncCodesAnalysis ? syncCodesAnalysis[mCode] : null;
+      if (!syncInfo || syncInfo.isIgnored) continue;
+
+      return {
+        isSyncCode: true,
+        isSynchronized: syncInfo.isSynchronized,
+        pVal: syncInfo.pVal,
+        missing: syncInfo.missingChannels,
+        mismatched: syncInfo.mismatchedChannels,
+      };
     }
-
-    const rawP = match[2] || "";
-    const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
-    if (mCode.substring(1).length >= 4 && !pVal) {
-      return null; // Ignore 4 digit M-codes without P suffix
-    }
-
-    const syncInfo = syncCodesAnalysis ? syncCodesAnalysis[mCode] : null;
-    if (!syncInfo || syncInfo.isIgnored) return null;
-
-    return {
-      isSyncCode: true,
-      isSynchronized: syncInfo.isSynchronized,
-      pVal: syncInfo.pVal,
-      missing: syncInfo.missingChannels,
-      mismatched: syncInfo.mismatchedChannels,
-    };
+    return null;
   };
 
   const [fontSize, setFontSize] = React.useState<number>(() => {
@@ -738,7 +740,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               }
             } else if (!isActiveLine && layoutCount && layoutCount > 1) {
               const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-              const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+              const mMatch = cleanLine.match(/(?<![A-Z])M\s*(\d+)(?!\d)/i);
               if (mMatch) {
                 const mNum = parseInt(mMatch[1], 10);
                 if (mNum >= 200) {
@@ -802,7 +804,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                 }
               } else if (layoutCount && layoutCount > 1) {
                 const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-                const mMatch = cleanLine.match(/\bM\s*(\d+)\b/);
+                const mMatch = cleanLine.match(/(?<![A-Z])M\s*(\d+)(?!\d)/i);
                 if (mMatch) {
                   const mNum = parseInt(mMatch[1], 10);
                   if (mNum >= 200) {

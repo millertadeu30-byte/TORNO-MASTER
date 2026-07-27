@@ -151,7 +151,7 @@ export default function App() {
     const analysis: {
       [mCode: string]: {
         pVal: string;
-        declaredIn: { [channelIdx: number]: { line: number; text: string } };
+        declaredIn: { [channelIdx: number]: { line: number; text: string; pVal: string } };
         targets: number[]; // 1-based channel numbers, e.g., [1, 2, 3]
         isSynchronized: boolean;
         missingChannels: number[];
@@ -170,15 +170,15 @@ export default function App() {
 
       linesList.forEach((line, idx) => {
         const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        // Match both MxxxP123 and simply Mxxx (allowing flexible whitespace)
-        const match = cleanLine.match(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/i);
-        if (match) {
+        // Match both MxxxP123 and simply Mxxx (allowing flexible whitespace and preceding N-numbers like N7M2008P12)
+        const matches = cleanLine.matchAll(/(?<![A-Z])(M\s*\d+)\s*(?:P\s*([123]{2,3}))?(?!\d)/gi);
+        for (const match of matches) {
           const mCode = match[1].replace(/\s+/g, "").toUpperCase(); // e.g. "M2005" or "M300"
           const mNum = parseInt(mCode.substring(1), 10);
           if (mNum >= 200) {
             // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
             if (mNum >= 400 && mNum <= 499) {
-              return;
+              continue;
             }
 
             // Clean pVal and sort its digits to ignore order variations (e.g., P12 and P21 are identical)
@@ -187,7 +187,7 @@ export default function App() {
 
             // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
             if (mCode.substring(1).length >= 4 && !pVal) {
-              return;
+              continue;
             }
 
             if (!analysis[mCode]) {
@@ -209,6 +209,7 @@ export default function App() {
             analysis[mCode].declaredIn[c] = {
               line: idx + 1,
               text: line.trim(),
+              pVal: pVal,
             };
           }
         }
@@ -245,9 +246,7 @@ export default function App() {
           if (!decl) {
             missingChannels.push(channelNum);
           } else {
-            const cleanLine = decl.text.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-            const match = cleanLine.match(/\bM\s*\d+\s*P\s*([123]{2,3})\b/i);
-            const thisPVal = match ? match[1].replace(/\s+/g, "").split("").sort().join("") : "";
+            const thisPVal = decl.pVal || "";
             if (pVal !== thisPVal) {
               mismatchedChannels.push(channelNum);
             }
