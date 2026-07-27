@@ -170,10 +170,10 @@ export default function App() {
 
       linesList.forEach((line, idx) => {
         const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        // Match both MxxxP123 and simply Mxxx
-        const match = cleanLine.match(/\b(M\d+)(?:P([123]{2,3}))?\b/i);
+        // Match both MxxxP123 and simply Mxxx (allowing flexible whitespace)
+        const match = cleanLine.match(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/i);
         if (match) {
-          const mCode = match[1].toUpperCase(); // e.g. "M2005" or "M300"
+          const mCode = match[1].replace(/\s+/g, "").toUpperCase(); // e.g. "M2005" or "M300"
           const mNum = parseInt(mCode.substring(1), 10);
           if (mNum >= 200) {
             // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
@@ -181,7 +181,9 @@ export default function App() {
               return;
             }
 
-            const pVal = match[2] || ""; // e.g. "123"
+            // Clean pVal and sort its digits to ignore order variations (e.g., P12 and P21 are identical)
+            const rawP = match[2] || "";
+            const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
 
             // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
             if (mCode.substring(1).length >= 4 && !pVal) {
@@ -244,9 +246,9 @@ export default function App() {
             missingChannels.push(channelNum);
           } else {
             const cleanLine = decl.text.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-            const match = cleanLine.match(/\bM\d+P([123]{2,3})\b/i);
-            const thisPVal = match ? match[1] : "";
-            if (pVal && thisPVal && thisPVal !== pVal) {
+            const match = cleanLine.match(/\bM\s*\d+\s*P\s*([123]{2,3})\b/i);
+            const thisPVal = match ? match[1].replace(/\s+/g, "").split("").sort().join("") : "";
+            if (pVal !== thisPVal) {
               mismatchedChannels.push(channelNum);
             }
           }

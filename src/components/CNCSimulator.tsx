@@ -464,6 +464,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const commaCMatch = clean.match(/,C\s*(-?\d*\.?\d+)/i);
       const temp = clean.replace(/,[RC]\s*-?\d*\.?\d+/gi, "");
 
+      const isG4Dwell = /G\s*0?4(?![0-9])/i.test(clean);
+
       const matchX = temp.match(/X\s*(-?\d*\.?\d+)/i);
       const matchZ = temp.match(/Z\s*(-?\d*\.?\d+)/i);
       const matchR = temp.match(/R\s*(-?\d*\.?\d+)/i);
@@ -476,7 +478,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
       const cmd: GCodeCommand = {
         mode: currentGMode,
-        x: matchX ? parseFloat(matchX[1]) : null,
+        x: (matchX && !isG4Dwell) ? parseFloat(matchX[1]) : null,
         z: matchZ ? parseFloat(matchZ[1]) : null,
         r: matchR ? parseFloat(matchR[1]) : null,
         commaR: commaRMatch ? parseFloat(commaRMatch[1]) : null,
@@ -484,7 +486,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         n: matchN ? parseInt(matchN[1], 10) : null,
         p: matchP ? parseInt(matchP[1], 10) : null,
         q: matchQ ? parseInt(matchQ[1], 10) : null,
-        u: matchU ? parseFloat(matchU[1]) : null,
+        u: (matchU && !isG4Dwell) ? parseFloat(matchU[1]) : null,
         w: matchW ? parseFloat(matchW[1]) : null,
         f: matchF ? parseFloat(matchF[1]) : null,
         text: clean,

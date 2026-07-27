@@ -96,12 +96,13 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       const linesList = text.split(/\r?\n/);
       for (const line of linesList) {
         const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        const matches = cleanLine.matchAll(/\b(M\d+)(?:P([123]{2,3}))?\b/gi);
+        const matches = cleanLine.matchAll(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/gi);
         for (const match of matches) {
-          const mCode = match[1].toUpperCase();
+          const mCode = match[1].replace(/\s+/g, "").toUpperCase();
           const numStr = mCode.substring(1);
           const num = parseInt(numStr, 10);
-          const pVal = match[2] || "";
+          const rawP = match[2] || "";
+          const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
           
           if (num >= 200) {
             // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
@@ -130,10 +131,10 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   // Check synchronization status of a specific line's M-code
   const getLineSyncStatus = (lineText: string) => {
     const cleanLine = lineText.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-    const match = cleanLine.match(/\b(M\d+)(?:P([123]{2,3}))?\b/i);
+    const match = cleanLine.match(/\b(M\s*\d+)\s*(?:P\s*([123]{2,3}))?\b/i);
     if (!match) return null;
 
-    const mCode = match[1];
+    const mCode = match[1].replace(/\s+/g, "");
     const mNum = parseInt(mCode.substring(1), 10);
     if (isNaN(mNum) || mNum < 200) return null;
 
@@ -142,7 +143,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       return null;
     }
 
-    const pVal = match[2] || "";
+    const rawP = match[2] || "";
+    const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
     if (mCode.substring(1).length >= 4 && !pVal) {
       return null; // Ignore 4 digit M-codes without P suffix
     }
