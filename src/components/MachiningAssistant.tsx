@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon, X, Lock, ArrowRight, Edit, Check } from "lucide-react";
+import { Search, Calculator, Wrench, ChevronRight, ChevronLeft, HelpCircle, Copy, CheckCircle2, BookOpen, FileText, UploadCloud, Send, Trash2, AlertTriangle, Hexagon, X, Lock, ArrowRight, Edit, Check, Folder, Cpu, Plus, ArrowLeft } from "lucide-react";
 import { SENAI_MANUAL_CHAPTERS, SenaiManualChapter } from "../data/senaiManual";
+import { 
+  FUNCOES_G, 
+  CICLOS_INDEX, 
+  PARAMETROS_O8090, 
+  COMANDOS_ESPECIAIS, 
+  EXEMPLO_PRATICO, 
+  HandoutItem 
+} from "../data/handoutsData";
 import FloatingCalculator from "./FloatingCalculator";
 import { 
   fetchExperiencesFromCloud, 
@@ -752,7 +760,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
       }
     }
   };
-  const [activeMode, setActiveMode] = useState<"tables" | "senai-book" | "network-usinagem">("tables");
+  const [activeMode, setActiveMode] = useState<"tables" | "senai-book" | "network-usinagem" | "handouts">("tables");
   
   // NETWORK USINAGEM STATES
   const [experiences, setExperiences] = useState<ExperienceData[]>([]);
@@ -785,6 +793,38 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
   const [editSelectedExpImages, setEditSelectedExpImages] = useState<string[]>([]);
   const [savingEditExp, setSavingEditExp] = useState<boolean>(false);
   const [editExpError, setEditExpError] = useState<string>("");
+
+  // HANDOUTS (APOSTILAS) STATES
+  const [handoutsSearchQuery, setHandoutsSearchQuery] = useState<string>("");
+  const [selectedHandoutCategory, setSelectedHandoutCategory] = useState<string>("Tudo");
+  const [selectedHandoutId, setSelectedHandoutId] = useState<string>("g00");
+
+  // Cycle O8090 Builder States
+  const [builderA, setBuilderA] = useState<string>("0");
+  const [builderD, setBuilderD] = useState<string>("14");
+  const [builderE, setBuilderE] = useState<string>("12.4");
+  const [builderI, setBuilderI] = useState<string>("0");
+  const [builderJ, setBuilderJ] = useState<string>("-20");
+  const [builderM, setBuilderM] = useState<string>("12.5");
+  const [builderDepthType, setBuilderDepthType] = useState<"W" | "U">("W");
+  const [builderDepthVal, setBuilderDepthVal] = useState<string>("2.5");
+  const [builderK, setBuilderK] = useState<string>("1.5");
+  const [builderH, setBuilderH] = useState<string>("18.5");
+  const [builderS, setBuilderS] = useState<string>("2");
+  const [builderF, setBuilderF] = useState<string>("300");
+  const [builderR, setBuilderR] = useState<string>("2");
+
+  // Example program active step
+  const [selectedExampleLineIdx, setSelectedExampleLineIdx] = useState<number | null>(null);
+
+  // ZMW Calculator States
+  const [zmw1PartLength, setZmw1PartLength] = useState<string>("137.2");
+  const [zmw3PartLength, setZmw3PartLength] = useState<string>("19.824");
+
+  // Active Machine Model for Handouts/Apostilas
+  const [selectedMachineModel, setSelectedMachineModel] = useState<string | null>(null);
+  const [newMachineSuggestion, setNewMachineSuggestion] = useState<string>("");
+  const [newMachineSuccess, setNewMachineSuccess] = useState<boolean>(false);
 
   // Helper to add multiple images/screenshots for New Experience
   const handleAddImagesToNewExp = async (files: FileList | File[]) => {
@@ -1431,6 +1471,799 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
     } finally {
       setSavingEditExp(false);
     }
+  };
+
+  const renderHandoutsView = () => {
+    // Combine all list items
+    const allHandoutItems = [
+      ...FUNCOES_G,
+      ...CICLOS_INDEX,
+      ...PARAMETROS_O8090,
+      ...COMANDOS_ESPECIAIS
+    ];
+
+    // Filter based on search query and category
+    const filteredHandoutItems = allHandoutItems.filter(item => {
+      // Category filter
+      if (selectedHandoutCategory !== "Tudo" && item.category !== selectedHandoutCategory) {
+        return false;
+      }
+      // Search query filter
+      if (handoutsSearchQuery.trim() !== "") {
+        const q = handoutsSearchQuery.toLowerCase();
+        const codeMatch = item.code.toLowerCase().includes(q);
+        const descMatch = item.desc.toLowerCase().includes(q);
+        const labelMatch = item.label ? item.label.toLowerCase().includes(q) : false;
+        const detailsMatch = item.details ? item.details.some(d => d.toLowerCase().includes(q)) : false;
+        return codeMatch || descMatch || labelMatch || detailsMatch;
+      }
+      return true;
+    });
+
+    const categories = ["Tudo", "Funções G", "Ciclos INDEX", "Parâmetros O8090", "Comandos Especiais", "Exemplo Prático"];
+
+    // Find current active item
+    const currentItem = allHandoutItems.find(item => item.id === selectedHandoutId) || allHandoutItems[0];
+
+    const getCategoryBadgeStyle = (category: string) => {
+      switch (category) {
+        case "Funções G":
+          return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+        case "Ciclos INDEX":
+          return "bg-purple-500/10 text-purple-400 border-purple-500/20";
+        case "Parâmetros O8090":
+          return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+        case "Comandos Especiais":
+          return "bg-rose-500/10 text-rose-400 border-rose-500/20";
+        default:
+          return "bg-zinc-500/10 text-zinc-400 border-zinc-500/20";
+      }
+    };
+
+    const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      handleInsertCalculated(text);
+    };
+
+    const generatedCycleCode = `G65 P8090 A${builderA} D${builderD} E${builderE} I${builderI} J${builderJ} M${builderM} ${builderDepthType}${builderDepthVal} K${builderK} H${builderH} S${builderS} F${builderF} R${builderR}`;
+
+    if (!selectedMachineModel) {
+      return (
+        <div className="flex flex-col h-full overflow-hidden" id="handouts-machine-selector">
+          {/* Header section */}
+          <div className="mb-6 flex flex-col gap-1 border-b border-zinc-800 pb-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-cyan-400" />
+                <span>📚 Consulta de Apostilas e Manuais CNC</span>
+              </h2>
+              <span className="text-[10px] font-mono text-cyan-400/80 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/30 uppercase tracking-widest animate-pulse">
+                Rede de Consulta Integrada
+              </span>
+            </div>
+            <p className="text-xs text-zinc-400 max-w-4xl font-sans">
+              Selecione o modelo da máquina CNC desejada para acessar seu banco de dados unificado de apostilas de programação, códigos de ciclo, parâmetros e exemplos práticos.
+            </p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-6">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-widest text-[#00f3ff] mb-4 flex items-center gap-1.5 font-mono">
+                <Cpu className="w-4 h-4 text-cyan-400" />
+                <span>Modelos Disponíveis</span>
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {/* INDEX C100 (Active) */}
+                <div 
+                  onClick={() => setSelectedMachineModel("INDEX C100")}
+                  className="bg-[#13131a] rounded-xl border border-cyan-500/30 hover:border-[#00f3ff] p-5 cursor-pointer transition-all hover:translate-y-[-2px] flex flex-col gap-3 group relative overflow-hidden shadow-md hover:shadow-cyan-950/30"
+                >
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-full blur-xl group-hover:bg-cyan-500/10 transition-all"></div>
+                  
+                  <div className="flex justify-between items-start">
+                    <div className="p-2 bg-cyan-950/40 border border-cyan-800/30 rounded-lg">
+                      <Folder className="w-5 h-5 text-[#00f3ff]" />
+                    </div>
+                    <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-[#00f3ff] border border-cyan-500/20 uppercase tracking-wider animate-pulse">
+                      Ativo
+                    </span>
+                  </div>
+
+                  <div>
+                    <h4 className="text-base font-bold text-zinc-100 group-hover:text-[#00f3ff] transition-colors font-mono">
+                      INDEX C100
+                    </h4>
+                    <p className="text-xs text-zinc-400 font-sans mt-1">
+                      Torno Multifuncional CNC de Alta Performance - Triplo Revólver
+                    </p>
+                  </div>
+
+                  <div className="border-t border-zinc-800/80 pt-3 flex flex-col gap-1.5 font-sans text-[11px] text-zinc-400">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-cyan-400">✔</span>
+                      <span>Códigos de Ciclo INDEX (G8100-G9590)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-cyan-400">✔</span>
+                      <span>Ciclo O8090 de Fresamento de Rosca</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-cyan-400">✔</span>
+                      <span>Exemplo de Programação Canal 1 e 3</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-cyan-400">✔</span>
+                      <span>Calculadoras de variáveis [#ZMW1]/[#ZMW3]</span>
+                    </div>
+                  </div>
+
+                  <button className="mt-2 py-1.5 px-3 bg-cyan-950/40 hover:bg-[#00f3ff] hover:text-zinc-950 border border-cyan-500/20 hover:border-[#00f3ff] text-[#00f3ff] font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-1 transition-all">
+                    <span>Acessar INDEX C100</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* INDEX ABC (Coming Soon) */}
+                <div className="bg-[#13131a]/40 rounded-xl border border-zinc-800/60 p-5 flex flex-col gap-3 opacity-70 relative">
+                  <div className="flex justify-between items-start">
+                    <div className="p-2 bg-zinc-900/60 border border-zinc-800/30 rounded-lg text-zinc-500">
+                      <Folder className="w-5 h-5" />
+                    </div>
+                    <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-900/40 text-zinc-400 border border-zinc-800 uppercase tracking-wider">
+                      Em Breve
+                    </span>
+                  </div>
+
+                  <div>
+                    <h4 className="text-base font-bold text-zinc-400 font-mono">
+                      INDEX ABC
+                    </h4>
+                    <p className="text-xs text-zinc-500 font-sans mt-1">
+                      Torno Automático de Alta Produtividade e Velocidade
+                    </p>
+                  </div>
+
+                  <p className="text-[11px] text-zinc-500 leading-relaxed font-sans border-t border-zinc-900 pt-3">
+                    Aguardando novos materiais e apostilas técnicas para inclusão dos ciclos e comandos específicos deste modelo.
+                  </p>
+                </div>
+
+                {/* TRAUB TNL18 (Coming Soon) */}
+                <div className="bg-[#13131a]/40 rounded-xl border border-zinc-800/60 p-5 flex flex-col gap-3 opacity-70 relative">
+                  <div className="flex justify-between items-start">
+                    <div className="p-2 bg-zinc-900/60 border border-zinc-800/30 rounded-lg text-zinc-500">
+                      <Folder className="w-5 h-5" />
+                    </div>
+                    <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-900/40 text-zinc-400 border border-zinc-800 uppercase tracking-wider">
+                      Em Breve
+                    </span>
+                  </div>
+
+                  <div>
+                    <h4 className="text-base font-bold text-zinc-400 font-mono">
+                      TRAUB TNL18
+                    </h4>
+                    <p className="text-xs text-zinc-500 font-sans mt-1">
+                      Torno de Cabeçote Móvel (Suíço) de Alta Precisão
+                    </p>
+                  </div>
+
+                  <p className="text-[11px] text-zinc-500 leading-relaxed font-sans border-t border-zinc-900 pt-3">
+                    Suporte planejado para a próxima expansão do banco de dados técnicos e manuais operacionais.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Interactive Model Suggestion Box */}
+            <div className="bg-zinc-900/30 rounded-xl border border-zinc-800 p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-5 mt-4">
+              <div className="max-w-xl">
+                <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-1.5 mb-1">
+                  <Plus className="w-4 h-4 text-[#00f3ff]" />
+                  <span>Sugerir Outro Equipamento ou Enviar Material</span>
+                </h4>
+                <p className="text-xs text-zinc-400 font-sans leading-relaxed">
+                  Pretende enviar manuais de outras máquinas? Diga-nos qual modelo deseja adicionar. Assim organizaremos as apostilas em novas seções estruturadas para você!
+                </p>
+              </div>
+
+              <div className="w-full sm:w-80 flex flex-col gap-2">
+                {newMachineSuccess ? (
+                  <div className="p-3 bg-cyan-950/50 border border-cyan-800/40 rounded-lg text-center flex flex-col gap-1">
+                    <span className="text-xs font-bold text-cyan-400">Sugestão Enviada!</span>
+                    <span className="text-[10px] text-zinc-400">Envie o material ou manual no chat do assistente para podermos implementá-lo no sistema.</span>
+                    <button 
+                      onClick={() => setNewMachineSuccess(false)}
+                      className="text-[10px] text-cyan-400/80 underline hover:text-[#00f3ff] mt-1"
+                    >
+                      Sugerir outra
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Ex: Torno Romi Centur 30D"
+                      value={newMachineSuggestion}
+                      onChange={(e) => setNewMachineSuggestion(e.target.value)}
+                      className="flex-1 pl-3 pr-2 py-1.5 bg-zinc-950 text-xs text-zinc-200 rounded-lg border border-zinc-800 focus:outline-none focus:border-[#00f3ff]"
+                    />
+                    <button
+                      onClick={() => {
+                        if (newMachineSuggestion.trim()) {
+                          setNewMachineSuccess(true);
+                          setNewMachineSuggestion("");
+                        }
+                      }}
+                      className="py-1.5 px-3 bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-bold text-xs uppercase tracking-wider rounded-lg transition-colors"
+                    >
+                      Enviar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col h-full overflow-hidden" id="handouts-view-container">
+        {/* Back navigation */}
+        <button
+          onClick={() => setSelectedMachineModel(null)}
+          className="flex items-center gap-1.5 text-xs font-bold text-cyan-400 hover:text-[#00f3ff] font-mono transition-colors self-start mb-3 bg-cyan-950/20 px-2.5 py-1 rounded-lg border border-cyan-950/80"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Voltar para Seleção de Máquinas</span>
+        </button>
+
+        {/* Header section */}
+        <div className="mb-4 flex flex-col gap-1 border-b border-zinc-800 pb-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-cyan-400" />
+              <span>📚 Consulta de Apostilas e Manuais CNC (INDEX C100)</span>
+            </h2>
+            <span className="text-[10px] font-mono text-cyan-400/80 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/30 uppercase tracking-widest animate-pulse">
+              Rede de Consulta Integrada
+            </span>
+          </div>
+          <p className="text-xs text-zinc-400 max-w-4xl font-sans">
+            Base de dados unificada transcrevendo as apostilas de comandos, códigos INDEX (G8100-G9590), exemplo de fresamento de rosca interna M14x1.5 e parâmetros do ciclo O8090.
+          </p>
+        </div>
+
+        {/* Categories Tabs bar */}
+        <div className="flex flex-wrap gap-1.5 mb-4 p-1 bg-zinc-900/60 rounded-xl border border-zinc-800/80 max-w-max">
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => {
+                setSelectedHandoutCategory(cat);
+                // Select default first item of this category
+                if (cat === "Exemplo Prático") {
+                  setSelectedHandoutId("exemplo_pratico");
+                } else if (cat === "Tudo") {
+                  setSelectedHandoutId("g00");
+                } else {
+                  const firstOfCat = allHandoutItems.find(item => item.category === cat);
+                  if (firstOfCat) setSelectedHandoutId(firstOfCat.id);
+                }
+              }}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                selectedHandoutCategory === cat
+                  ? "bg-[#00f3ff] text-zinc-950 shadow-md font-extrabold"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        {/* Main interactive split area */}
+        {selectedHandoutCategory === "Exemplo Prático" ? (
+          /* Render Exemplo Prático special Layout */
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 overflow-hidden min-h-0">
+            {/* Left side: Program details */}
+            <div className="lg:col-span-6 flex flex-col overflow-hidden bg-[#13131a] rounded-xl border border-zinc-800 p-4">
+              <h3 className="text-sm font-mono font-bold text-[#00f3ff] uppercase tracking-wider mb-2">
+                📂 {EXEMPLO_PRATICO.title}
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4 font-sans">
+                {EXEMPLO_PRATICO.subtitle}
+              </p>
+
+              {/* Code interactive display */}
+              <div className="flex-1 overflow-y-auto bg-zinc-950/80 p-3 rounded-lg border border-zinc-900 font-mono text-xs text-zinc-300 flex flex-col gap-1 max-h-[480px]">
+                {EXEMPLO_PRATICO.code.split("\n").map((line, idx) => {
+                  const isHighlighted = selectedExampleLineIdx === idx;
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => setSelectedExampleLineIdx(idx)}
+                      className={`group flex items-center justify-between p-1 rounded cursor-pointer transition-all ${
+                        isHighlighted
+                          ? "bg-cyan-950/70 border-l-2 border-cyan-400 text-[#00f3ff] font-bold"
+                          : "hover:bg-zinc-900 text-zinc-300"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] text-zinc-600 font-mono w-6 text-right select-none">{idx + 1}</span>
+                        <span className={line.startsWith("(") ? "text-emerald-500 font-bold" : line.startsWith("%") || line.startsWith("O") ? "text-purple-400 font-bold" : "text-zinc-150"}>
+                          {line}
+                        </span>
+                      </div>
+                      <ChevronRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-zinc-500" />
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={() => handleInsertCalculated(EXEMPLO_PRATICO.code)}
+                  className="flex-1 py-2 px-4 rounded-xl bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <span>⚡ Inserir no Editor</span>
+                </button>
+                <button
+                  onClick={() => copyToClipboard(EXEMPLO_PRATICO.code)}
+                  className="py-2 px-4 rounded-xl bg-[#1d1d26] hover:bg-zinc-800 text-zinc-300 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors border border-zinc-800"
+                >
+                  <span>📋 Copiar Código</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Right side: Step by Step explanation */}
+            <div className="lg:col-span-6 flex flex-col overflow-y-auto bg-[#13131a] rounded-xl border border-zinc-800 p-5">
+              <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider mb-4 flex items-center gap-2 pb-2 border-b border-zinc-800">
+                <FileText className="w-4 h-4 text-cyan-400" />
+                <span>Explicação Passo a Passo (G-Code)</span>
+              </h3>
+
+              <div className="flex flex-col gap-3">
+                {EXEMPLO_PRATICO.steps.map((step, sIdx) => {
+                  const isLineMatched = selectedExampleLineIdx !== null && EXEMPLO_PRATICO.code.split("\n")[selectedExampleLineIdx]?.includes(step.line.split(" ")[0]);
+                  return (
+                    <div
+                      key={sIdx}
+                      className={`p-3 rounded-xl border transition-all ${
+                        isLineMatched
+                          ? "bg-cyan-950/30 border-cyan-500/40 shadow-md shadow-cyan-950/10"
+                          : "bg-[#181820] border-zinc-800/80 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-mono font-bold text-[#00f3ff] bg-zinc-950/80 px-2 py-0.5 rounded border border-zinc-800">
+                          {step.line}
+                        </span>
+                        {isLineMatched && (
+                          <span className="text-[10px] uppercase font-mono font-bold text-cyan-400 animate-pulse">
+                            Selecionado
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-zinc-350 leading-relaxed font-sans">{step.desc}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Render General Lists with interactive detail pane and O8090 form generator */
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 overflow-hidden min-h-0">
+            {/* Left side: List / Search */}
+            <div className="lg:col-span-5 flex flex-col overflow-hidden bg-[#13131a] rounded-xl border border-zinc-800">
+              
+              {/* Search input inside list container */}
+              <div className="p-3 border-b border-zinc-800/80 bg-zinc-900/30">
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />
+                  <input
+                    type="text"
+                    value={handoutsSearchQuery}
+                    onChange={(e) => setHandoutsSearchQuery(e.target.value)}
+                    placeholder="Pesquisar termo, código ou parâmetro..."
+                    className="w-full pl-9 pr-4 py-2 bg-[#14141d] text-xs text-zinc-200 rounded-xl border border-zinc-800 focus:outline-none focus:border-[#00f3ff] focus:ring-1 focus:ring-[#00f3ff] placeholder-zinc-500 transition-all"
+                  />
+                  {handoutsSearchQuery && (
+                    <button
+                      onClick={() => setHandoutsSearchQuery("")}
+                      className="absolute right-3 top-2.5 text-zinc-500 hover:text-zinc-300 text-xs font-bold"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Scrollable list items */}
+              <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5">
+                {filteredHandoutItems.length > 0 ? (
+                  filteredHandoutItems.map((item) => {
+                    const isSelected = selectedHandoutId === item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => setSelectedHandoutId(item.id)}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1 ${
+                          isSelected
+                            ? "bg-cyan-950/40 border-[#00f3ff] text-white shadow-lg shadow-cyan-950/20"
+                            : "bg-[#181820]/60 border-zinc-800/80 text-zinc-300 hover:border-zinc-700 hover:bg-[#181820]"
+                        }`}
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <span className="text-xs font-mono font-bold text-[#00f3ff] bg-zinc-950/60 px-2 py-0.5 rounded border border-zinc-800">
+                            {item.label || item.code}
+                          </span>
+                          <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border uppercase ${getCategoryBadgeStyle(item.category)}`}>
+                            {item.category}
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-400 font-sans line-clamp-2 mt-1">{item.desc}</p>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="py-12 text-center text-zinc-500 flex flex-col items-center justify-center gap-2">
+                    <AlertTriangle className="w-8 h-8 text-zinc-700" />
+                    <p className="text-xs font-medium">Nenhum conceito encontrado para "{handoutsSearchQuery}".</p>
+                    <p className="text-[11px] text-zinc-600">Tente buscar por termos mais genéricos, ou limpe a busca.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right side: Detailed presentation card & O8090 dynamic builder */}
+            <div className="lg:col-span-7 flex flex-col overflow-y-auto bg-[#13131a] rounded-xl border border-zinc-800 p-5 gap-5">
+              
+              {/* Concept Presentation card */}
+              {currentItem && (
+                <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5">
+                  <div className="flex justify-between items-start gap-3">
+                    <div>
+                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${getCategoryBadgeStyle(currentItem.category)}`}>
+                        {currentItem.category}
+                      </span>
+                      <h3 className="text-lg font-mono font-bold text-[#00f3ff] mt-2">
+                        {currentItem.label || currentItem.code}
+                      </h3>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleInsertCalculated(currentItem.code)}
+                        className="py-1.5 px-3 bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-1 transition-colors"
+                      >
+                        <span>Inserir</span>
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(currentItem.code)}
+                        className="py-1.5 px-3 bg-[#1d1d26] hover:bg-zinc-800 text-zinc-350 border border-zinc-800 font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-1 transition-colors"
+                      >
+                        <span>Copiar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-950/60 rounded-xl border border-zinc-900 p-4">
+                    <p className="text-xs text-zinc-200 leading-relaxed font-sans">{currentItem.desc}</p>
+                    
+                    {currentItem.details && currentItem.details.length > 0 && (
+                      <div className="mt-3 flex flex-col gap-1.5 pt-3 border-t border-zinc-900">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-mono">Detalhamento e Parâmetros:</span>
+                        <ul className="list-disc pl-4 flex flex-col gap-1">
+                          {currentItem.details.map((detail, dIdx) => (
+                            <li key={dIdx} className="text-xs text-zinc-400 leading-relaxed font-mono">{detail}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic ZMW Calculator */}
+                  {(currentItem.id === "sp_zmw1" || currentItem.id === "sp_zmw3") && (
+                    <div className="p-4 bg-cyan-950/20 rounded-xl border border-cyan-500/30 flex flex-col gap-3">
+                      <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
+                        <Calculator className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Calculadora Interativa de {currentItem.id === "sp_zmw1" ? "[#ZMW1]" : "[#ZMW3]"}</span>
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                        Insira abaixo o comprimento da peça projetada para fora da pinça. O sistema calculará o valor correto somando a constante padrão de placa (<strong>94mm</strong>) conforme o padrão do manual técnico da máquina.
+                      </p>
+                      
+                      <div className="flex flex-col sm:flex-row gap-4 items-center">
+                        <div className="w-full sm:w-1/2">
+                          <label className="block text-[10px] uppercase font-mono font-bold text-zinc-400 mb-1">
+                            Comp. Peça para Fora (mm):
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              step="any"
+                              value={currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength}
+                              onChange={(e) => {
+                                if (currentItem.id === "sp_zmw1") {
+                                  setZmw1PartLength(e.target.value);
+                                } else {
+                                  setZmw3PartLength(e.target.value);
+                                }
+                              }}
+                              className="w-full pl-3 pr-10 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none focus:border-[#00f3ff]"
+                            />
+                            <span className="absolute right-3 top-2 text-[10px] font-mono text-zinc-500">mm</span>
+                          </div>
+                        </div>
+
+                        <div className="w-full sm:w-1/2 bg-zinc-950/60 p-3 rounded-lg border border-zinc-900 flex flex-col justify-center items-center">
+                          <span className="text-[10px] uppercase font-mono font-bold text-zinc-500">Resultado do Cálculo:</span>
+                          <span className="text-sm font-mono font-bold text-cyan-400 tracking-wide mt-1">
+                            94 + {currentItem.id === "sp_zmw1" ? (parseFloat(zmw1PartLength) || 0) : (parseFloat(zmw3PartLength) || 0)} = {(() => {
+                              const base = 94;
+                              const val = parseFloat(currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength) || 0;
+                              const res = base + val;
+                              return `${res.toFixed(3).replace(/\.?0+$/, "")} mm`;
+                            })()}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Displaying Formula steps */}
+                      <div className="bg-zinc-950/40 p-2.5 rounded-lg border border-zinc-900/60 font-mono text-[10px] text-zinc-400 flex flex-col gap-1">
+                        <div className="flex justify-between border-b border-zinc-900 pb-1 mb-1">
+                          <span>Constante de Placa Padrão (Manual):</span>
+                          <span className="text-zinc-200">94.000 mm</span>
+                        </div>
+                        <div className="flex justify-between border-b border-zinc-900 pb-1 mb-1">
+                          <span>Comprimento Externo da Peça:</span>
+                          <span className="text-zinc-200">
+                            {parseFloat(currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength) || 0} mm
+                          </span>
+                        </div>
+                        <div className="flex justify-between font-bold text-cyan-400">
+                          <span>Variável Calculada Gerada:</span>
+                          <span>
+                            {currentItem.id === "sp_zmw1" ? "[#ZMW1]" : "[#ZMW3]"} = {(() => {
+                              const base = 94;
+                              const val = parseFloat(currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength) || 0;
+                              return (base + val).toFixed(3).replace(/\.?0+$/, "");
+                            })()}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Insertion / Copy of Calculated Command */}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const base = 94;
+                            const val = parseFloat(currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength) || 0;
+                            const calculatedVal = (base + val).toFixed(3).replace(/\.?0+$/, "");
+                            const cmd = `${currentItem.id === "sp_zmw1" ? "[#ZMW1]" : "[#ZMW3]"}=${calculatedVal} (94 + COMP. PEÇA FORA)`;
+                            handleInsertCalculated(cmd);
+                          }}
+                          className="flex-1 py-1.5 bg-[#00f3ff] hover:bg-[#00f3ff]/90 text-zinc-950 font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Inserir no Editor</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const base = 94;
+                            const val = parseFloat(currentItem.id === "sp_zmw1" ? zmw1PartLength : zmw3PartLength) || 0;
+                            const calculatedVal = (base + val).toFixed(3).replace(/\.?0+$/, "");
+                            const cmd = `${currentItem.id === "sp_zmw1" ? "[#ZMW1]" : "[#ZMW3]"}=${calculatedVal} (94 + COMP. PEÇA FORA)`;
+                            copyToClipboard(cmd);
+                          }}
+                          className="py-1.5 px-3 bg-zinc-900 hover:bg-zinc-850 text-zinc-350 border border-zinc-800 font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <span>Copiar</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* O8090 Cycle Interactive Builder */}
+              {(selectedHandoutCategory === "Parâmetros O8090" || currentItem?.category === "Parâmetros O8090" || currentItem?.code.includes("8090") || currentItem?.code.includes("8132") || currentItem?.code.includes("8128")) && (
+                <div className="flex flex-col bg-zinc-900/30 rounded-xl border border-zinc-800/80 p-4">
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-zinc-800">
+                    <Wrench className="w-4 h-4 text-[#00f3ff]" />
+                    <span className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+                      Gerador Interativo do Ciclo O8090 (Fresar Rosca)
+                    </span>
+                  </div>
+
+                  {/* Form fields grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 font-mono text-[11px]">
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">A - Tipo de Decurso</label>
+                      <select
+                        value={builderA}
+                        onChange={(e) => setBuilderA(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      >
+                        <option value="0">A0: Rosca Interna</option>
+                        <option value="1">A1: Rosca Externa (D)</option>
+                        <option value="2">A2: Rosca Externa (E)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">D - Diâmetro Ext. (mm)</label>
+                      <input
+                        type="text"
+                        value={builderD}
+                        onChange={(e) => setBuilderD(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">E - Diâmetro Int. (mm)</label>
+                      <input
+                        type="text"
+                        value={builderE}
+                        onChange={(e) => setBuilderE(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">I - Centro Abscissa (X)</label>
+                      <input
+                        type="text"
+                        value={builderI}
+                        onChange={(e) => setBuilderI(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">J - Centro Ordenada (Y)</label>
+                      <input
+                        type="text"
+                        value={builderJ}
+                        onChange={(e) => setBuilderJ(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">M - Plano Ref. (Z)</label>
+                      <input
+                        type="text"
+                        value={builderM}
+                        onChange={(e) => setBuilderM(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">Profundidade Tipo</label>
+                      <div className="flex rounded border border-zinc-800 overflow-hidden bg-[#14141d]">
+                        <button
+                          type="button"
+                          onClick={() => setBuilderDepthType("W")}
+                          className={`flex-1 py-1 text-center font-bold ${builderDepthType === "W" ? "bg-[#00f3ff]/20 text-[#00f3ff]" : "text-zinc-400"}`}
+                        >
+                          W (Rel)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBuilderDepthType("U")}
+                          className={`flex-1 py-1 text-center font-bold ${builderDepthType === "U" ? "bg-[#00f3ff]/20 text-[#00f3ff]" : "text-zinc-400"}`}
+                        >
+                          U (Abs)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">Valor da Prof.</label>
+                      <input
+                        type="text"
+                        value={builderDepthVal}
+                        onChange={(e) => setBuilderDepthVal(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">K - Passo (mm)</label>
+                      <input
+                        type="text"
+                        value={builderK}
+                        onChange={(e) => setBuilderK(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">H - Plano Retorno</label>
+                      <input
+                        type="text"
+                        value={builderH}
+                        onChange={(e) => setBuilderH(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">S - Dist. Segurança</label>
+                      <input
+                        type="text"
+                        value={builderS}
+                        onChange={(e) => setBuilderS(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-zinc-405 font-bold mb-1">F - Avanço (mm/min)</label>
+                      <input
+                        type="text"
+                        value={builderF}
+                        onChange={(e) => setBuilderF(e.target.value)}
+                        className="w-full bg-[#14141d] border border-zinc-800 rounded px-2 py-1 text-zinc-200 focus:outline-none focus:border-[#00f3ff]"
+                      />
+                    </div>
+
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="block text-zinc-405 font-bold mb-1">R - Direção</label>
+                      <div className="flex rounded border border-zinc-800 overflow-hidden bg-[#14141d]">
+                        <button
+                          type="button"
+                          onClick={() => setBuilderR("2")}
+                          className={`flex-1 py-1 text-center font-bold ${builderR === "2" ? "bg-[#00f3ff]/20 text-[#00f3ff]" : "text-zinc-400"}`}
+                        >
+                          R2 (CW)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBuilderR("3")}
+                          className={`flex-1 py-1 text-center font-bold ${builderR === "3" ? "bg-[#00f3ff]/20 text-[#00f3ff]" : "text-zinc-400"}`}
+                        >
+                          R3 (CCW)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Output Preview */}
+                  <div className="bg-zinc-950/80 p-3 rounded-lg border border-zinc-900 flex flex-col gap-2">
+                    <span className="text-[9px] font-bold text-[#00f3ff] uppercase tracking-widest font-mono">
+                      Código G65 Gerado Dinamicamente:
+                    </span>
+                    <div className="flex justify-between items-center gap-3">
+                      <code className="text-xs text-[#00f3ff] font-mono break-all font-bold">
+                        {generatedCycleCode}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => handleInsertCalculated(generatedCycleCode)}
+                        className="py-1 px-3 bg-[#00f3ff] text-zinc-950 hover:bg-[#00f3ff]/90 text-[10px] uppercase font-bold rounded flex items-center gap-1 shrink-0 transition"
+                      >
+                        <span>⚡ Inserir no Editor</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderNetworkUsinagemView = () => {
@@ -2325,25 +3158,44 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
               <h4 className="text-xs font-bold text-cyan-400 tracking-wider mb-2 uppercase flex items-center gap-1.5">
                 <span>🌐 Rede CNC</span>
               </h4>
-              <button
-                onClick={() => {
-                  setActiveMode("network-usinagem");
-                }}
-                className={`text-left text-xs p-3 rounded-xl border transition font-bold w-full flex items-center justify-between ${
-                  activeMode === "network-usinagem"
-                    ? "bg-cyan-950/40 text-[#00f3ff] border-[#00f3ff] shadow-lg shadow-cyan-950/25 font-black"
-                    : "bg-[#1f1f26]/80 border-zinc-800/80 text-zinc-350 hover:text-white hover:border-zinc-750"
-                }`}
-              >
-                <span className="flex items-center gap-2">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    setActiveMode("network-usinagem");
+                  }}
+                  className={`text-left text-xs p-3 rounded-xl border transition font-bold w-full flex items-center justify-between ${
+                    activeMode === "network-usinagem"
+                      ? "bg-cyan-950/40 text-[#00f3ff] border-[#00f3ff] shadow-lg shadow-cyan-950/25 font-black"
+                      : "bg-[#1f1f26]/80 border-zinc-800/80 text-zinc-350 hover:text-white hover:border-zinc-750"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                    </span>
+                    <span>🌐 NETWORK USINAGEM</span>
                   </span>
-                  <span>🌐 NETWORK USINAGEM</span>
-                </span>
-                <ChevronRight className={`w-3.5 h-3.5 transition ${activeMode === "network-usinagem" ? "text-cyan-400 translate-x-0.5" : "text-zinc-600"}`} />
-              </button>
+                  <ChevronRight className={`w-3.5 h-3.5 transition ${activeMode === "network-usinagem" ? "text-cyan-400 translate-x-0.5" : "text-zinc-600"}`} />
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActiveMode("handouts");
+                  }}
+                  className={`text-left text-xs p-3 rounded-xl border transition font-bold w-full flex items-center justify-between ${
+                    activeMode === "handouts"
+                      ? "bg-cyan-950/40 text-[#00f3ff] border-[#00f3ff] shadow-lg shadow-cyan-950/25 font-black"
+                      : "bg-[#1f1f26]/80 border-zinc-800/80 text-zinc-350 hover:text-white hover:border-zinc-750"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <BookOpen className={`w-4 h-4 ${activeMode === "handouts" ? "text-[#00f3ff]" : "text-zinc-400"}`} />
+                    <span>📚 CONSULTA DE APOSTILAS</span>
+                  </span>
+                  <ChevronRight className={`w-3.5 h-3.5 transition ${activeMode === "handouts" ? "text-cyan-400 translate-x-0.5" : "text-zinc-600"}`} />
+                </button>
+              </div>
             </div>
 
             {/* References list */}
@@ -2524,6 +3376,8 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
           <div className="flex-1 flex flex-col p-6 overflow-hidden bg-[#0d0d11]">
             {activeMode === "network-usinagem" ? (
               renderNetworkUsinagemView()
+            ) : activeMode === "handouts" ? (
+              renderHandoutsView()
             ) : false ? (
               <div className="flex-1 flex flex-col overflow-hidden h-full">
                 
