@@ -16,6 +16,8 @@ interface CNCEditorProps {
   allEditorTexts?: string[];
   layoutCount?: number;
   syncCodesAnalysis?: any;
+  syncIncludeNoP?: boolean;
+  syncIncludeWithP?: boolean;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -33,6 +35,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   allEditorTexts,
   layoutCount,
   syncCodesAnalysis,
+  syncIncludeNoP = true,
+  syncIncludeWithP = true,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -88,6 +92,25 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     }
   };
 
+  // Helper to check if an M-code is a synchronization code based on toggles
+  const isSyncMCode = (mNum: number, pVal: string): boolean => {
+    if (mNum < 200 || (mNum >= 400 && mNum <= 499)) {
+      return false;
+    }
+    const numStr = String(mNum);
+    // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
+    if (numStr.length >= 4 && !pVal) {
+      return false;
+    }
+    if (pVal && !syncIncludeWithP) {
+      return false;
+    }
+    if (!pVal && !syncIncludeNoP) {
+      return false;
+    }
+    return true;
+  };
+
   // Find all sync M-codes in each open editor
   const syncCodesByPane = React.useMemo(() => {
     if (!allEditorTexts || !layoutCount || layoutCount <= 1) return [];
@@ -105,23 +128,14 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           const rawP = match[2] || "";
           const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
           
-          if (num >= 200) {
-            // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
-            if (num >= 400 && num <= 499) {
-              continue;
-            }
-
-            // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
-            if (numStr.length >= 4 && !pVal) {
-              continue;
-            }
+          if (isSyncMCode(num, pVal)) {
             codes.add(num);
           }
         }
       }
       return codes;
     });
-  }, [allEditorTexts, layoutCount]);
+  }, [allEditorTexts, layoutCount, syncIncludeNoP, syncIncludeWithP]);
 
   // Helper to check if an M-code is synchronized
   const checkSyncCode = (mNum: number): boolean => {
@@ -136,17 +150,12 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     for (const match of matches) {
       const mCode = match[1].replace(/\s+/g, "").toUpperCase();
       const mNum = parseInt(mCode.substring(1), 10);
-      if (isNaN(mNum) || mNum < 200) continue;
-
-      // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
-      if (mNum >= 400 && mNum <= 499) {
-        continue;
-      }
+      if (isNaN(mNum)) continue;
 
       const rawP = match[2] || "";
       const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
-      if (mCode.substring(1).length >= 4 && !pVal) {
-        continue; // Ignore 4 digit M-codes without P suffix
+      if (!isSyncMCode(mNum, pVal)) {
+        continue;
       }
 
       const syncInfo = syncCodesAnalysis ? syncCodesAnalysis[mCode] : null;
@@ -740,16 +749,19 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               }
             } else if (!isActiveLine && layoutCount && layoutCount > 1) {
               const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-              const mMatch = cleanLine.match(/(?<![A-Z])M\s*(\d+)(?!\d)/i);
-              if (mMatch) {
-                const mNum = parseInt(mMatch[1], 10);
-                if (mNum >= 200) {
+              const matches = cleanLine.matchAll(/(?<![A-Z])(M\s*(\d+))\s*(?:P\s*([123]{2,3}))?(?!\d)/gi);
+              for (const match of matches) {
+                const mNum = parseInt(match[2], 10);
+                const rawP = match[3] || "";
+                const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
+                if (isSyncMCode(mNum, pVal)) {
                   const isSync = checkSyncCode(mNum);
                   if (isSync) {
                     lineNumClass = isHighContrast ? "bg-emerald-100 text-emerald-900 border-r-2 border-emerald-600 font-bold" : "bg-emerald-500/15 text-emerald-300 border-r-2 border-emerald-500/80 font-bold";
                   } else {
                     lineNumClass = isHighContrast ? "bg-rose-100 text-rose-900 border-r-2 border-rose-600 font-bold animate-pulse" : "bg-rose-500/20 text-rose-300 border-r-2 border-rose-500/80 font-bold animate-pulse";
                   }
+                  break;
                 }
               }
             }
@@ -804,10 +816,12 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                 }
               } else if (layoutCount && layoutCount > 1) {
                 const cleanLine = line.split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-                const mMatch = cleanLine.match(/(?<![A-Z])M\s*(\d+)(?!\d)/i);
-                if (mMatch) {
-                  const mNum = parseInt(mMatch[1], 10);
-                  if (mNum >= 200) {
+                const matches = cleanLine.matchAll(/(?<![A-Z])(M\s*(\d+))\s*(?:P\s*([123]{2,3}))?(?!\d)/gi);
+                for (const match of matches) {
+                  const mNum = parseInt(match[2], 10);
+                  const rawP = match[3] || "";
+                  const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
+                  if (isSyncMCode(mNum, pVal)) {
                     const isSync = checkSyncCode(mNum);
                     if (isSync) {
                       syncBgClass = isHighContrast 
@@ -818,6 +832,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
                         ? "bg-rose-100 border-l-4 border-rose-600 pl-1 text-rose-950 font-medium" 
                         : "bg-rose-500/20 text-rose-100 border-l-4 border-rose-500 pl-1 font-medium";
                     }
+                    break;
                   }
                 }
               }

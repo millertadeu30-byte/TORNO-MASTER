@@ -111,7 +111,7 @@ export default function App() {
   const [layoutCount, setLayoutCount] = useState<number>(1); // 1, 2, or 3 panes
   const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
   const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
-  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 290, height: 260 });
+  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 290, height: 290 });
   const [isSyncWidgetResizing, setIsSyncWidgetResizing] = useState(false);
   const syncWidgetResizeStart = useRef({ width: 0, height: 0, x: 0, y: 0 });
   const [isSyncWidgetDragging, setIsSyncWidgetDragging] = useState(false);
@@ -119,6 +119,23 @@ export default function App() {
   const syncWidgetClickStartPos = useRef({ x: 0, y: 0 });
   const [ignoredSyncCodes, setIgnoredSyncCodes] = useState<string[]>([]);
   const [codeToConfirmIgnore, setCodeToConfirmIgnore] = useState<string | null>(null);
+  const [syncIncludeNoP, setSyncIncludeNoP] = useState<boolean>(() => {
+    const saved = localStorage.getItem("cnc_syncIncludeNoP");
+    return saved !== null ? saved === "true" : true;
+  });
+  const [syncIncludeWithP, setSyncIncludeWithP] = useState<boolean>(() => {
+    const saved = localStorage.getItem("cnc_syncIncludeWithP");
+    return saved !== null ? saved === "true" : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_syncIncludeNoP", String(syncIncludeNoP));
+  }, [syncIncludeNoP]);
+
+  useEffect(() => {
+    localStorage.setItem("cnc_syncIncludeWithP", String(syncIncludeWithP));
+  }, [syncIncludeWithP]);
+
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [isHighContrast, setIsHighContrast] = useState<boolean>(false);
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
@@ -187,6 +204,13 @@ export default function App() {
 
             // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
             if (mCode.substring(1).length >= 4 && !pVal) {
+              continue;
+            }
+
+            if (pVal && !syncIncludeWithP) {
+              continue;
+            }
+            if (!pVal && !syncIncludeNoP) {
               continue;
             }
 
@@ -269,7 +293,7 @@ export default function App() {
     });
 
     return analysis;
-  }, [editorTexts, layoutCount, ignoredSyncCodes]);
+  }, [editorTexts, layoutCount, ignoredSyncCodes, syncIncludeNoP, syncIncludeWithP]);
 
   // Helper to align all open editors on a specific sync M-code
   const handleAlignAllEditorsToMCode = (mCode: string) => {
@@ -1374,9 +1398,32 @@ export default function App() {
                     </div>
 
                     {/* Description */}
-                    <p className="text-[10px] text-zinc-500 mb-2 font-sans leading-snug shrink-0">
+                    <p className="text-[10px] text-zinc-500 mb-1.5 font-sans leading-snug shrink-0">
                       Clique em um código abaixo para alinhar todas as telas de programa nele.
                     </p>
+
+                    {/* Types of Sync Toggles */}
+                    <div className="flex items-center gap-2.5 py-1.5 px-2 mb-2 bg-zinc-900/50 border border-zinc-850 rounded-lg shrink-0 text-[10px] font-sans">
+                      <span className="text-zinc-500 font-bold uppercase tracking-wider text-[9px]">Analisar:</span>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white select-none">
+                        <input
+                          type="checkbox"
+                          checked={syncIncludeNoP}
+                          onChange={(e) => setSyncIncludeNoP(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-zinc-700 text-cyan-500 focus:ring-0 bg-zinc-900 cursor-pointer"
+                        />
+                        <span>M200+ Sem P</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white select-none">
+                        <input
+                          type="checkbox"
+                          checked={syncIncludeWithP}
+                          onChange={(e) => setSyncIncludeWithP(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-zinc-700 text-cyan-500 focus:ring-0 bg-zinc-900 cursor-pointer"
+                        />
+                        <span>M200+ Com P</span>
+                      </label>
+                    </div>
 
                     {/* Code List */}
                     <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 min-h-0">
@@ -1509,6 +1556,8 @@ export default function App() {
                   allEditorTexts={editorTexts}
                   layoutCount={layoutCount}
                   syncCodesAnalysis={syncCodesAnalysis}
+                  syncIncludeNoP={syncIncludeNoP}
+                  syncIncludeWithP={syncIncludeWithP}
                 />
               ))}
             </div>
