@@ -31,14 +31,12 @@ export const RPMCalculator: React.FC<RPMCalculatorProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
 
   const handleClearAll = () => {
-    if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setVcInput(0);
-      setDiaInput(0);
-      setRpmInput(0);
-      setVcInputStr("");
-      setDiaInputStr("");
-      setRpmInputStr("");
-    }
+    setVcInput(0);
+    setDiaInput(0);
+    setRpmInput(0);
+    setVcInputStr("");
+    setDiaInputStr("");
+    setRpmInputStr("");
   };
 
   const handleVcChange = (valStr: string) => {

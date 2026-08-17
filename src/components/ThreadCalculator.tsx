@@ -119,21 +119,19 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   }, [calcPitch, calcDia, threadDirection, outputThreadHeight, threadProfile]);
 
   const handleClearAll = () => {
-    if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setTpi("");
-      setZStart("");
-      setZEnd("");
-      setG76_M("00");
-      setG76_S("00");
-      setG76_A("60");
+    setTpi("");
+    setZStart("");
+    setZEnd("");
+    setG76_M("00");
+    setG76_S("00");
+    setG76_A("60");
 
-      setThreadStartsStr("");
-      setCalcPitchStr("");
-      setCalcDiaStr("");
-      setThreadPassesStr("");
-      setG76_RFinStr("");
-      setG76_QMinStr("");
-    }
+    setThreadStartsStr("");
+    setCalcPitchStr("");
+    setCalcDiaStr("");
+    setThreadPassesStr("");
+    setG76_RFinStr("");
+    setG76_QMinStr("");
   };
 
   // Sync profile options

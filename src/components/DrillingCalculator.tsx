@@ -38,14 +38,12 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
   const [codePreview, setCodePreview] = useState<string>("");
 
   const handleClearAll = () => {
-    if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setZFinal("");
-      setRStart("");
-      setPeckMm("");
-      setDwellMs("");
-      setFeedRate("");
-      setSpindleSpeed("");
-    }
+    setZFinal("");
+    setRStart("");
+    setPeckMm("");
+    setDwellMs("");
+    setFeedRate("");
+    setSpindleSpeed("");
   };
 
   // Sync peck in mm to microns using useMemo for zero-lag reactivity

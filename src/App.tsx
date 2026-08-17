@@ -423,6 +423,43 @@ export default function App() {
   const [isSimMaximized, setIsSimMaximized] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
+  // Fixed Simulator Width & Drag-Resize state
+  const [fixedSimWidth, setFixedSimWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("cnc_fixedSimWidth");
+    return saved ? parseInt(saved, 10) : 520;
+  });
+  const [isResizingFixedSim, setIsResizingFixedSim] = useState<boolean>(false);
+  const fixedSimResizeStartRef = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 520 });
+
+  const handleFixedSimResizeDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setIsResizingFixedSim(true);
+    fixedSimResizeStartRef.current = {
+      startX: e.clientX,
+      startWidth: fixedSimWidth,
+    };
+  };
+
+  const handleFixedSimResizeMove = (e: React.PointerEvent) => {
+    if (!isResizingFixedSim) return;
+    const deltaX = fixedSimResizeStartRef.current.startX - e.clientX; // Dragging left increases simulator width
+    const maxWidth = Math.max(320, window.innerWidth - 300);
+    const newWidth = Math.max(300, Math.min(maxWidth, fixedSimResizeStartRef.current.startWidth + deltaX));
+    setFixedSimWidth(newWidth);
+  };
+
+  const handleFixedSimResizeUp = (e: React.PointerEvent) => {
+    if (isResizingFixedSim) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      setIsResizingFixedSim(false);
+      localStorage.setItem("cnc_fixedSimWidth", String(fixedSimWidth));
+    }
+  };
+
   // Sincronizar licenças com o banco de dados do servidor ao abrir o app
   useEffect(() => {
     syncLicensingWithServer().catch(err => {
@@ -1538,7 +1575,7 @@ export default function App() {
             )}
 
             {/* Left side Split Editors Column */}
-            <div className="flex-1 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1">
+            <div className="flex-1 min-w-0 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1">
               {Array.from({ length: layoutCount }).map((_, idx) => (
                 <CNCEditor
                   key={idx}
@@ -1626,17 +1663,41 @@ export default function App() {
 
             {/* Right side Simulator Stage (Only when NOT floating) */}
             {simMode === 'fixed' && (
-              <div className="w-full lg:w-[480px] xl:w-[530px] shrink-0 h-[400px] lg:h-full">
-                <CNCSimulator
-                  gcodeText={editorTexts[activePaneIdx]}
-                  activeLine={activeLine}
-                  onLineChange={analyzeActiveLine}
-                  simInvertZ={simInvertZ}
-                  onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
-                  isDriverActive={isDriverActive}
-                  setIsDriverActive={setIsDriverActive}
-                  onError={setDiagnosticError}
-                />
+              <div 
+                className="relative flex shrink-0 w-full max-w-full h-[400px] lg:h-full group select-none"
+                style={{ width: `${fixedSimWidth}px` }}
+              >
+                {/* Resizable Left Edge Handle */}
+                <div
+                  onPointerDown={handleFixedSimResizeDown}
+                  onPointerMove={handleFixedSimResizeMove}
+                  onPointerUp={handleFixedSimResizeUp}
+                  onPointerCancel={handleFixedSimResizeUp}
+                  className="absolute -left-3 top-0 bottom-0 w-5 z-30 cursor-ew-resize flex items-center justify-center select-none group/handle touch-none"
+                  title="Clique e arraste para a esquerda ou direita para ajustar o tamanho do simulador"
+                >
+                  <div className={`w-2 h-14 rounded-full transition-all duration-150 flex flex-col items-center justify-center gap-1 ${
+                    isResizingFixedSim 
+                      ? "bg-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.9)] scale-y-110" 
+                      : "bg-zinc-700/80 hover:bg-cyan-400 group-hover/handle:bg-cyan-400 group-hover/handle:shadow-[0_0_8px_rgba(6,182,212,0.6)]"
+                  }`}>
+                    <div className="w-0.5 h-1 bg-white/70 rounded-full" />
+                    <div className="w-0.5 h-1 bg-white/70 rounded-full" />
+                  </div>
+                </div>
+
+                <div className="flex-1 min-w-0 h-full">
+                  <CNCSimulator
+                    gcodeText={editorTexts[activePaneIdx]}
+                    activeLine={activeLine}
+                    onLineChange={analyzeActiveLine}
+                    simInvertZ={simInvertZ}
+                    onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
+                    isDriverActive={isDriverActive}
+                    setIsDriverActive={setIsDriverActive}
+                    onError={setDiagnosticError}
+                  />
+                </div>
               </div>
             )}
           </main>

@@ -53,11 +53,9 @@ export const FeedCalculator: React.FC<FeedCalculatorProps> = ({
   }, [calcMode, feedRateInput, linearFeedInput, rpmVal]);
 
   const handleClearAll = () => {
-    if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setFeedRateInput("");
-      setRpmInput("");
-      setLinearFeedInput("");
-    }
+    setFeedRateInput("");
+    setRpmInput("");
+    setLinearFeedInput("");
   };
 
   const handleFeedRateChange = (valStr: string) => {

@@ -60,23 +60,21 @@ export const PolygonCalculator: React.FC<PolygonCalculatorProps> = ({
   };
 
   const handleClearAll = () => {
-    if (window.confirm("Tem certeza de que deseja apagar tudo nesta tela?")) {
-      setDiamSext(0);
-      setDiamBarra(0);
-      setDiamFresa(0);
-      setQuebraCantos(0);
-      setToolNumber("");
-      setSpindle(0);
-      setFeed(0);
-      setDepthZ("");
+    setDiamSext(0);
+    setDiamBarra(0);
+    setDiamFresa(0);
+    setQuebraCantos(0);
+    setToolNumber("");
+    setSpindle(0);
+    setFeed(0);
+    setDepthZ("");
 
-      setDiamSextStr("");
-      setDiamBarraStr("");
-      setDiamFresaStr("");
-      setQuebraCantosStr("");
-      setSpindleStr("");
-      setFeedStr("");
-    }
+    setDiamSextStr("");
+    setDiamBarraStr("");
+    setDiamFresaStr("");
+    setQuebraCantosStr("");
+    setSpindleStr("");
+    setFeedStr("");
   };
 
   // Constants

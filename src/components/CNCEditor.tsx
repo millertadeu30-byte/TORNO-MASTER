@@ -46,6 +46,8 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   const [isFindReplaceOpen, setIsFindReplaceOpen] = React.useState(false);
   const [findText, setFindText] = React.useState("");
   const [replaceText, setReplaceText] = React.useState("");
+  const [showClearConfirmModal, setShowClearConfirmModal] = React.useState(false);
+  const [replaceStatus, setReplaceStatus] = React.useState<string | null>(null);
 
   // Handler to align channels on a specific M-code
   const handleAlignSync = (mCode: number, clickedLineIdx: number) => {
@@ -294,13 +296,13 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
     const count = (text.match(regex) || []).length;
 
     if (count > 0) {
-      if (window.confirm(`Deseja substituir todas as ${count} ocorrências de "${findText}" por "${replaceText}"?`)) {
-        const newText = text.replace(regex, replaceText);
-        onChange(newText);
-        alert(`✅ ${count} substituições realizadas com sucesso!`);
-      }
+      const newText = text.replace(regex, replaceText);
+      onChange(newText);
+      setReplaceStatus(`✅ ${count} substituição(ões) feita(s)!`);
+      setTimeout(() => setReplaceStatus(null), 3500);
     } else {
-      alert("⚠️ Nenhuma ocorrência encontrada para substituir!");
+      setReplaceStatus("⚠️ Nenhuma ocorrência encontrada!");
+      setTimeout(() => setReplaceStatus(null), 3500);
     }
   };
 
@@ -616,14 +618,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
 
           {/* Clear Button */}
           <button
-            onClick={() => {
-              if (window.confirm("Deseja apagar todo o código deste canal?")) {
-                onChange("");
-                if (textareaRef.current) {
-                  textareaRef.current.focus();
-                }
-              }
-            }}
+            onClick={() => setShowClearConfirmModal(true)}
             title="Apagar todo o código"
             className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-rose-400'}`}
           >
@@ -637,6 +632,11 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
         <div className={`border-b px-4 py-2 flex flex-wrap items-center gap-3 text-xs transition-all duration-300 ${
           isHighContrast ? "bg-zinc-100 border-zinc-300 text-black" : "bg-[#16161f] border-zinc-800 text-zinc-100"
         }`}>
+          {replaceStatus && (
+            <div className="w-full text-xs font-mono text-cyan-400 bg-cyan-950/40 px-2 py-1 rounded border border-cyan-500/30">
+              {replaceStatus}
+            </div>
+          )}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-zinc-400 font-medium font-mono text-[10px] uppercase">Localizar:</span>
             <input
@@ -891,6 +891,51 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
           />
         </div>
       </div>
+
+      {/* Custom Confirmation Modal for Clear */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-fadeIn select-none">
+          <div className={`w-full max-w-sm rounded-xl p-5 border shadow-2xl transition-all ${
+            isHighContrast ? "bg-white text-black border-zinc-300" : "bg-[#16161f] text-zinc-100 border-zinc-800"
+          }`}>
+            <div className="flex items-center gap-3 mb-3 text-rose-500">
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm">Apagar todo o código?</h3>
+                <p className="text-xs text-zinc-400">Canal: {fileName || `Canal ${paneIndex + 1}`}</p>
+              </div>
+            </div>
+            <p className="text-xs mb-5 text-zinc-300 leading-relaxed">
+              Tem certeza de que deseja apagar todo o conteúdo deste canal? Esta ação removerá o texto exibido na tela.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800 transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("");
+                  setShowClearConfirmModal(false);
+                  if (textareaRef.current) {
+                    textareaRef.current.focus();
+                  }
+                }}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition shadow-lg shadow-rose-600/20 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Sim, Apagar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
