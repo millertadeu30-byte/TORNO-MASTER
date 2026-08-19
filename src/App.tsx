@@ -32,11 +32,13 @@ import {
   Maximize2,
   Minimize2,
   Copy,
-  Check
+  Check,
+  Box
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
 import { CNCSimulator } from "./components/CNCSimulator";
+import { CNCSimulator3D } from "./components/CNCSimulator3D";
 import { MachiningAssistant } from "./components/MachiningAssistant";
 import FloatingCalculator from "./components/FloatingCalculator";
 import { AdminPanel } from "./components/AdminPanel";
@@ -422,6 +424,25 @@ export default function App() {
   const [isDraggingSim, setIsDraggingSim] = useState<boolean>(false);
   const [isSimMaximized, setIsSimMaximized] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // 3D Simulator State (X, Y, Z, C Axis Milling)
+  const [show3DSimulator, setShow3DSimulator] = useState<boolean>(false);
+
+  // Auto detect Y-axis in active editor code
+  const hasYAxisInActiveEditor = useMemo(() => {
+    const currentText = editorTexts[activePaneIdx] || "";
+    return /(?<![A-Z])Y\s*[-+]?\d/i.test(currentText);
+  }, [editorTexts, activePaneIdx]);
+
+  const handleToggle3DSimulator = () => {
+    setShow3DSimulator(prev => {
+      const nextVal = !prev;
+      if (nextVal && simMode === 'off') {
+        setSimMode('fixed');
+      }
+      return nextVal;
+    });
+  };
 
   // Fixed Simulator Width & Drag-Resize state
   const [fixedSimWidth, setFixedSimWidth] = useState<number>(() => {
@@ -1280,6 +1301,27 @@ export default function App() {
               >
                 {simMode === 'tv' ? "📺 Mini-TV Ativa" : simMode === 'fixed' ? "🖥️ Simulador Fixo" : "👁️ Simulador Off"}
               </button>
+
+              {/* 3D Simulator Switch (Eixo Y / C - Centro de Usinagem) */}
+              <button
+                onClick={handleToggle3DSimulator}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 cursor-pointer ${
+                  show3DSimulator
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-extrabold"
+                    : hasYAxisInActiveEditor
+                    ? "bg-amber-500/15 text-amber-300 border-amber-500/40 animate-pulse hover:bg-amber-500/25"
+                    : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                }`}
+                title="Simulador Gráfico 3D para usinagem em Centro de Usinagem / Torno com Eixo Y e C"
+              >
+                <Box className="w-3.5 h-3.5 text-amber-400" />
+                <span>Simulador 3D</span>
+                {hasYAxisInActiveEditor && (
+                  <span className="bg-amber-500 text-black font-extrabold text-[9px] px-1.5 py-0.2 rounded-full uppercase tracking-tighter shadow-sm">
+                    Eixo Y
+                  </span>
+                )}
+              </button>
             </div>
           </header>
 
@@ -1646,17 +1688,27 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                  <CNCSimulator
-                    gcodeText={editorTexts[activePaneIdx]}
-                    activeLine={activeLine}
-                    onLineChange={analyzeActiveLine}
-                    simInvertZ={simInvertZ}
-                    onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
-                    isDriverActive={isDriverActive}
-                    setIsDriverActive={setIsDriverActive}
-                    isHighContrast={isHighContrast}
-                    onError={setDiagnosticError}
-                  />
+                  {show3DSimulator ? (
+                    <CNCSimulator3D
+                      gcodeText={editorTexts[activePaneIdx]}
+                      activeLine={activeLine}
+                      onLineChange={analyzeActiveLine}
+                      isHighContrast={isHighContrast}
+                      onClose={() => setShow3DSimulator(false)}
+                    />
+                  ) : (
+                    <CNCSimulator
+                      gcodeText={editorTexts[activePaneIdx]}
+                      activeLine={activeLine}
+                      onLineChange={analyzeActiveLine}
+                      simInvertZ={simInvertZ}
+                      onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
+                      isDriverActive={isDriverActive}
+                      setIsDriverActive={setIsDriverActive}
+                      isHighContrast={isHighContrast}
+                      onError={setDiagnosticError}
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -1687,16 +1739,26 @@ export default function App() {
                 </div>
 
                 <div className="flex-1 min-w-0 h-full">
-                  <CNCSimulator
-                    gcodeText={editorTexts[activePaneIdx]}
-                    activeLine={activeLine}
-                    onLineChange={analyzeActiveLine}
-                    simInvertZ={simInvertZ}
-                    onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
-                    isDriverActive={isDriverActive}
-                    setIsDriverActive={setIsDriverActive}
-                    onError={setDiagnosticError}
-                  />
+                  {show3DSimulator ? (
+                    <CNCSimulator3D
+                      gcodeText={editorTexts[activePaneIdx]}
+                      activeLine={activeLine}
+                      onLineChange={analyzeActiveLine}
+                      isHighContrast={isHighContrast}
+                      onClose={() => setShow3DSimulator(false)}
+                    />
+                  ) : (
+                    <CNCSimulator
+                      gcodeText={editorTexts[activePaneIdx]}
+                      activeLine={activeLine}
+                      onLineChange={analyzeActiveLine}
+                      simInvertZ={simInvertZ}
+                      onToggleZInvert={() => setSimInvertZ(!simInvertZ)}
+                      isDriverActive={isDriverActive}
+                      setIsDriverActive={setIsDriverActive}
+                      onError={setDiagnosticError}
+                    />
+                  )}
                 </div>
               </div>
             )}
