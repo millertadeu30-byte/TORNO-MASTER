@@ -1177,7 +1177,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
                 <div className="flex items-center justify-between border-b border-zinc-800 pb-1 mb-1.5 font-bold text-[9px] text-yellow-400 tracking-wider">
                   <span className="flex items-center gap-1.5 truncate">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block shrink-0" />
-                    {hoveredPoint ? "🎯 PONTO SELECIONADO" : "🎯 MIRINHA DE POSIÇÃO 3D"}
+                    {hoveredPoint ? "🎯 PONTO SELECIONADO" : "🎯 MIRA DE POSIÇÃO 3D"}
                   </span>
                   <span className="bg-cyan-950 text-cyan-300 border border-cyan-500/40 text-[9px] px-1 py-0.2 rounded font-extrabold shrink-0">
                     N{ptLine + 1}
@@ -1427,14 +1427,14 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
           <span className="text-zinc-700">|</span>
 
-          <label className="flex items-center gap-1 cursor-pointer text-emerald-400 hover:text-emerald-300 transition" title="Exibir/Ocultar Mirinha (Retículo de Coordenadas)">
+          <label className="flex items-center gap-1 cursor-pointer text-emerald-400 hover:text-emerald-300 transition" title="Exibir/Ocultar Mira (Retículo de Coordenadas)">
             <input
               type="checkbox"
               checked={showMirinha}
               onChange={(e) => setShowMirinha(e.target.checked)}
               className="accent-emerald-400 w-3.5 h-3.5 rounded cursor-pointer"
             />
-            <span className="font-bold">🎯 Mirinha</span>
+            <span className="font-bold">🎯 Mira</span>
           </label>
         </div>
       </div>

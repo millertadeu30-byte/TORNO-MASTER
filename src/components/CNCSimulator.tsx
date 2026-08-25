@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake } from "lucide-react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 
 interface CNCSimulatorProps {
@@ -69,6 +69,13 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     plotItem?: SimulationPlotItem;
   }
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
+  const [showMirinha, setShowMirinha] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_showMirinha2D") !== "false";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_showMirinha2D", String(showMirinha));
+  }, [showMirinha]);
 
   // Playback Driver State
   const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
@@ -266,6 +273,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       setPanX(e.clientX - dragStart.x);
       setPanY(e.clientY - dragStart.y);
       setHoveredPoint(null);
+      return;
+    }
+
+    if (!showMirinha) {
+      if (hoveredPoint) setHoveredPoint(null);
       return;
     }
 
@@ -1524,26 +1536,26 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.strokeStyle = "#ffeb3b";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      // Crosshair target
-      ctx.moveTo(activeToolX - 8, activeToolY);
-      ctx.lineTo(activeToolX + 8, activeToolY);
-      ctx.moveTo(activeToolX, activeToolY - 8);
-      ctx.lineTo(activeToolX, activeToolY + 8);
+      // Crosshair target (+30% size)
+      ctx.moveTo(activeToolX - 6.5, activeToolY);
+      ctx.lineTo(activeToolX + 6.5, activeToolY);
+      ctx.moveTo(activeToolX, activeToolY - 6.5);
+      ctx.lineTo(activeToolX, activeToolY + 6.5);
       ctx.stroke();
 
       // Draw small cutting tip triangle
       ctx.fillStyle = "rgba(255, 235, 59, 0.4)";
       ctx.beginPath();
       ctx.moveTo(activeToolX, activeToolY);
-      ctx.lineTo(activeToolX - 6 * zDirSign, activeToolY - 12);
-      ctx.lineTo(activeToolX - 12 * zDirSign, activeToolY - 6);
+      ctx.lineTo(activeToolX - 5 * zDirSign, activeToolY - 10);
+      ctx.lineTo(activeToolX - 10 * zDirSign, activeToolY - 5);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
     }
 
-    // Draw Hover/Snap Target ("Mirinha")
-    if (hoveredPoint) {
+    // Draw Hover/Snap Target ("Mira")
+    if (showMirinha && hoveredPoint) {
       ctx.save();
       ctx.strokeStyle = isThemeDark ? "rgba(0, 243, 255, 0.4)" : "rgba(0, 150, 200, 0.4)";
       ctx.lineWidth = 1;
@@ -1561,28 +1573,28 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.lineTo(hoveredPoint.canvasX, originY);
       ctx.stroke();
 
-      // Draw the reticle circle
+      // Draw the reticle circle (+30% size increase)
       ctx.setLineDash([]);
       ctx.strokeStyle = hoveredPoint.isVertex ? "#ffea00" : "#00f3ff";
-      ctx.lineWidth = hoveredPoint.isVertex ? 2.5 : 1.5;
+      ctx.lineWidth = hoveredPoint.isVertex ? 2 : 1.2;
       ctx.beginPath();
-      const circleRadius = hoveredPoint.isVertex ? 12 : 7;
+      const circleRadius = hoveredPoint.isVertex ? 9 : 5.5;
       ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, circleRadius, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Crosshairs inside reticle
+      // Crosshairs inside reticle (+30% size increase)
       ctx.beginPath();
-      const crosshairLength = hoveredPoint.isVertex ? 18 : 12;
+      const crosshairLength = hoveredPoint.isVertex ? 14 : 9;
       ctx.moveTo(hoveredPoint.canvasX - crosshairLength, hoveredPoint.canvasY);
       ctx.lineTo(hoveredPoint.canvasX + crosshairLength, hoveredPoint.canvasY);
       ctx.moveTo(hoveredPoint.canvasX, hoveredPoint.canvasY - crosshairLength);
       ctx.lineTo(hoveredPoint.canvasX, hoveredPoint.canvasY + crosshairLength);
       ctx.stroke();
 
-      // A small glowing center dot
+      // A small glowing center dot (+30% size increase)
       ctx.fillStyle = hoveredPoint.isVertex ? "#ffea00" : "#39ff14";
       ctx.beginPath();
-      const dotRadius = hoveredPoint.isVertex ? 4 : 2.5;
+      const dotRadius = hoveredPoint.isVertex ? 3 : 2;
       ctx.arc(hoveredPoint.canvasX, hoveredPoint.canvasY, dotRadius, 0, Math.PI * 2);
       ctx.fill();
 
@@ -1908,6 +1920,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     activeLine,
     isThemeDark,
     hoveredPoint,
+    showMirinha,
     isMeasuring,
     isMeasuringAngle,
     angleStartLine,
@@ -2247,6 +2260,20 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           </h3>
         </div>
         <div className="flex gap-2 items-center">
+          {/* Mira 2D ON/OFF Toggle */}
+          <button
+            onClick={() => setShowMirinha(!showMirinha)}
+            className={`px-2 py-1 text-[10px] font-bold rounded border uppercase flex items-center gap-1.5 transition cursor-pointer ${
+              showMirinha
+                ? "bg-cyan-950/50 text-cyan-400 border-cyan-400/60 shadow-[0_0_8px_rgba(0,243,255,0.2)]"
+                : "bg-zinc-800/60 border-zinc-700 text-zinc-500 hover:text-zinc-300"
+            }`}
+            title="Ligar/Desligar Mira de Precisão no Simulador 2D"
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>Mira {showMirinha ? "ON" : "OFF"}</span>
+          </button>
+
           {/* Theme switcher */}
           <button
             onClick={() => setIsThemeDark(!isThemeDark)}
@@ -2323,26 +2350,21 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           style={{ touchAction: 'none' }}
         />
 
-        {/* Precise Snapping Target Tooltip */}
-        {hoveredPoint && !isMeasuring && (
-          <div
-            className="absolute pointer-events-none bg-[#111116]/95 border border-cyan-400 rounded-lg p-2.5 font-mono text-[11px] shadow-2xl z-30 select-none max-w-[260px] transition-all duration-75 flex flex-col gap-1 text-left"
-            style={{
-              left: `${hoveredPoint.canvasX + 15}px`,
-              top: `${hoveredPoint.canvasY + 15}px`,
-              transform: hoveredPoint.canvasX + 280 > (canvasRef.current?.width || 0) ? 'translateX(-115%)' : '',
-            }}
-          >
-            <div className="flex justify-between items-center border-b border-zinc-800 pb-1 text-zinc-500 font-bold text-[9px] tracking-wider">
+        {/* Precise Snapping Target Tooltip (Fixed at Bottom-Left as requested) */}
+        {showMirinha && hoveredPoint && !isMeasuring && !isMeasuringAngle && (
+          <div className="absolute bottom-4 left-4 pointer-events-none bg-[#111116]/95 backdrop-blur border-2 border-cyan-400 rounded-xl p-4 font-mono shadow-2xl z-30 select-none min-w-[300px] max-w-[400px] flex flex-col gap-2 text-left animate-in fade-in duration-100">
+            <div className="flex justify-between items-center border-b border-zinc-700/80 pb-1.5 text-zinc-300 font-bold text-xs tracking-wider">
               <span>LINHA {hoveredPoint.gcodeLine + 1}</span>
-              <span className="text-cyan-400">MIRINHA</span>
+              <span className="text-cyan-400 font-black text-xs flex items-center gap-1.5">
+                <Target className="w-4 h-4 text-cyan-400" /> MIRA
+              </span>
             </div>
-            <div className="text-zinc-200 font-sans font-bold py-0.5 truncate max-w-[230px]">
+            <div className="text-white font-sans font-black py-0.5 text-base tracking-wide truncate max-w-[370px]">
               {hoveredPoint.gcodeText}
             </div>
-            <div className="grid grid-cols-2 gap-2 text-[10px] mt-1 border-t border-zinc-800/50 pt-1 text-zinc-400">
-              <div>X: <span className="text-[#39ff14] font-bold">Ø {hoveredPoint.latheX.toFixed(3)}</span></div>
-              <div>Z: <span className="text-orange-400 font-bold">{hoveredPoint.latheZ.toFixed(3)}</span></div>
+            <div className="grid grid-cols-2 gap-3 text-sm mt-1 border-t border-zinc-700/80 pt-2 text-zinc-300 font-bold">
+              <div>X: <span className="text-[#39ff14] font-black text-base ml-1">Ø {hoveredPoint.latheX.toFixed(3)}</span></div>
+              <div>Z: <span className="text-orange-400 font-black text-base ml-1">{hoveredPoint.latheZ.toFixed(3)}</span></div>
             </div>
           </div>
         )}
