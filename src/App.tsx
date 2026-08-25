@@ -16,6 +16,7 @@ import {
   LayoutGrid,
   Lightbulb,
   ChevronDown,
+  ChevronUp,
   List,
   Eye,
   EyeOff,
@@ -111,6 +112,14 @@ export default function App() {
 
   // Editors & Workspace Layout State
   const [layoutCount, setLayoutCount] = useState<number>(1); // 1, 2, or 3 panes
+  const [isHeaderMinimized, setIsHeaderMinimized] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_isHeaderMinimized") === "true";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_isHeaderMinimized", String(isHeaderMinimized));
+  }, [isHeaderMinimized]);
+
   const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
   const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
   const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 290, height: 290 });
@@ -1135,195 +1144,296 @@ export default function App() {
       {isAuthenticated && (
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           
-          {/* Top Header Toolbar */}
-          <header className={`px-6 py-3 flex flex-wrap items-center justify-between gap-4 z-40 shadow-lg transition-all duration-300 ${
-            isHighContrast 
-              ? "bg-zinc-100 border-b-4 border-black text-black shadow-none" 
-              : "bg-[#16161c] border-b-2 border-[#00f3ff] text-white shadow-black/40"
-          }`}>
-            <div className="flex items-center gap-3">
-              <div className="bg-cyan-950/40 p-2 rounded-lg border border-cyan-500/20">
-                <Cpu className="w-5 h-5 text-cyan-400" />
-              </div>
-               <div>
-                <h1 className={`font-display font-black text-sm tracking-tight flex items-center gap-2 ${
-                  isHighContrast ? 'text-black' : 'text-white'
+          {/* Top Header Toolbar (Collapsible / Minimizable) */}
+          {isHeaderMinimized ? (
+            <header className={`px-4 py-1.5 flex items-center justify-between gap-2 z-40 shadow-md transition-all duration-200 ${
+              isHighContrast 
+                ? "bg-zinc-100 border-b-2 border-black text-black" 
+                : "bg-[#141418] border-b border-cyan-500/30 text-white"
+            }`}>
+              <div className="flex items-center gap-2">
+                <div className="bg-cyan-950/40 p-1 rounded border border-cyan-500/20">
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                </div>
+                <span className="font-display font-black text-xs tracking-tight">
+                  TORNO <span className={isHighContrast ? "text-[#e65400] font-black" : "text-[#00f3ff]"}>MASTER</span>
+                </span>
+                <span className="text-[10px] text-zinc-500 font-mono hidden sm:inline">|</span>
+                <span className="text-[10px] font-sans font-semibold text-zinc-300 hidden sm:inline">{clientName}</span>
+                <span className={`px-1.5 py-0.2 rounded text-[8px] font-bold hidden md:inline ${
+                  isAdmin ? 'bg-[#00f3ff]/20 text-[#00f3ff]' : 'bg-zinc-800 text-zinc-400'
                 }`}>
-                  TORNO <span className={isHighContrast ? 'text-[#e65400] font-black' : 'text-[#00f3ff]'}>MASTER</span>
-                </h1>
-                <p className={`text-[10px] font-mono flex items-center gap-1.5 flex-wrap ${
-                  isHighContrast ? 'text-zinc-900 font-bold' : 'text-zinc-400'
-                }`}>
-                  <span>Sessão: {SESSION_ID}</span>
-                  <span>|</span>
-                  <span className="font-sans font-semibold text-zinc-200">{clientName}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                    isAdmin ? 'bg-[#00f3ff]/25 text-[#00f3ff] border border-[#00f3ff]/30 font-black uppercase' :
-                    subscriptionType === 'semestral' ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/30' :
-                    subscriptionType === 'mensal' ? 'bg-amber-500/25 text-amber-300 border border-amber-500/30' :
-                    'bg-zinc-800 text-zinc-400'
-                  }`}>
-                    {isAdmin ? 'Administrador' :
-                     subscriptionType === 'semestral' ? 'Semestral' :
-                     subscriptionType === 'mensal' ? 'Mensal' : 'Demo'}
-                  </span>
-                  {isAdmin ? (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/35">
-                      Acesso Vitalício
-                    </span>
-                  ) : (
-                    daysLeft !== null && (
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                        daysLeft <= 3 ? 'bg-red-500/20 text-red-300 border border-red-500/30 animate-pulse' : 'bg-emerald-500/10 text-emerald-400'
-                      }`}>
-                        {daysLeft <= 0 ? 'Expirado' : `${daysLeft} dia${daysLeft === 1 ? '' : 's'} restante${daysLeft === 1 ? '' : 's'}`}
-                      </span>
-                    )
-                  )}
-                </p>
+                  {isAdmin ? 'Admin' : subscriptionType}
+                </span>
               </div>
-            </div>
 
-            {/* Antifraud status widget */}
-            {hasFraudWarning && (
-              <div className="bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-1 text-xs text-red-400 flex items-center gap-2 animate-pulse">
-                <ShieldAlert className="w-4 h-4 text-red-500" />
-                <span>⚠️ ALERTA: Seu token está ativo em outro dispositivo!</span>
-              </div>
-            )}
-
-            {/* File IO and assistant switches */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              <button
-                onClick={() => { setShowAssistant(true); setActiveWindowId("assistant"); }}
-                className="bg-cyan-950/20 hover:bg-cyan-950/40 border border-[#00f3ff]/40 text-[#00f3ff] text-xs font-bold py-2 px-3.5 rounded-lg transition flex items-center gap-2 shadow"
-              >
-                <Wrench className="w-4 h-4" />
-                Programador Virtual & Tabelas
-              </button>
-
-              {isAdmin && (
+              {/* Quick compact shortcuts in minimized mode */}
+              <div className="flex items-center gap-1.5">
+                {/* Assistant quick button */}
                 <button
-                  onClick={() => { setShowAdmin(true); setActiveWindowId("admin"); }}
-                  className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 text-xs font-bold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
+                  onClick={() => { setShowAssistant(true); setActiveWindowId("assistant"); }}
+                  className="bg-cyan-950/20 hover:bg-cyan-950/40 border border-[#00f3ff]/30 text-[#00f3ff] text-[10px] font-bold py-1 px-2 rounded transition flex items-center gap-1"
+                  title="Programador Virtual & Tabelas"
                 >
-                  <User className="w-3.5 h-3.5" />
-                  Gerenciar Licenças
+                  <Wrench className="w-3 h-3" />
+                  <span className="hidden lg:inline">Tabelas</span>
                 </button>
+
+                {/* Save quick button */}
+                <button
+                  onClick={handleSaveLocal}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-semibold py-1 px-2 rounded transition flex items-center gap-1"
+                  title="Salvar arquivo no disco local"
+                >
+                  <Save className="w-3 h-3" />
+                  <span className="hidden lg:inline">Salvar</span>
+                </button>
+
+                {/* 1 / 2 / 3 Telas compact */}
+                <div className="bg-[#101014] p-0.5 rounded border border-zinc-800 flex items-center">
+                  {[1, 2, 3].map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => setLayoutCount(num)}
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition ${
+                        layoutCount === num
+                          ? "bg-[#39ff14]/15 text-[#39ff14]"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                      title={`${num} ${num === 1 ? "Tela" : "Telas"}`}
+                    >
+                      {num}T
+                    </button>
+                  ))}
+                </div>
+
+                {/* Quick 3D switch */}
+                <button
+                  onClick={handleToggle3DSimulator}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                    show3DSimulator
+                      ? "bg-amber-500/20 text-amber-300 border-amber-500/50"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title="Simulador 3D"
+                >
+                  <Box className="w-3 h-3 text-amber-400" />
+                  <span className="hidden md:inline">3D</span>
+                </button>
+
+                {/* Expand Button */}
+                <button
+                  onClick={() => setIsHeaderMinimized(false)}
+                  className="bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-300 hover:text-white text-[11px] font-extrabold py-1 px-3 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-[0_0_10px_rgba(0,243,255,0.2)] ml-1"
+                  title="Expandir barra superior completa com todos os menus"
+                >
+                  <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Expandir Menu</span>
+                </button>
+              </div>
+            </header>
+          ) : (
+            <header className={`px-6 py-3 flex flex-wrap items-center justify-between gap-4 z-40 shadow-lg transition-all duration-300 ${
+              isHighContrast 
+                ? "bg-zinc-100 border-b-4 border-black text-black shadow-none" 
+                : "bg-[#16161c] border-b-2 border-[#00f3ff] text-white shadow-black/40"
+            }`}>
+              <div className="flex items-center gap-3">
+                <div className="bg-cyan-950/40 p-2 rounded-lg border border-cyan-500/20">
+                  <Cpu className="w-5 h-5 text-cyan-400" />
+                </div>
+                 <div>
+                  <h1 className={`font-display font-black text-sm tracking-tight flex items-center gap-2 ${
+                    isHighContrast ? 'text-black' : 'text-white'
+                  }`}>
+                    TORNO <span className={isHighContrast ? 'text-[#e65400] font-black' : 'text-[#00f3ff]'}>MASTER</span>
+                  </h1>
+                  <p className={`text-[10px] font-mono flex items-center gap-1.5 flex-wrap ${
+                    isHighContrast ? 'text-zinc-900 font-bold' : 'text-zinc-400'
+                  }`}>
+                    <span>Sessão: {SESSION_ID}</span>
+                    <span>|</span>
+                    <span className="font-sans font-semibold text-zinc-200">{clientName}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      isAdmin ? 'bg-[#00f3ff]/25 text-[#00f3ff] border border-[#00f3ff]/30 font-black uppercase' :
+                      subscriptionType === 'semestral' ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/30' :
+                      subscriptionType === 'mensal' ? 'bg-amber-500/25 text-amber-300 border border-amber-500/30' :
+                      'bg-zinc-800 text-zinc-400'
+                    }`}>
+                      {isAdmin ? 'Administrador' :
+                       subscriptionType === 'semestral' ? 'Semestral' :
+                       subscriptionType === 'mensal' ? 'Mensal' : 'Demo'}
+                    </span>
+                    {isAdmin ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/35">
+                        Acesso Vitalício
+                      </span>
+                    ) : (
+                      daysLeft !== null && (
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                          daysLeft <= 3 ? 'bg-red-500/20 text-red-300 border border-red-500/30 animate-pulse' : 'bg-emerald-500/10 text-emerald-400'
+                        }`}>
+                          {daysLeft <= 0 ? 'Expirado' : `${daysLeft} dia${daysLeft === 1 ? '' : 's'} restante${daysLeft === 1 ? '' : 's'}`}
+                        </span>
+                      )
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Antifraud status widget */}
+              {hasFraudWarning && (
+                <div className="bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-1 text-xs text-red-400 flex items-center gap-2 animate-pulse">
+                  <ShieldAlert className="w-4 h-4 text-red-500" />
+                  <span>⚠️ ALERTA: Seu token está ativo em outro dispositivo!</span>
+                </div>
               )}
 
-              <button
-                onClick={() => {
-                  setIsAuthenticated(false);
-                  setToken("");
-                  setClientName("");
-                  setIsAdmin(false);
-                }}
-                className="bg-red-950/20 hover:bg-red-950/50 border border-red-500/20 text-red-400 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
-                title="Desconectar do Sistema"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                Sair
-              </button>
+              {/* File IO and assistant switches */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={() => { setShowAssistant(true); setActiveWindowId("assistant"); }}
+                  className="bg-cyan-950/20 hover:bg-cyan-950/40 border border-[#00f3ff]/40 text-[#00f3ff] text-xs font-bold py-2 px-3.5 rounded-lg transition flex items-center gap-2 shadow"
+                >
+                  <Wrench className="w-4 h-4" />
+                  Programador Virtual & Tabelas
+                </button>
 
-              <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
-
-              <button
-                onClick={handleSaveLocal}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
-                title="Salvar arquivo no disco local"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Salvar
-              </button>
-
-              <button
-                onClick={handleLoadLocal}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
-                title="Carregar arquivo do disco local"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                Carregar
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.pgm,.nc,.gcode"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-
-              <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
-
-              {/* Layout splits switches */}
-              <div className="bg-[#121216] p-1 rounded-lg border border-zinc-800 flex items-center gap-1">
-                {[1, 2, 3].map((num) => (
+                {isAdmin && (
                   <button
-                    key={num}
-                    onClick={() => setLayoutCount(num)}
-                    className={`text-xs font-bold px-2.5 py-1 rounded transition ${
-                      layoutCount === num
-                        ? "bg-[#39ff14]/10 text-[#39ff14]"
-                        : "text-zinc-500 hover:text-zinc-300"
-                    }`}
+                    onClick={() => { setShowAdmin(true); setActiveWindowId("admin"); }}
+                    className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 text-xs font-bold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
                   >
-                    {num} {num === 1 ? "Tela" : "Telas"}
+                    <User className="w-3.5 h-3.5" />
+                    Gerenciar Licenças
                   </button>
-                ))}
-              </div>
-
-              <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
-
-              {/* High Contrast Toggle */}
-              <button
-                onClick={() => setIsHighContrast(!isHighContrast)}
-                className={`p-2 rounded-lg border transition ${
-                  isHighContrast
-                    ? "bg-yellow-400/20 text-yellow-400 border-yellow-400/40"
-                    : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
-                }`}
-                title="Alternar Modo de Alto Contraste"
-              >
-                {isHighContrast ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-
-              <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
-
-              {/* Floating Simulator Switch */}
-              <button
-                onClick={() => setSimMode(prev => prev === 'tv' ? 'fixed' : prev === 'fixed' ? 'off' : 'tv')}
-                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 ${
-                  simMode === 'tv'
-                    ? "bg-[#00f3ff]/15 text-[#00f3ff] border-[#00f3ff]/40 shadow-[0_0_10px_rgba(0,243,255,0.15)] animate-pulse"
-                    : simMode === 'fixed' ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.15)]" : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                }`}
-                title="Mover o simulador para uma janela flutuante arrastável (Mini-TV) ou manter fixado"
-              >
-                {simMode === 'tv' ? "📺 Mini-TV Ativa" : simMode === 'fixed' ? "🖥️ Simulador Fixo" : "👁️ Simulador Off"}
-              </button>
-
-              {/* 3D Simulator Switch (Eixo Y / C - Centro de Usinagem) */}
-              <button
-                onClick={handleToggle3DSimulator}
-                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 cursor-pointer ${
-                  show3DSimulator
-                    ? "bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-extrabold"
-                    : hasYAxisInActiveEditor
-                    ? "bg-amber-500/15 text-amber-300 border-amber-500/40 animate-pulse hover:bg-amber-500/25"
-                    : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                }`}
-                title="Simulador Gráfico 3D para usinagem em Centro de Usinagem / Torno com Eixo Y e C"
-              >
-                <Box className="w-3.5 h-3.5 text-amber-400" />
-                <span>Simulador 3D</span>
-                {hasYAxisInActiveEditor && (
-                  <span className="bg-amber-500 text-black font-extrabold text-[9px] px-1.5 py-0.2 rounded-full uppercase tracking-tighter shadow-sm">
-                    Eixo Y
-                  </span>
                 )}
-              </button>
-            </div>
-          </header>
+
+                <button
+                  onClick={() => {
+                    setIsAuthenticated(false);
+                    setToken("");
+                    setClientName("");
+                    setIsAdmin(false);
+                  }}
+                  className="bg-red-950/20 hover:bg-red-950/50 border border-red-500/20 text-red-400 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
+                  title="Desconectar do Sistema"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sair
+                </button>
+
+                <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
+
+                <button
+                  onClick={handleSaveLocal}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
+                  title="Salvar arquivo no disco local"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Salvar
+                </button>
+
+                <button
+                  onClick={handleLoadLocal}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
+                  title="Carregar arquivo do disco local"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  Carregar
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.pgm,.nc,.gcode"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+
+                <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
+
+                {/* Layout splits switches */}
+                <div className="bg-[#121216] p-1 rounded-lg border border-zinc-800 flex items-center gap-1">
+                  {[1, 2, 3].map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => setLayoutCount(num)}
+                      className={`text-xs font-bold px-2.5 py-1 rounded transition ${
+                        layoutCount === num
+                          ? "bg-[#39ff14]/10 text-[#39ff14]"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      {num} {num === 1 ? "Tela" : "Telas"}
+                    </button>
+                  ))}
+                </div>
+
+                <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
+
+                {/* High Contrast Toggle */}
+                <button
+                  onClick={() => setIsHighContrast(!isHighContrast)}
+                  className={`p-2 rounded-lg border transition ${
+                    isHighContrast
+                      ? "bg-yellow-400/20 text-yellow-400 border-yellow-400/40"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
+                  }`}
+                  title="Alternar Modo de Alto Contraste"
+                >
+                  {isHighContrast ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+
+                <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
+
+                {/* Floating Simulator Switch */}
+                <button
+                  onClick={() => setSimMode(prev => prev === 'tv' ? 'fixed' : prev === 'fixed' ? 'off' : 'tv')}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 ${
+                    simMode === 'tv'
+                      ? "bg-[#00f3ff]/15 text-[#00f3ff] border-[#00f3ff]/40 shadow-[0_0_10px_rgba(0,243,255,0.15)] animate-pulse"
+                      : simMode === 'fixed' ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.15)]" : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title="Mover o simulador para uma janela flutuante arrastável (Mini-TV) ou manter fixado"
+                >
+                  {simMode === 'tv' ? "📺 Mini-TV Ativa" : simMode === 'fixed' ? "🖥️ Simulador Fixo" : "👁️ Simulador Off"}
+                </button>
+
+                {/* 3D Simulator Switch (Eixo Y / C - Centro de Usinagem) */}
+                <button
+                  onClick={handleToggle3DSimulator}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 cursor-pointer ${
+                    show3DSimulator
+                      ? "bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-extrabold"
+                      : hasYAxisInActiveEditor
+                      ? "bg-amber-500/15 text-amber-300 border-amber-500/40 animate-pulse hover:bg-amber-500/25"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title="Simulador Gráfico 3D para usinagem em Centro de Usinagem / Torno com Eixo Y e C"
+                >
+                  <Box className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Simulador 3D</span>
+                  {hasYAxisInActiveEditor && (
+                    <span className="bg-amber-500 text-black font-extrabold text-[9px] px-1.5 py-0.2 rounded-full uppercase tracking-tighter shadow-sm">
+                      Eixo Y
+                    </span>
+                  )}
+                </button>
+
+                <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
+
+                {/* Minimize Header Button */}
+                <button
+                  onClick={() => setIsHeaderMinimized(true)}
+                  className="bg-cyan-950/30 hover:bg-cyan-900/50 border border-cyan-500/40 text-cyan-300 hover:text-cyan-100 text-xs font-bold py-1.5 px-3 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow ml-0.5"
+                  title="Minimizar barra superior para ter mais espaço na tela"
+                >
+                  <ChevronUp className="w-4 h-4 text-cyan-400" />
+                  <span className="font-semibold">Minimizar</span>
+                </button>
+              </div>
+            </header>
+          )}
 
           {/* Warning ribbon for trial expiration */}
           {showRibbon && daysLeft !== null && daysLeft >= 0 && daysLeft <= 3 && (
