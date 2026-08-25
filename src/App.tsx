@@ -511,7 +511,7 @@ export default function App() {
         } else {
           setIsBlockedByDeviceLimit(false);
           setOnlineSessionCount(result.activeDevices);
-          setHasFraudWarning(result.activeDevices > 1);
+          setHasFraudWarning(!!result.exceeded);
         }
       } catch (err) {
         console.error("Erro no heartbeat:", err);

@@ -47,6 +47,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
   const [editSupport, setEditSupport] = useState<string>("");
   const [editSubscriptionType, setEditSubscriptionType] = useState<"demo" | "mensal" | "semestral">("demo");
   const [editBlockSharing, setEditBlockSharing] = useState<boolean>(false);
+  const [editMaxDevices, setEditMaxDevices] = useState<number>(1);
   const [clientToDelete, setClientToDelete] = useState<ClientToken | null>(null);
   const [loginError, setLoginError] = useState<string>("");
   const [formError, setFormError] = useState<string>("");
@@ -90,6 +91,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setTimeout(() => setActionMsg(""), 3000);
   };
 
+  const handleUpdateMaxDevices = (token: string, newMax: number) => {
+    const val = Math.max(1, newMax);
+    const currentClients = getClients();
+    const idx = currentClients.findIndex(c => c.token === token);
+    if (idx !== -1) {
+      currentClients[idx].maxDevices = val;
+      currentClients[idx].blockSharing = val === 1;
+      saveClients(currentClients);
+      fetchRoster();
+      setActionMsg(`✅ Limite de acessos para "${currentClients[idx].name}" alterado para ${val} dispositivo(s)!`);
+      setTimeout(() => setActionMsg(""), 3000);
+    }
+  };
+
   const handleSaveClient = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editName || !editToken) {
@@ -107,7 +122,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
       expirationDate: editExpDate || null,
       supportPhone: editSupport || globalSupport,
       subscriptionType: editSubscriptionType,
-      blockSharing: editBlockSharing,
+      blockSharing: editMaxDevices === 1 || editBlockSharing,
+      maxDevices: editMaxDevices,
     };
 
     let currentClients = getClients();
@@ -136,6 +152,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditSupport("");
     setEditSubscriptionType("demo");
     setEditBlockSharing(false);
+    setEditMaxDevices(1);
     setFormError("");
     setTimeout(() => setActionMsg(""), 3000);
   };
@@ -167,6 +184,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
     setEditSupport(c.supportPhone || globalSupport);
     setEditSubscriptionType(c.subscriptionType || "demo");
     setEditBlockSharing(!!c.blockSharing);
+    setEditMaxDevices(c.maxDevices || (c.blockSharing ? 1 : 1));
     setIsEditing(true);
   };
 
@@ -264,6 +282,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                   setEditExpDate("");
                   setEditSupport(globalSupport);
                   setEditSubscriptionType("demo");
+                  setEditBlockSharing(false);
+                  setEditMaxDevices(1);
                   setIsEditing(true);
                 }}
                 className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 shadow shadow-emerald-950"
@@ -301,6 +321,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                       <th className="p-3">Token Acesso</th>
                       <th className="p-3">Expiração</th>
                       <th className="p-3">Telefone Suporte</th>
+                      <th className="p-3 text-center" title="Limite máximo de acessos simultâneos (dispositivos) permitidos">Máx. Disp.</th>
                       <th className="p-3 text-center">Online</th>
                       <th className="p-3 text-center">Ações</th>
                     </tr>
@@ -420,18 +441,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                           </span>
                         </td>
                         <td className="p-3 text-center">
+                          <div className="inline-flex items-center justify-center gap-1 bg-[#121216] border border-zinc-800 hover:border-cyan-500/40 rounded-lg px-2 py-1 text-xs font-mono font-bold transition">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUpdateMaxDevices(c.token, (c.maxDevices || 1) - 1);
+                              }}
+                              className="w-4 h-4 flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded transition cursor-pointer text-xs select-none"
+                              title="Diminuir limite de dispositivos"
+                            >
+                              -
+                            </button>
+                            <span className="text-cyan-400 font-extrabold px-1 text-xs" title="Limite máximo de dispositivos permitidos">
+                              {c.maxDevices || 1}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUpdateMaxDevices(c.token, (c.maxDevices || 1) + 1);
+                              }}
+                              className="w-4 h-4 flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded transition cursor-pointer text-xs select-none"
+                              title="Aumentar limite de dispositivos"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
                           {c.isOnline ? (
-                            c.activeSessionsCount && c.activeSessionsCount > 1 ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-red-500/15 text-red-400 border border-red-500/30 font-bold" title="Compartilhamento de token detectado! Mesma licença aberta em múltiplos dispositivos simultaneamente.">
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                                Compartilhado ({c.activeSessionsCount} Disp.)
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#39ff14] animate-ping" />
-                                Sim ({c.activeSessionsCount})
-                              </span>
-                            )
+                            (() => {
+                              const maxAllowed = c.maxDevices || (c.blockSharing ? 1 : 1);
+                              const isExceeded = (c.activeSessionsCount || 0) > maxAllowed;
+                              return isExceeded ? (
+                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-red-500/15 text-red-400 border border-red-500/30 font-bold" title={`Alerta! Licença aberta em ${c.activeSessionsCount} dispositivos (Limite configurado: ${maxAllowed}).`}>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                  Compartilhado ({c.activeSessionsCount} / {maxAllowed} Disp.)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#39ff14] animate-ping" />
+                                  Sim ({c.activeSessionsCount} / {maxAllowed})
+                                </span>
+                              );
+                            })()
                           ) : (
                             <span className="text-zinc-600 text-[10px]">Não</span>
                           )}
@@ -601,6 +655,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, isAdmin }) => {
                     placeholder="Ex: (18) 98765-4321"
                     className="w-full bg-[#0d0d11] text-zinc-100 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-emerald-400"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-500 mb-1">
+                    Limite Máximo de Acessos Simultâneos
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={editMaxDevices}
+                      onChange={(e) => {
+                        const val = Math.max(1, parseInt(e.target.value) || 1);
+                        setEditMaxDevices(val);
+                        if (val > 1) setEditBlockSharing(false);
+                        else setEditBlockSharing(true);
+                      }}
+                      className="w-full bg-[#0d0d11] text-cyan-400 p-2.5 rounded-lg border border-zinc-800 text-xs outline-none focus:border-cyan-400 font-mono font-bold text-center text-sm"
+                    />
+                    <span className="text-xs text-zinc-400 font-sans font-bold whitespace-nowrap">Disp.</span>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    Define quantos aparelhos simultâneos este cliente pode usar antes de gerar alerta.
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2 py-2 border-y border-zinc-800/60 my-1">

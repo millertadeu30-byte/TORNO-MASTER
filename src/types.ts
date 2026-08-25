@@ -12,6 +12,7 @@ export interface ClientToken {
   registrationDate?: string;
   sessions?: { sessionId: string; deviceId: string; lastActive: number }[];
   blockSharing?: boolean;
+  maxDevices?: number;
 }
 
 export interface GCodeCommand {

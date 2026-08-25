@@ -332,8 +332,8 @@ export async function registerSessionHeartbeat(
   token: string,
   sessionId: string,
   deviceId: string
-): Promise<{ success: boolean; activeDevices: number; blocked: boolean }> {
-  if (!token) return { success: false, activeDevices: 0, blocked: false };
+): Promise<{ success: boolean; activeDevices: number; maxDevices?: number; exceeded?: boolean; blocked: boolean }> {
+  if (!token) return { success: false, activeDevices: 0, maxDevices: 1, exceeded: false, blocked: false };
   try {
     const cloudData = await fetchLicensingFromCloud();
     let currentClients = cloudData ? cloudData.clients : getClients();
@@ -341,6 +341,7 @@ export async function registerSessionHeartbeat(
     let updated = false;
     let isBlocked = false;
     let totalActiveDevices = 0;
+    let maxDevicesLimit = 1;
 
     currentClients = currentClients.map(client => {
       if (client.token.trim() === token.trim()) {
@@ -354,13 +355,14 @@ export async function registerSessionHeartbeat(
         // Find if this specific session is already registered
         const sessionIdx = sessions.findIndex(s => s.sessionId === sessionId);
         
+        const limit = client.maxDevices && client.maxDevices > 0 ? client.maxDevices : 1;
+        maxDevicesLimit = limit;
+
         // If this is a new session/tab
         if (sessionIdx === -1) {
           // Check if the device is already in the list of active devices
           const isDeviceActive = activeDevices.includes(deviceId);
           
-          // If the device is NOT active, and we already reached the limit (1 if blockSharing is enabled, otherwise 3)
-          const limit = client.blockSharing ? 1 : 3;
           if (!isDeviceActive && activeDevices.length >= limit) {
             isBlocked = true;
           } else {
@@ -397,11 +399,13 @@ export async function registerSessionHeartbeat(
     return {
       success: !isBlocked,
       activeDevices: totalActiveDevices,
+      maxDevices: maxDevicesLimit,
+      exceeded: totalActiveDevices > maxDevicesLimit,
       blocked: isBlocked
     };
   } catch (err) {
     console.error("Erro no heartbeat da sessão:", err);
-    return { success: true, activeDevices: 1, blocked: false };
+    return { success: true, activeDevices: 1, maxDevices: 1, exceeded: false, blocked: false };
   }
 }
 
