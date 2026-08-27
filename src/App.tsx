@@ -34,7 +34,8 @@ import {
   Minimize2,
   Copy,
   Check,
-  Box
+  Box,
+  RefreshCw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
@@ -1221,6 +1222,23 @@ export default function App() {
                   <span className="hidden md:inline">3D</span>
                 </button>
 
+                {/* Quick Sincronismos switch */}
+                <button
+                  onClick={() => {
+                    if (layoutCount === 1) setLayoutCount(2);
+                    setIsSyncWidgetMinimized(prev => !prev);
+                  }}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                    layoutCount > 1 && !isSyncWidgetMinimized
+                      ? "bg-cyan-950/50 text-cyan-300 border-cyan-400/70"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title="Sincronismo de Canais (M200+)"
+                >
+                  <RefreshCw className="w-3 h-3 text-cyan-400" />
+                  <span>Sincronismos</span>
+                </button>
+
                 {/* Expand Button */}
                 <button
                   onClick={() => setIsHeaderMinimized(false)}
@@ -1431,6 +1449,28 @@ export default function App() {
                   <ChevronUp className="w-4 h-4 text-cyan-400" />
                   <span className="font-semibold">Minimizar</span>
                 </button>
+
+                {/* Sincronismos Button */}
+                <button
+                  onClick={() => {
+                    if (layoutCount === 1) setLayoutCount(2);
+                    setIsSyncWidgetMinimized(prev => !prev);
+                  }}
+                  className={`text-xs font-bold py-1.5 px-3 rounded-lg border transition flex items-center gap-1.5 cursor-pointer shadow ml-1 ${
+                    layoutCount > 1 && !isSyncWidgetMinimized
+                      ? "bg-cyan-950/50 text-cyan-300 border-cyan-400/70 shadow-[0_0_10px_rgba(0,243,255,0.2)]"
+                      : "bg-[#121216] border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-700"
+                  }`}
+                  title="Exibir/Ocultar Painel de Sincronismo de Canais (M200+)"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Sincronismos</span>
+                  {Object.keys(syncCodesAnalysis).filter(k => !syncCodesAnalysis[k].isIgnored).length > 0 && (
+                    <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-extrabold text-[9px] px-1.5 py-0.2 rounded-full">
+                      {Object.keys(syncCodesAnalysis).filter(k => !syncCodesAnalysis[k].isIgnored).length}
+                    </span>
+                  )}
+                </button>
               </div>
             </header>
           )}
@@ -1518,7 +1558,7 @@ export default function App() {
             </AnimatePresence>
 
             {/* Multi-channel Sync Codes Floating Widget */}
-            {layoutCount > 1 && Object.keys(syncCodesAnalysis).length > 0 && (
+            {layoutCount > 1 && (
               <div
                 onPointerDown={handleSyncWidgetPointerDown}
                 onPointerMove={handleSyncWidgetPointerMove}
