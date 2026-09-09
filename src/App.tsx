@@ -123,7 +123,7 @@ export default function App() {
 
   const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
   const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
-  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 290, height: 290 });
+  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 320, height: 290 });
   const [isSyncWidgetResizing, setIsSyncWidgetResizing] = useState(false);
   const syncWidgetResizeStart = useRef({ width: 0, height: 0, x: 0, y: 0 });
   const [isSyncWidgetDragging, setIsSyncWidgetDragging] = useState(false);
@@ -139,6 +139,10 @@ export default function App() {
     const saved = localStorage.getItem("cnc_syncIncludeWithP");
     return saved !== null ? saved === "true" : true;
   });
+  const [syncIncludeM2000, setSyncIncludeM2000] = useState<boolean>(() => {
+    const saved = localStorage.getItem("cnc_syncIncludeM2000");
+    return saved !== null ? saved === "true" : true;
+  });
 
   useEffect(() => {
     localStorage.setItem("cnc_syncIncludeNoP", String(syncIncludeNoP));
@@ -147,6 +151,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("cnc_syncIncludeWithP", String(syncIncludeWithP));
   }, [syncIncludeWithP]);
+
+  useEffect(() => {
+    localStorage.setItem("cnc_syncIncludeM2000", String(syncIncludeM2000));
+  }, [syncIncludeM2000]);
 
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [isHighContrast, setIsHighContrast] = useState<boolean>(false);
@@ -214,16 +222,30 @@ export default function App() {
             const rawP = match[2] || "";
             const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
 
-            // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
-            if (mCode.substring(1).length >= 4 && !pVal) {
-              continue;
-            }
+            const isM2000Range = mNum >= 2000 && mNum <= 2999;
 
-            if (pVal && !syncIncludeWithP) {
-              continue;
-            }
-            if (!pVal && !syncIncludeNoP) {
-              continue;
+            if (isM2000Range) {
+              if (!syncIncludeM2000) {
+                continue;
+              }
+              if (pVal && !syncIncludeWithP) {
+                continue;
+              }
+              if (!pVal && !syncIncludeNoP) {
+                continue;
+              }
+            } else {
+              // RULE: Non-M2000 M-code with 4 or more digits MUST have P suffix to be considered sync code
+              if (mCode.substring(1).length >= 4 && !pVal) {
+                continue;
+              }
+
+              if (pVal && !syncIncludeWithP) {
+                continue;
+              }
+              if (!pVal && !syncIncludeNoP) {
+                continue;
+              }
             }
 
             if (!analysis[mCode]) {
@@ -305,7 +327,7 @@ export default function App() {
     });
 
     return analysis;
-  }, [editorTexts, layoutCount, ignoredSyncCodes, syncIncludeNoP, syncIncludeWithP]);
+  }, [editorTexts, layoutCount, ignoredSyncCodes, syncIncludeNoP, syncIncludeWithP, syncIncludeM2000]);
 
   // Helper to align all open editors on a specific sync M-code
   const handleAlignAllEditorsToMCode = (mCode: string) => {
@@ -1632,9 +1654,9 @@ export default function App() {
                     </p>
 
                     {/* Types of Sync Toggles */}
-                    <div className="flex items-center gap-2.5 py-1.5 px-2 mb-2 bg-zinc-900/50 border border-zinc-850 rounded-lg shrink-0 text-[10px] font-sans">
+                    <div className="flex flex-wrap items-center gap-2 py-1.5 px-2 mb-2 bg-zinc-900/50 border border-zinc-850 rounded-lg shrink-0 text-[10px] font-sans">
                       <span className="text-zinc-500 font-bold uppercase tracking-wider text-[9px]">Analisar:</span>
-                      <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white select-none">
+                      <label className="flex items-center gap-1 cursor-pointer text-zinc-300 hover:text-white select-none" title="Analisar códigos M200+ sem sufixo P">
                         <input
                           type="checkbox"
                           checked={syncIncludeNoP}
@@ -1643,7 +1665,7 @@ export default function App() {
                         />
                         <span>M200+ Sem P</span>
                       </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer text-zinc-300 hover:text-white select-none">
+                      <label className="flex items-center gap-1 cursor-pointer text-zinc-300 hover:text-white select-none" title="Analisar códigos M com sufixo P">
                         <input
                           type="checkbox"
                           checked={syncIncludeWithP}
@@ -1651,6 +1673,15 @@ export default function App() {
                           className="w-3.5 h-3.5 rounded border-zinc-700 text-cyan-500 focus:ring-0 bg-zinc-900 cursor-pointer"
                         />
                         <span>M200+ Com P</span>
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer text-zinc-300 hover:text-white select-none" title="Analisar sincronismos M2000 até M2999">
+                        <input
+                          type="checkbox"
+                          checked={syncIncludeM2000}
+                          onChange={(e) => setSyncIncludeM2000(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-zinc-700 text-cyan-500 focus:ring-0 bg-zinc-900 cursor-pointer"
+                        />
+                        <span className="text-cyan-300 font-bold">M2000-M2999</span>
                       </label>
                     </div>
 
