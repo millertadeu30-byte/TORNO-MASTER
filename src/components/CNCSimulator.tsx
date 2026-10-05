@@ -1,6 +1,7 @@
-import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target } from "lucide-react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
+import { calculateCycleTime, formatCycleTime } from "../utils/cycleTimeCalculator";
 
 interface CNCSimulatorProps {
   gcodeText: string;
@@ -85,6 +86,29 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Freeze Graphic State ("Congelar Gráfico")
   const [isFrozen, setIsFrozen] = useState<boolean>(false);
+
+  // Cycle Time Calibration Factor (Potentiometer percentage: 20% to 180%, default 100%)
+  const [cycleTimeFactor, setCycleTimeFactor] = useState<number>(() => {
+    const saved = localStorage.getItem("cnc_cycleTimeFactor");
+    return saved ? parseInt(saved, 10) : 100;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_cycleTimeFactor", String(cycleTimeFactor));
+  }, [cycleTimeFactor]);
+
+  // Compute Base and Calibrated Cycle Time
+  const baseCycleTimeSec = useMemo(() => {
+    return calculateCycleTime(gcodeText);
+  }, [gcodeText]);
+
+  const adjustedCycleTimeSec = useMemo(() => {
+    return baseCycleTimeSec * (cycleTimeFactor / 100);
+  }, [baseCycleTimeSec, cycleTimeFactor]);
+
+  const formattedCycleTime = useMemo(() => {
+    return formatCycleTime(adjustedCycleTimeSec);
+  }, [adjustedCycleTimeSec]);
 
   // Zoom on scroll wheel
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -411,7 +435,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   };
 
   // Dynamic G-Code parsing & Rendering
-  const parseGCode = (): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } => {
+  function parseGCode(): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } {
     try {
     const lines = gcodeText.split("\n");
     let currentGMode = 0; // Standard travel G00
@@ -2253,11 +2277,40 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       <div className={`flex justify-between items-center px-4 py-2 border-b transition-colors duration-300 ${
         isHighContrast ? "bg-zinc-200 border-black" : isThemeDark ? "bg-[#1e1e24] border-zinc-800" : "bg-zinc-100 border-zinc-200"
       }`}>
-        <div className="flex items-center gap-2">
-          <span className="flex h-2 w-2 rounded-full bg-[#00f3ff] shadow-[0_0_8px_#00f3ff]" />
-          <h3 className="font-display font-medium text-xs tracking-wider uppercase">
-            Simulador Gráfico 2D
-          </h3>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-[#00f3ff] shadow-[0_0_8px_#00f3ff]" />
+            <h3 className="font-display font-medium text-xs tracking-wider uppercase">
+              Simulador Gráfico 2D
+            </h3>
+          </div>
+
+          {/* Discrete Cycle Time Display + Potentiometer */}
+          <div className="hidden sm:flex items-center gap-2 bg-[#101016] border border-amber-500/30 rounded-lg px-2.5 py-0.5 text-xs font-mono">
+            <div className="flex items-center gap-1.5 text-amber-400 font-bold" title="Tempo de Ciclo Estimado do Programa (Horas:Minutos:Segundos)">
+              <Clock size={13} className="text-amber-400 animate-pulse" />
+              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight">Tempo Ciclo:</span>
+              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTime}</span>
+            </div>
+
+            <span className="w-[1px] h-3.5 bg-zinc-800 my-auto" />
+
+            <div className="flex items-center gap-1" title="Potenciômetro de Calibração do Tempo de Ciclo (20% a 180%)">
+              <Gauge size={12} className="text-cyan-400" />
+              <input
+                type="range"
+                min="20"
+                max="180"
+                step="1"
+                value={cycleTimeFactor}
+                onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
+                className="w-14 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
+              />
+              <span className="text-[10px] text-cyan-400 font-bold w-7 text-right">
+                {cycleTimeFactor}%
+              </span>
+            </div>
+          </div>
         </div>
         <div className="flex gap-2 items-center">
           {/* Mira 2D ON/OFF Toggle */}
@@ -2384,8 +2437,36 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         )}
 
         {/* Helper overlay displaying interactive tip */}
-        <div className="absolute top-3 right-3 bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden sm:block">
-          💡 Botão central + arrastar para mover | Scroll para Zoom
+        <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
+          <div className="bg-black/85 backdrop-blur border border-amber-500/40 rounded-lg px-2.5 py-1 font-mono text-[11px] flex items-center gap-2 shadow-lg">
+            <div className="flex items-center gap-1.5 text-amber-400 font-bold" title="Tempo de Ciclo Estimado (Baseado em Avanços e Rotações)">
+              <Clock size={13} className="text-amber-400 animate-pulse" />
+              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight">Tempo Ciclo:</span>
+              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTime}</span>
+            </div>
+
+            <span className="w-[1px] h-3 bg-zinc-700/80 my-auto" />
+
+            <div className="flex items-center gap-1" title="Potenciômetro de Calibração do Tempo de Ciclo (20% a 180%)">
+              <Gauge size={12} className="text-cyan-400" />
+              <input
+                type="range"
+                min="20"
+                max="180"
+                step="1"
+                value={cycleTimeFactor}
+                onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
+                className="w-14 md:w-16 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
+              />
+              <span className="text-[10px] text-cyan-400 font-bold w-7 text-right">
+                {cycleTimeFactor}%
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden md:block">
+            💡 Botão central + arrastar para mover | Scroll para Zoom
+          </div>
         </div>
 
         {/* Measuring mode info floating box */}
