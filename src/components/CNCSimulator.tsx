@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
-import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge } from "lucide-react";
+import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge, Lock, Unlock } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 import { calculateCycleTime, formatCycleTime } from "../utils/cycleTimeCalculator";
 
@@ -93,9 +93,17 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     return saved ? parseInt(saved, 10) : 100;
   });
 
+  const [isCycleTimeLocked, setIsCycleTimeLocked] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_cycleTimeLocked") === "true";
+  });
+
   useEffect(() => {
     localStorage.setItem("cnc_cycleTimeFactor", String(cycleTimeFactor));
   }, [cycleTimeFactor]);
+
+  useEffect(() => {
+    localStorage.setItem("cnc_cycleTimeLocked", String(isCycleTimeLocked));
+  }, [isCycleTimeLocked]);
 
   // Compute Base and Calibrated Cycle Time
   const baseCycleTimeSec = useMemo(() => {
@@ -2295,20 +2303,65 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
             <span className="w-[1px] h-3.5 bg-zinc-800 my-auto" />
 
-            <div className="flex items-center gap-1" title="Potenciômetro de Calibração do Tempo de Ciclo (20% a 180%)">
-              <Gauge size={12} className="text-cyan-400" />
+            <div className="flex items-center gap-1.5" title={isCycleTimeLocked ? "Calibração travada pelo cadeado. Clique para destravar e alterar." : "Digite a porcentagem exata de calibração ou use a barra"}>
+              <Gauge size={12} className={isCycleTimeLocked ? "text-amber-400" : "text-cyan-400"} />
               <input
                 type="range"
                 min="20"
                 max="180"
                 step="1"
                 value={cycleTimeFactor}
+                disabled={isCycleTimeLocked}
                 onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
-                className="w-14 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
+                className={`w-12 md:w-14 h-1 rounded-lg appearance-none ${
+                  isCycleTimeLocked 
+                    ? "bg-zinc-800 opacity-40 cursor-not-allowed accent-amber-500" 
+                    : "bg-zinc-800 cursor-pointer accent-[#00f3ff]"
+                }`}
               />
-              <span className="text-[10px] text-cyan-400 font-bold w-7 text-right">
-                {cycleTimeFactor}%
-              </span>
+              
+              {/* Direct Number Input Box */}
+              <div className={`flex items-center border rounded px-1 py-0.2 ${
+                isCycleTimeLocked 
+                  ? "bg-amber-950/30 border-amber-500/40 text-amber-300" 
+                  : "bg-zinc-900 border-zinc-700 text-cyan-400 hover:border-cyan-500/60"
+              }`}>
+                <input
+                  type="number"
+                  min="1"
+                  max="300"
+                  value={cycleTimeFactor}
+                  disabled={isCycleTimeLocked}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) {
+                      setCycleTimeFactor(Math.max(1, Math.min(300, val)));
+                    }
+                  }}
+                  className={`w-8 bg-transparent text-center font-bold text-[11px] focus:outline-none font-mono ${
+                    isCycleTimeLocked ? "cursor-not-allowed text-amber-300" : "text-cyan-400"
+                  }`}
+                />
+                <span className="text-[10px] font-bold opacity-80">%</span>
+              </div>
+
+              {/* Padlock Lock/Unlock Button */}
+              <button
+                type="button"
+                onClick={() => setIsCycleTimeLocked(!isCycleTimeLocked)}
+                className={`p-1 rounded transition border cursor-pointer ${
+                  isCycleTimeLocked
+                    ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.25)]"
+                    : "bg-zinc-800/80 text-zinc-400 border-zinc-700 hover:text-cyan-300 hover:border-cyan-500/40"
+                }`}
+                title={
+                  isCycleTimeLocked
+                    ? "Cadeado TRAVADO: Porcentagem mantida fixa mesmo ao carregar outros programas. Clique para destravar."
+                    : "Cadeado DESTRAVADO: Clique para travar esta porcentagem de calibração."
+                }
+              >
+                {isCycleTimeLocked ? <Lock size={11} className="text-amber-400" /> : <Unlock size={11} className="text-zinc-400" />}
+              </button>
             </div>
           </div>
         </div>
@@ -2437,36 +2490,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         )}
 
         {/* Helper overlay displaying interactive tip */}
-        <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
-          <div className="bg-black/85 backdrop-blur border border-amber-500/40 rounded-lg px-2.5 py-1 font-mono text-[11px] flex items-center gap-2 shadow-lg">
-            <div className="flex items-center gap-1.5 text-amber-400 font-bold" title="Tempo de Ciclo Estimado (Baseado em Avanços e Rotações)">
-              <Clock size={13} className="text-amber-400 animate-pulse" />
-              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight">Tempo Ciclo:</span>
-              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTime}</span>
-            </div>
-
-            <span className="w-[1px] h-3 bg-zinc-700/80 my-auto" />
-
-            <div className="flex items-center gap-1" title="Potenciômetro de Calibração do Tempo de Ciclo (20% a 180%)">
-              <Gauge size={12} className="text-cyan-400" />
-              <input
-                type="range"
-                min="20"
-                max="180"
-                step="1"
-                value={cycleTimeFactor}
-                onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
-                className="w-14 md:w-16 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#00f3ff]"
-              />
-              <span className="text-[10px] text-cyan-400 font-bold w-7 text-right">
-                {cycleTimeFactor}%
-              </span>
-            </div>
-          </div>
-
-          <div className="bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden md:block">
-            💡 Botão central + arrastar para mover | Scroll para Zoom
-          </div>
+        <div className="absolute top-3 right-3 bg-black/80 border border-zinc-800 rounded px-2.5 py-1 text-[10px] text-zinc-500 font-mono hidden sm:block">
+          💡 Botão central + arrastar para mover | Scroll para Zoom
         </div>
 
         {/* Measuring mode info floating box */}

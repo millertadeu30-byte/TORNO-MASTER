@@ -123,7 +123,20 @@ export default function App() {
 
   const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
   const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
-  const [syncWidgetSize, setSyncWidgetSize] = useState({ width: 320, height: 290 });
+  const [syncWidgetSize, setSyncWidgetSize] = useState<{ width: number; height: number }>(() => {
+    const saved = localStorage.getItem("cnc_syncWidgetSize");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.width && parsed.height) return parsed;
+      } catch (e) {}
+    }
+    return { width: 340, height: 320 };
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_syncWidgetSize", JSON.stringify(syncWidgetSize));
+  }, [syncWidgetSize]);
   const [isSyncWidgetResizing, setIsSyncWidgetResizing] = useState(false);
   const syncWidgetResizeStart = useRef({ width: 0, height: 0, x: 0, y: 0 });
   const [isSyncWidgetDragging, setIsSyncWidgetDragging] = useState(false);
@@ -417,8 +430,11 @@ export default function App() {
       const deltaX = e.clientX - syncWidgetResizeStart.current.x;
       const deltaY = e.clientY - syncWidgetResizeStart.current.y;
       
-      const newWidth = Math.max(220, Math.min(800, syncWidgetResizeStart.current.width + deltaX));
-      const newHeight = Math.max(150, Math.min(600, syncWidgetResizeStart.current.height + deltaY));
+      const maxW = Math.max(260, window.innerWidth - syncWidgetPos.x - 20);
+      const maxH = Math.max(180, window.innerHeight - syncWidgetPos.y - 20);
+
+      const newWidth = Math.max(220, Math.min(maxW, syncWidgetResizeStart.current.width + deltaX));
+      const newHeight = Math.max(160, Math.min(maxH, syncWidgetResizeStart.current.height + deltaY));
       
       setSyncWidgetSize({ width: newWidth, height: newHeight });
     }
@@ -1779,17 +1795,17 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Discrete resizing handle in bottom right */}
+                    {/* Prominent, easy-to-grab resizing handle in bottom right */}
                     <div
                       onPointerDown={handleResizePointerDown}
                       onPointerMove={handleResizePointerMove}
                       onPointerUp={handleResizePointerUp}
-                      className="absolute bottom-[-10px] right-[-10px] cursor-se-resize w-6 h-6 flex items-end justify-end p-1 text-zinc-500 hover:text-cyan-400 transition"
-                      title="Arraste para redimensionar"
+                      className="absolute bottom-1 right-1 cursor-se-resize w-7 h-7 flex items-center justify-center text-zinc-500 hover:text-cyan-300 active:text-cyan-200 transition bg-zinc-800/90 hover:bg-zinc-700 rounded-md border border-zinc-700/80 shadow-lg z-50 group"
+                      title="Clique e arraste para redimensionar a janela de sincronismo"
                     >
-                      <svg width="8" height="8" viewBox="0 0 8 8" className="fill-current text-zinc-600 hover:text-cyan-400">
-                        <path d="M6 0 L8 0 L8 8 L0 8 L0 6 L4 6 L4 4 L2 4 L2 2 L4 2 L4 0 Z" opacity="0.3" />
-                        <path d="M8 8 L0 8 L8 0 Z" />
+                      <svg width="10" height="10" viewBox="0 0 10 10" className="fill-current text-zinc-400 group-hover:text-cyan-300 transition">
+                        <path d="M8 0 L10 0 L10 10 L0 10 L0 8 L5 8 L5 5 L3 5 L3 3 L5 3 L5 0 Z" opacity="0.4" />
+                        <path d="M10 10 L0 10 L10 0 Z" />
                       </svg>
                     </div>
                   </div>
