@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge, Lock, Unlock } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
-import { calculateCycleTime, formatCycleTime } from "../utils/cycleTimeCalculator";
+import { calculateCycleTimeDetailed, formatCycleTime } from "../utils/cycleTimeCalculator";
 
 interface CNCSimulatorProps {
   gcodeText: string;
@@ -105,17 +105,21 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     localStorage.setItem("cnc_cycleTimeLocked", String(isCycleTimeLocked));
   }, [isCycleTimeLocked]);
 
-  // Compute Base and Calibrated Cycle Time
-  const baseCycleTimeSec = useMemo(() => {
-    return calculateCycleTime(gcodeText);
+  // Compute Base Physical Cycle Time and Calibrated Adjusted Cycle Time
+  const cycleTimeDetails = useMemo(() => {
+    return calculateCycleTimeDetailed(gcodeText);
   }, [gcodeText]);
 
   const adjustedCycleTimeSec = useMemo(() => {
-    return baseCycleTimeSec * (cycleTimeFactor / 100);
-  }, [baseCycleTimeSec, cycleTimeFactor]);
+    return cycleTimeDetails.totalSeconds * (cycleTimeFactor / 100);
+  }, [cycleTimeDetails, cycleTimeFactor]);
 
   const formattedCycleTime = useMemo(() => {
-    return formatCycleTime(adjustedCycleTimeSec);
+    return formatCycleTime(adjustedCycleTimeSec, false);
+  }, [adjustedCycleTimeSec]);
+
+  const formattedCycleTimeTenths = useMemo(() => {
+    return formatCycleTime(adjustedCycleTimeSec, true);
   }, [adjustedCycleTimeSec]);
 
   // Zoom on scroll wheel
@@ -2295,15 +2299,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
           {/* Discrete Cycle Time Display + Potentiometer */}
           <div className="hidden sm:flex items-center gap-2 bg-[#101016] border border-amber-500/30 rounded-lg px-2.5 py-0.5 text-xs font-mono">
-            <div className="flex items-center gap-1.5 text-amber-400 font-bold" title="Tempo de Ciclo Estimado do Programa (Horas:Minutos:Segundos)">
+            <div 
+              className="flex items-center gap-1.5 text-amber-400 font-bold cursor-help" 
+              title={`Tempo de Ciclo Calibrado: ${formattedCycleTimeTenths}\n• Usinagem em Corte (G1/G2/G3/Ciclos): ${(cycleTimeDetails.feedSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Movimentos Rápidos (G00): ${(cycleTimeDetails.rapidSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Trocas e Pausas (T/M/G4): ${(cycleTimeDetails.delaySeconds * (cycleTimeFactor / 100)).toFixed(1)}s`}
+            >
               <Clock size={13} className="text-amber-400 animate-pulse" />
               <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight">Tempo Ciclo:</span>
-              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTime}</span>
+              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTimeTenths}</span>
             </div>
 
             <span className="w-[1px] h-3.5 bg-zinc-800 my-auto" />
 
-            <div className="flex items-center gap-1.5" title={isCycleTimeLocked ? "Calibração travada pelo cadeado. Clique para destravar e alterar." : "Digite a porcentagem exata de calibração ou use a barra"}>
+            <div className="flex items-center gap-1.5" title={isCycleTimeLocked ? "Calibração travada pelo cadeado. Clique para destravar e alterar." : "Ajuste o potenciômetro % para calibrar o tempo real da máquina"}>
               <Gauge size={12} className={isCycleTimeLocked ? "text-amber-400" : "text-cyan-400"} />
               <input
                 type="range"
@@ -2313,7 +2320,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 value={cycleTimeFactor}
                 disabled={isCycleTimeLocked}
                 onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
-                className={`w-12 md:w-14 h-1 rounded-lg appearance-none ${
+                className={`w-12 md:w-16 h-1 rounded-lg appearance-none ${
                   isCycleTimeLocked 
                     ? "bg-zinc-800 opacity-40 cursor-not-allowed accent-amber-500" 
                     : "bg-zinc-800 cursor-pointer accent-[#00f3ff]"
@@ -2362,6 +2369,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               >
                 {isCycleTimeLocked ? <Lock size={11} className="text-amber-400" /> : <Unlock size={11} className="text-zinc-400" />}
               </button>
+
+              {/* Reset to 100% Button */}
+              {cycleTimeFactor !== 100 && (
+                <button
+                  type="button"
+                  onClick={() => setCycleTimeFactor(100)}
+                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-950/60 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-900/80 transition cursor-pointer"
+                  title="Redefinir para 100% (Tempo Base)"
+                >
+                  100%
+                </button>
+              )}
             </div>
           </div>
         </div>
