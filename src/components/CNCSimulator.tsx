@@ -2286,31 +2286,31 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       }`}
     >
       {/* Title Bar */}
-      <div className={`flex justify-between items-center px-4 py-2 border-b transition-colors duration-300 ${
+      <div className={`flex flex-wrap justify-between items-center px-3 py-1.5 border-b gap-2 min-w-0 transition-colors duration-300 ${
         isHighContrast ? "bg-zinc-200 border-black" : isThemeDark ? "bg-[#1e1e24] border-zinc-800" : "bg-zinc-100 border-zinc-200"
       }`}>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 md:gap-3 min-w-0">
+          <div className="flex items-center gap-2 shrink-0">
             <span className="flex h-2 w-2 rounded-full bg-[#00f3ff] shadow-[0_0_8px_#00f3ff]" />
-            <h3 className="font-display font-medium text-xs tracking-wider uppercase">
+            <h3 className="font-display font-medium text-xs tracking-wider uppercase shrink-0">
               Simulador Gráfico 2D
             </h3>
           </div>
 
           {/* Discrete Cycle Time Display + Potentiometer */}
-          <div className="hidden sm:flex items-center gap-2 bg-[#101016] border border-amber-500/30 rounded-lg px-2.5 py-0.5 text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-1.5 md:gap-2 bg-[#101016] border border-amber-500/30 rounded-lg px-2 py-0.5 text-xs font-mono shrink-0">
             <div 
-              className="flex items-center gap-1.5 text-amber-400 font-bold cursor-help" 
+              className="flex items-center gap-1.5 text-amber-400 font-bold cursor-help shrink-0" 
               title={`Tempo de Ciclo Calibrado: ${formattedCycleTimeTenths}\n• Usinagem em Corte (G1/G2/G3/Ciclos): ${(cycleTimeDetails.feedSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Movimentos Rápidos (G00): ${(cycleTimeDetails.rapidSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Trocas e Pausas (T/M/G4): ${(cycleTimeDetails.delaySeconds * (cycleTimeFactor / 100)).toFixed(1)}s`}
             >
-              <Clock size={13} className="text-amber-400 animate-pulse" />
-              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight">Tempo Ciclo:</span>
-              <span className="text-amber-300 font-black text-xs tracking-widest">{formattedCycleTimeTenths}</span>
+              <Clock size={13} className="text-amber-400 animate-pulse shrink-0" />
+              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight shrink-0">Tempo Ciclo:</span>
+              <span className="text-amber-300 font-black text-xs tracking-widest shrink-0">{formattedCycleTimeTenths}</span>
             </div>
 
-            <span className="w-[1px] h-3.5 bg-zinc-800 my-auto" />
+            <span className="hidden sm:inline-block w-[1px] h-3.5 bg-zinc-800 my-auto" />
 
-            <div className="flex items-center gap-1.5" title={isCycleTimeLocked ? "Calibração travada pelo cadeado. Clique para destravar e alterar." : "Ajuste o potenciômetro % para calibrar o tempo real da máquina"}>
+            <div className="flex items-center gap-1.5 shrink-0" title={isCycleTimeLocked ? "Calibração travada pelo cadeado. Clique para destravar e alterar." : "Ajuste o potenciômetro % para calibrar o tempo real da máquina"}>
               <Gauge size={12} className={isCycleTimeLocked ? "text-amber-400" : "text-cyan-400"} />
               <input
                 type="range"
@@ -2320,7 +2320,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 value={cycleTimeFactor}
                 disabled={isCycleTimeLocked}
                 onChange={(e) => setCycleTimeFactor(parseInt(e.target.value, 10))}
-                className={`w-12 md:w-16 h-1 rounded-lg appearance-none ${
+                className={`w-10 md:w-14 h-1 rounded-lg appearance-none ${
                   isCycleTimeLocked 
                     ? "bg-zinc-800 opacity-40 cursor-not-allowed accent-amber-500" 
                     : "bg-zinc-800 cursor-pointer accent-[#00f3ff]"
@@ -2345,7 +2345,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                       setCycleTimeFactor(Math.max(1, Math.min(300, val)));
                     }
                   }}
-                  className={`w-8 bg-transparent text-center font-bold text-[11px] focus:outline-none font-mono ${
+                  className={`w-7 bg-transparent text-center font-bold text-[11px] focus:outline-none font-mono ${
                     isCycleTimeLocked ? "cursor-not-allowed text-amber-300" : "text-cyan-400"
                   }`}
                 />
@@ -2384,7 +2384,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             </div>
           </div>
         </div>
-        <div className="flex gap-2 items-center">
+
+        <div className="flex flex-wrap gap-1.5 items-center shrink-0">
           {/* Mira 2D ON/OFF Toggle */}
           <button
             onClick={() => setShowMirinha(!showMirinha)}

@@ -1341,7 +1341,7 @@ export default function App() {
               {hasFraudWarning && (
                 <div className="bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-1 text-xs text-red-400 flex items-center gap-2 animate-pulse">
                   <ShieldAlert className="w-4 h-4 text-red-500" />
-                  <span>⚠️ ALERTA: Seu token está ativo em outro dispositivo!</span>
+                  <span>⚠️ ALERTA: Seu acesso está ativo em outro dispositivo!</span>
                 </div>
               )}
 
@@ -2169,7 +2169,7 @@ export default function App() {
             </h2>
             
             <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
-              Esta licença (<span className="text-cyan-400 font-mono font-bold">{token}</span>) já está sendo utilizada em <span className="text-red-400 font-bold">3 ou mais computadores/celulares</span> simultaneamente neste momento.
+              Esta licença já está sendo utilizada em <span className="text-red-400 font-bold">3 ou mais computadores/celulares</span> simultaneamente neste momento.
             </p>
 
             <div className="bg-red-500/5 border border-red-500/10 rounded-xl p-4 mb-6 text-left text-xs text-zinc-400 space-y-2">
