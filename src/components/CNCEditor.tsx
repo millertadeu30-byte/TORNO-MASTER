@@ -18,6 +18,7 @@ interface CNCEditorProps {
   syncCodesAnalysis?: any;
   syncIncludeNoP?: boolean;
   syncIncludeWithP?: boolean;
+  syncIncludeM2000?: boolean;
 }
 
 export const CNCEditor: React.FC<CNCEditorProps> = ({
@@ -37,6 +38,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   syncCodesAnalysis,
   syncIncludeNoP = true,
   syncIncludeWithP = true,
+  syncIncludeM2000 = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -96,11 +98,18 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
 
   // Helper to check if an M-code is a synchronization code based on toggles
   const isSyncMCode = (mNum: number, pVal: string): boolean => {
-    if (mNum < 200 || (mNum >= 400 && mNum <= 499)) {
+    if (mNum < 200) {
       return false;
     }
+    const isM2000Range = mNum >= 2000 && mNum <= 2999;
+    if (isM2000Range) {
+      if (!syncIncludeM2000) return false;
+      if (pVal && !syncIncludeWithP) return false;
+      if (!pVal && !syncIncludeNoP) return false;
+      return true;
+    }
     const numStr = String(mNum);
-    // RULE: M-code with 4 or more digits MUST have P suffix to be considered sync code
+    // RULE: Non-M2000 M-code with 4 or more digits MUST have P suffix to be considered sync code
     if (numStr.length >= 4 && !pVal) {
       return false;
     }
@@ -137,7 +146,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
       }
       return codes;
     });
-  }, [allEditorTexts, layoutCount, syncIncludeNoP, syncIncludeWithP]);
+  }, [allEditorTexts, layoutCount, syncIncludeNoP, syncIncludeWithP, syncIncludeM2000]);
 
   // Helper to check if an M-code is synchronized
   const checkSyncCode = (mNum: number): boolean => {

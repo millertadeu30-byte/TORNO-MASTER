@@ -226,11 +226,6 @@ export default function App() {
           const mCode = match[1].replace(/\s+/g, "").toUpperCase(); // e.g. "M2005" or "M300"
           const mNum = parseInt(mCode.substring(1), 10);
           if (mNum >= 200) {
-            // EXCLUDE M4xx (M400-M499) as they are not synchronization codes
-            if (mNum >= 400 && mNum <= 499) {
-              continue;
-            }
-
             // Clean pVal and sort its digits to ignore order variations (e.g., P12 and P21 are identical)
             const rawP = match[2] || "";
             const pVal = rawP ? rawP.replace(/\s+/g, "").split("").sort().join("") : "";
@@ -1834,6 +1829,7 @@ export default function App() {
                   syncCodesAnalysis={syncCodesAnalysis}
                   syncIncludeNoP={syncIncludeNoP}
                   syncIncludeWithP={syncIncludeWithP}
+                  syncIncludeM2000={syncIncludeM2000}
                 />
               ))}
             </div>
