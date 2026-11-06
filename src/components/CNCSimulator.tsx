@@ -16,7 +16,8 @@ interface CNCSimulatorProps {
   isHighContrast: boolean;
   onError?: (error: string) => void;
   bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
-  partCurves?: { x: number; z: number }[][]; // Perfil da peça importada do STEP (X em diâmetro, Z do programa)
+  partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça e bruto do STEP
+  onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
 }
 
 export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
@@ -30,7 +31,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   isHighContrast,
   onError,
   bgColor,
-  partCurves,
+  partLayers,
+  onInsertPoint,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -82,8 +84,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     gcodeText: string;
     isVertex?: boolean;
     plotItem?: SimulationPlotItem;
+    partLayer?: string; // "PEÇA" ou "BRUTO" quando a mira está numa linha do STEP
   }
   const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
+  // PG: tocar em pontos da peça e levar para o programa
+  const [pgMode, setPgMode] = useState<boolean>(false);
+  const [pgMsg, setPgMsg] = useState<string | null>(null);
   const [showMirinha, setShowMirinha] = useState<boolean>(() => {
     return localStorage.getItem("cnc_showMirinha2D") !== "false";
   });
@@ -370,6 +376,76 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     };
   };
 
+  // Mira nas linhas da PEÇA / BRUTO (STEP): acha o ponto mais perto e diz o que é (diâmetro, face, chanfro/cone, raio)
+  const findPartSnap = (mouseX: number, mouseY: number, canvas: HTMLCanvasElement, maxDist: number) => {
+    if (!partLayers || !partLayers.length) return null;
+    const zDirSign = simInvertZ ? -1 : 1;
+    const originX = canvas.width / 2 + 50 + panX;
+    const originY = canvas.height / 2 + 50 + panY;
+    let bestD = maxDist;
+    let best: { cx: number; cy: number; layer: string; curve: { x: number; z: number }[]; sgn: number } | null = null;
+    for (const L of partLayers) {
+      for (const c of L.curves) {
+        for (const sgn of [1, -1]) {
+          for (let i = 0; i < c.length - 1; i++) {
+            const x1 = originX + c[i].z * zoom * zDirSign;
+            const y1 = originY - sgn * (c[i].x / 2) * zoom;
+            const x2 = originX + c[i + 1].z * zoom * zDirSign;
+            const y2 = originY - sgn * (c[i + 1].x / 2) * zoom;
+            const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
+            if (res.distance < bestD) {
+              bestD = res.distance;
+              best = { cx: res.x, cy: res.y, layer: L.label, curve: c, sgn };
+            }
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    const c = best.curve;
+    let cx = best.cx;
+    let cy = best.cy;
+    let isVertex = false;
+    // encaixa nas pontas da linha (cantos da peça)
+    for (const p of [c[0], c[c.length - 1]]) {
+      const px = originX + p.z * zoom * zDirSign;
+      const py = originY - best.sgn * (p.x / 2) * zoom;
+      if (Math.hypot(px - cx, py - cy) < 8) {
+        cx = px;
+        cy = py;
+        isVertex = true;
+      }
+    }
+    const latheZ = (cx - originX) / (zoom * zDirSign);
+    const latheX = Math.abs((cy - originY) / zoom) * 2;
+    const f3 = (n: number) => n.toFixed(3);
+    let desc = "";
+    if (c.length > 2) {
+      // arco: raio pela circunferência que passa pelo início, meio e fim
+      const a = c[0];
+      const m = c[Math.floor(c.length / 2)];
+      const b = c[c.length - 1];
+      const ax = a.z, ay = a.x / 2, bx = m.z, by = m.x / 2, qx = b.z, qy = b.x / 2;
+      const dd = 2 * (ax * (by - qy) + bx * (qy - ay) + qx * (ay - by));
+      let R = 0;
+      if (Math.abs(dd) > 1e-9) {
+        const ux = ((ax * ax + ay * ay) * (by - qy) + (bx * bx + by * by) * (qy - ay) + (qx * qx + qy * qy) * (ay - by)) / dd;
+        const uy = ((ax * ax + ay * ay) * (qx - bx) + (bx * bx + by * by) * (ax - qx) + (qx * qx + qy * qy) * (bx - ax)) / dd;
+        R = Math.hypot(ax - ux, ay - uy);
+      }
+      desc = `RAIO R${f3(R)}`;
+    } else {
+      const p = c[0];
+      const q = c[1];
+      const dz = Math.abs(q.z - p.z);
+      const dr = Math.abs(q.x - p.x) / 2;
+      if (dz < 1e-4) desc = `FACE Z${f3(p.z)} (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
+      else if (dr < 1e-4) desc = `DIÂMETRO Ø${f3(p.x)} (comprimento ${f3(dz)})`;
+      else desc = `CHANFRO/CONE ${((Math.atan2(dr, dz) * 180) / Math.PI).toFixed(2)}° (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
+    }
+    return { canvasX: cx, canvasY: cy, latheX, latheZ, isVertex, layer: best.layer, desc, dist: bestD };
+  };
+
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning) {
       setPanX(e.clientX - dragStart.x);
@@ -378,7 +454,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       return;
     }
 
-    if (!showMirinha) {
+    if (!showMirinha && !pgMode) {
       if (hoveredPoint) setHoveredPoint(null);
       return;
     }
@@ -419,6 +495,22 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         closestPoint = { x: res.x, y: res.y };
       }
     });
+
+    // Linhas da peça/bruto (STEP) também entram na mira; vale a que estiver mais perto (no PG, sempre a peça)
+    const partSnap = findPartSnap(mouseX, mouseY, canvas, pgMode ? 45 : 35);
+    if (partSnap && (pgMode || !closestItem || partSnap.dist < minDistance)) {
+      setHoveredPoint({
+        canvasX: partSnap.canvasX,
+        canvasY: partSnap.canvasY,
+        latheX: partSnap.latheX,
+        latheZ: partSnap.latheZ,
+        gcodeLine: -1,
+        gcodeText: partSnap.desc,
+        isVertex: partSnap.isVertex,
+        partLayer: partSnap.layer,
+      });
+      return;
+    }
 
     if (closestItem) {
       const x1 = originX + closestItem.z1 * zoom * zDirSign;
@@ -1507,24 +1599,27 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     ctx.fill();
     ctx.stroke();
 
-    // Perfil da PEÇA importada do STEP (linhas da peça real, por baixo do caminho da ferramenta)
-    if (partCurves && partCurves.length) {
+    // Linhas da PEÇA (cheia) e do BRUTO (tracejada) importados do STEP, por baixo do caminho da ferramenta
+    if (partLayers && partLayers.length) {
       ctx.save();
-      ctx.strokeStyle = isThemeDark ? "rgba(203, 213, 225, 0.9)" : "rgba(51, 65, 85, 0.9)";
-      ctx.lineWidth = 1.6;
-      for (const sgn of [1, -1]) {
-        ctx.globalAlpha = sgn === 1 ? 1 : 0.4; // metade de baixo (espelho) mais clara
-        partCurves.forEach((c) => {
-          ctx.beginPath();
-          c.forEach((p, i) => {
-            const px = originX + p.z * zoom * zDirSign;
-            const py = originY - sgn * (p.x / 2) * zoom;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+      partLayers.forEach((L) => {
+        ctx.strokeStyle = L.color === "auto" ? (isThemeDark ? "rgba(203, 213, 225, 0.9)" : "rgba(51, 65, 85, 0.9)") : L.color;
+        ctx.lineWidth = L.dashed ? 1.3 : 1.6;
+        ctx.setLineDash(L.dashed ? [6, 4] : []);
+        for (const sgn of [1, -1]) {
+          ctx.globalAlpha = sgn === 1 ? 1 : 0.4; // metade de baixo (espelho) mais clara
+          L.curves.forEach((c) => {
+            ctx.beginPath();
+            c.forEach((p, i) => {
+              const px = originX + p.z * zoom * zDirSign;
+              const py = originY - sgn * (p.x / 2) * zoom;
+              if (i === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            });
+            ctx.stroke();
           });
-          ctx.stroke();
-        });
-      }
+        }
+      });
       ctx.restore();
     }
 
@@ -2035,7 +2130,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   }, [
     canvasSize,
     gcodeText,
-    partCurves,
+    partLayers,
     zoom,
     panX,
     panY,
@@ -2057,6 +2152,24 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // PG ligado: o ponto tocado no perfil da peça vira uma linha do programa
+    if (pgMode) {
+      const cnv = canvasRef.current;
+      if (!cnv) return;
+      const rct = cnv.getBoundingClientRect();
+      const mx = rct.width > 0 ? ((e.clientX - rct.left) / rct.width) * cnv.width : 0;
+      const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
+      const snap = findPartSnap(mx, my, cnv, 45);
+      if (snap && onInsertPoint) {
+        onInsertPoint(snap.latheX, snap.latheZ);
+        setPgMsg(`X${snap.latheX.toFixed(3)} Z${snap.latheZ.toFixed(3)} foi para o programa`);
+      } else {
+        setPgMsg(partLayers && partLayers.length ? "toque em cima de uma linha da peça" : "anexe o STEP da peça primeiro (botão STEP / Peça)");
+      }
+      setTimeout(() => setPgMsg(null), 2500);
+      return;
+    }
+
     if (isMeasuring) {
       let clickedPoint: { latheX: number; latheZ: number; canvasX: number; canvasY: number } | null = null;
       if (hoveredPoint) {
@@ -2120,7 +2233,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
 
     if (hoveredPoint) {
-      onLineChange(hoveredPoint.gcodeLine);
+      if (hoveredPoint.gcodeLine >= 0) onLineChange(hoveredPoint.gcodeLine);
       return;
     }
 
@@ -2554,6 +2667,16 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           >
             Enquadrar
           </button>
+            {/* PG: ligado, cada toque num ponto da peça vira uma linha G01 X.. Z.. no programa */}
+            <button
+              onClick={() => setPgMode((v) => !v)}
+              className={`text-[10px] font-bold border px-2 py-1 rounded transition ${
+                pgMode ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/60" : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
+              }`}
+              title="PG: ligado, cada toque num ponto do perfil da peça vira uma linha G01 X.. Z.. no programa (logo abaixo da linha do cursor)"
+            >
+              PG
+            </button>
         </div>
       </div>
 
@@ -2583,6 +2706,13 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           style={{ touchAction: 'none', ...(bgColor ? { background: bgColor } : {}) }}
         />
 
+        {/* Aviso do PG (ponto levado para o programa) */}
+        {pgMode && (
+          <div className={`absolute top-12 left-1/2 -translate-x-1/2 z-40 text-xs font-bold px-3 py-1.5 rounded-lg shadow-lg pointer-events-none ${pgMsg ? "bg-emerald-600 text-white" : "bg-black/70 text-emerald-300"}`}>
+            {pgMsg ? `PG: ${pgMsg}` : "PG ligado: toque nos pontos do perfil da peça"}
+          </div>
+        )}
+
         {/* Precise Snapping Target Tooltip (Fixed at Bottom-Left as requested) */}
         {showMirinha && (hoveredPoint || (miraFixa && miraUltimoPonto)) && !isMeasuring && !isMeasuringAngle && (() => {
           const pt = (hoveredPoint || miraUltimoPonto) as HoveredPointInfo;
@@ -2598,7 +2728,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             onPointerCancel={miraFixa ? handleMiraPointerUp : undefined}
             className={`absolute ${posicionada ? "" : "bottom-4 left-4"} ${miraFixa ? "pointer-events-auto cursor-move touch-none" : "pointer-events-none"} bg-[#111116]/95 backdrop-blur border-2 border-cyan-400 rounded-xl p-4 font-mono shadow-2xl z-30 select-none min-w-[300px] max-w-[400px] flex flex-col gap-2 text-left animate-in fade-in duration-100`}>
             <div className="flex justify-between items-center border-b border-zinc-700/80 pb-1.5 text-zinc-300 font-bold text-xs tracking-wider">
-            <span>LINHA {pt.gcodeLine + 1}{miraFixa && <span className="ml-2 text-amber-400">📌 FIXA · arraste</span>}</span>
+            <span>{pt.partLayer ? pt.partLayer : `LINHA ${pt.gcodeLine + 1}`}{miraFixa && <span className="ml-2 text-amber-400">📌 FIXA · arraste</span>}</span>
               <span className="text-cyan-400 font-black text-xs flex items-center gap-1.5">
                 <Target className="w-4 h-4 text-cyan-400" /> MIRA
               </span>

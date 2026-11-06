@@ -196,54 +196,66 @@ export default function App() {
   });
   useEffect(() => { localStorage.setItem("cnc_mobileLayout", String(isMobileLayout)); }, [isMobileLayout]);
   useEffect(() => { localStorage.setItem("cnc_mobileView", mobileView); }, [mobileView]);
-  // Peça importada do STEP (perfil de torno) + ponto zero - fica salva no tablet
-  const [partProfile, setPartProfile] = useState<PartProfile | null>(() => {
+  // =================== PEÇA e BRUTO importados do STEP (perfil de torno) - ficam salvos no tablet
+  const loadJSON = <T,>(key: string, def: T): T => {
     try {
-      const v = localStorage.getItem("cnc_partProfile");
-      return v ? JSON.parse(v) : null;
+      const v = localStorage.getItem(key);
+      return v ? (JSON.parse(v) as T) : def;
     } catch {
-      return null;
+      return def;
     }
-  });
-  const [partZero, setPartZero] = useState<PartZeroConfig>(() => {
+  };
+  const saveJSON = (key: string, val: unknown) => {
     try {
-      const v = localStorage.getItem("cnc_partZero");
-      return v ? JSON.parse(v) : { face: "direita", offsetZ: 0 };
+      if (val === null || val === undefined) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(val));
     } catch {
-      return { face: "direita", offsetZ: 0 };
+      /* arquivo grande demais para guardar no tablet */
     }
-  });
+  };
+  const [partProfile, setPartProfile] = useState<PartProfile | null>(() => loadJSON<PartProfile | null>("cnc_partProfile", null));
+  const [stockProfile, setStockProfile] = useState<PartProfile | null>(() => loadJSON<PartProfile | null>("cnc_stockProfile", null));
+  const [partZero, setPartZero] = useState<PartZeroConfig>(() => loadJSON<PartZeroConfig>("cnc_partZero", { face: "direita", offsetZ: 0 }));
+  const [stockZero, setStockZero] = useState<PartZeroConfig>(() => loadJSON<PartZeroConfig>("cnc_stockZero", { face: "direita", offsetZ: 0 }));
+  // Cor das linhas: "auto" = cinza que se ajusta ao fundo | azul | laranja
+  const [layerColors, setLayerColors] = useState<{ peca: string; bruto: string }>(() => loadJSON("cnc_layerColors", { peca: "auto", bruto: "#f59e0b" }));
   const [showPart, setShowPart] = useState<boolean>(true);
+  const [showStock, setShowStock] = useState<boolean>(true);
+  const [stepTarget, setStepTarget] = useState<"peca" | "bruto">("peca"); // qual STEP o painel está mexendo
   const [showPartPanel, setShowPartPanel] = useState<boolean>(false);
   const [partError, setPartError] = useState<string | null>(null);
   const stepInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    try {
-      if (partProfile) localStorage.setItem("cnc_partProfile", JSON.stringify(partProfile));
-      else localStorage.removeItem("cnc_partProfile");
-    } catch {
-      /* peça grande demais para guardar no tablet */
-    }
-  }, [partProfile]);
-  useEffect(() => { localStorage.setItem("cnc_partZero", JSON.stringify(partZero)); }, [partZero]);
-  // Linhas da peça já no sistema do torno (X diâmetro, Z com o zero escolhido) para desenhar no gráfico
-  const partCurves = useMemo(
-    () => (partProfile && showPart ? profileToLathe(partProfile, partZero) : undefined),
-    [partProfile, partZero, showPart]
-  );
-  // Lê o arquivo STEP escolhido e monta o perfil
+  useEffect(() => saveJSON("cnc_partProfile", partProfile), [partProfile]);
+  useEffect(() => saveJSON("cnc_stockProfile", stockProfile), [stockProfile]);
+  useEffect(() => saveJSON("cnc_partZero", partZero), [partZero]);
+  useEffect(() => saveJSON("cnc_stockZero", stockZero), [stockZero]);
+  useEffect(() => saveJSON("cnc_layerColors", layerColors), [layerColors]);
+  // Linhas da peça e do bruto já no sistema do torno (X diâmetro, Z com o zero escolhido) para desenhar no gráfico
+  const partLayers = useMemo(() => {
+    const L: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[] = [];
+    if (stockProfile && showStock) L.push({ id: "bruto", label: "BRUTO", color: layerColors.bruto, dashed: true, curves: profileToLathe(stockProfile, stockZero) });
+    if (partProfile && showPart) L.push({ id: "peca", label: "PEÇA", color: layerColors.peca, dashed: false, curves: profileToLathe(partProfile, partZero) });
+    return L.length ? L : undefined;
+  }, [partProfile, stockProfile, partZero, stockZero, showPart, showStock, layerColors]);
+  // Lê o arquivo STEP escolhido e monta o perfil (vai para a PEÇA ou para o BRUTO, conforme a caixinha marcada)
   const handleStepFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = "";
     if (!file) return;
+    const target = stepTarget;
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const prof = extractLatheProfile(String(reader.result || ""), file.name);
         prof.name = file.name;
-        setPartProfile(prof);
+        if (target === "peca") {
+          setPartProfile(prof);
+          setShowPart(true);
+        } else {
+          setStockProfile(prof);
+          setShowStock(true);
+        }
         setPartError(null);
-        setShowPart(true);
         setShowPartPanel(true);
         if (simMode === "off") setSimMode("fixed");
       } catch (err: any) {
@@ -256,6 +268,31 @@ export default function App() {
       setShowPartPanel(true);
     };
     reader.readAsText(file);
+  };
+  // PG: ponto tocado no perfil da peça vira uma linha do programa (G01 X.. Z..;) logo abaixo da linha do cursor
+  const handleInsertProgramPoint = (x: number, z: number) => {
+    const f = (n: number) => {
+      let s = (Math.round(n * 1000) / 1000).toFixed(3).replace(/0+$/, "");
+      if (s.endsWith(".")) s += "0";
+      if (s === "-0.0") s = "0.0";
+      return s;
+    };
+    const line = `G01 X${f(x)} Z${f(z)};`;
+    const textarea = document.getElementById(`gcode-textarea-${activePaneIdx}`) as HTMLTextAreaElement | null;
+    const text = textarea ? textarea.value : editorTexts[activePaneIdx] || "";
+    const caret = textarea ? textarea.selectionEnd : text.length;
+    let eol = text.indexOf("\n", caret);
+    if (eol === -1) eol = text.length;
+    const sep = text.length ? "\n" : "";
+    const updated = text.slice(0, eol) + sep + line + text.slice(eol);
+    updateEditorText(updated, activePaneIdx);
+    const newCaret = eol + sep.length + line.length;
+    if (textarea) {
+      setTimeout(() => {
+        textarea.setSelectionRange(newCaret, newCaret);
+        textarea.dispatchEvent(new Event("scroll"));
+      }, 30);
+    }
   };
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
@@ -1265,91 +1302,157 @@ export default function App() {
       {isAuthenticated && (
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           
-      {/* Arquivo STEP (escondido) + Painel "Peça (STEP)" */}
+      {/* Arquivo STEP (escondido) + Painel "Peça / Bruto (STEP)" */}
       <input ref={stepInputRef} type="file" accept=".stp,.step,.STP,.STEP" onChange={handleStepFile} className="hidden" />
       {showPartPanel && (
-        <div className="fixed top-14 right-4 z-[200] w-80 max-w-[calc(100vw-2rem)] bg-white text-zinc-800 border border-zinc-300 rounded-xl shadow-2xl p-4 font-sans select-none">
+        <div className="fixed top-14 right-4 z-[200] w-80 max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto bg-white text-zinc-800 border border-zinc-300 rounded-xl shadow-2xl p-4 font-sans select-none">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-bold flex items-center gap-1.5">
-              <Paperclip className="w-4 h-4 text-sky-600" /> Peça (STEP)
+              <Paperclip className="w-4 h-4 text-sky-600" /> Peça e Bruto (STEP)
             </span>
             <button onClick={() => setShowPartPanel(false)} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" title="Fechar">
               <X className="w-4 h-4" />
             </button>
           </div>
-          {partError && (
-            <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-3">{partError}</div>
-          )}
-          {partProfile ? (
-            <>
-              <div className="text-xs mb-3 leading-relaxed">
-                <b className="block truncate" title={partProfile.name}>{partProfile.name}</b>
-                Ø máximo <b>{(partProfile.rMax * 2).toFixed(3)}</b> mm · comprimento <b>{(partProfile.aMax - partProfile.aMin).toFixed(3)}</b> mm
-                {partProfile.rMinBore !== null && (
-                  <> · furo Ø<b>{(partProfile.rMinBore * 2).toFixed(3)}</b></>
-                )}
-              </div>
-              {partProfile.facesUsed < partProfile.facesTotal && (
-                <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3">
-                  {partProfile.facesTotal - partProfile.facesUsed} face(s) que não são de torno (rasgos, sextavados, furos fora do centro) não aparecem no perfil.
-                </div>
-              )}
-              <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Ponto zero (Z0)</div>
-              <div className="grid grid-cols-2 gap-2 mb-2">
-                {([["direita", "Face direita"], ["esquerda", "Face esquerda (peça virada)"]] as const).map(([v, label]) => (
-                  <button
-                    key={v}
-                    onClick={() => setPartZero((z) => ({ ...z, face: v }))}
-                    className={`px-2 py-2 rounded-lg border text-xs font-semibold transition ${partZero.face === v ? "border-sky-500 ring-2 ring-sky-200 text-sky-800" : "border-zinc-300 hover:border-zinc-400"}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <label className="flex items-center justify-between gap-2 text-xs mb-3">
-                <span className="text-zinc-600">Deslocar o zero em Z (mm)</span>
-                <input
-                  key={partProfile.name + partZero.face}
-                  type="number"
-                  step="0.1"
-                  defaultValue={partZero.offsetZ}
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value.replace(",", "."));
-                    setPartZero((z) => ({ ...z, offsetZ: isNaN(v) ? 0 : v }));
-                  }}
-                  className="w-20 border border-zinc-300 rounded px-1.5 py-1 text-right font-mono focus:outline-none focus:border-sky-500"
-                />
-              </label>
-              <label className="flex items-center gap-2 text-xs mb-3 cursor-pointer">
-                <input type="checkbox" checked={showPart} onChange={(e) => setShowPart(e.target.checked)} className="accent-sky-600" />
-                Mostrar a peça no gráfico
-              </label>
-              <div className="flex gap-2">
-                <button onClick={() => stepInputRef.current?.click()} className="flex-1 text-xs font-semibold border border-zinc-300 rounded-lg px-2 py-1.5 hover:bg-zinc-100">
-                  Trocar arquivo
-                </button>
+
+          {/* Caixinhas: escolher se o STEP é da PEÇA ou do BRUTO */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            {(["peca", "bruto"] as const).map((id) => {
+              const loaded = id === "peca" ? !!partProfile : !!stockProfile;
+              const sel = stepTarget === id;
+              return (
                 <button
+                  key={id}
                   onClick={() => {
-                    setPartProfile(null);
+                    setStepTarget(id);
                     setPartError(null);
                   }}
-                  className="flex-1 text-xs font-semibold border border-rose-300 text-rose-700 rounded-lg px-2 py-1.5 hover:bg-rose-50"
+                  className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border text-sm font-bold transition ${sel ? "border-sky-500 ring-2 ring-sky-200" : "border-zinc-300 hover:border-zinc-400"}`}
                 >
-                  Tirar a peça
+                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${sel ? "bg-sky-600 border-sky-600 text-white" : "border-zinc-400"}`}>
+                    {sel && <Check className="w-3 h-3" />}
+                  </span>
+                  <span className="flex flex-col items-start leading-tight">
+                    {id === "peca" ? "Peça" : "Bruto"}
+                    <span className={`text-[10px] font-semibold ${loaded ? "text-emerald-600" : "text-zinc-400"}`}>{loaded ? "● carregado" : "vazio"}</span>
+                  </span>
                 </button>
-              </div>
-            </>
-          ) : (
-            <button
-              onClick={() => stepInputRef.current?.click()}
-              className="w-full text-sm font-bold bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-2.5 flex items-center justify-center gap-2"
-            >
-              <Paperclip className="w-4 h-4" /> Anexar arquivo STEP (.stp / .step)
-            </button>
-          )}
+              );
+            })}
+          </div>
+
+          {partError && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-3">{partError}</div>}
+
+          {(() => {
+            const isPeca = stepTarget === "peca";
+            const prof = isPeca ? partProfile : stockProfile;
+            const zero = isPeca ? partZero : stockZero;
+            const setZero = isPeca ? setPartZero : setStockZero;
+            const shown = isPeca ? showPart : showStock;
+            const setShown = isPeca ? setShowPart : setShowStock;
+            const doNome = isPeca ? "da peça" : "do bruto";
+            const oNome = isPeca ? "a peça" : "o bruto";
+            const colorNow = isPeca ? layerColors.peca : layerColors.bruto;
+            if (!prof) {
+              return (
+                <button
+                  onClick={() => stepInputRef.current?.click()}
+                  className="w-full text-sm font-bold bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-2.5 flex items-center justify-center gap-2"
+                >
+                  <Paperclip className="w-4 h-4" /> Anexar STEP {doNome}
+                </button>
+              );
+            }
+            return (
+              <>
+                <div className="text-xs mb-3 leading-relaxed">
+                  <b className="block truncate" title={prof.name}>{prof.name}</b>
+                  Ø máximo <b>{(prof.rMax * 2).toFixed(3)}</b> mm · comprimento <b>{(prof.aMax - prof.aMin).toFixed(3)}</b> mm
+                  {prof.rMinBore !== null && (
+                    <>
+                      {" "}· furo Ø<b>{(prof.rMinBore * 2).toFixed(3)}</b>
+                    </>
+                  )}
+                </div>
+                {prof.facesUsed < prof.facesTotal && (
+                  <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3">
+                    {prof.facesTotal - prof.facesUsed} face(s) que não são de torno (rasgos, sextavados, furos fora do centro) não aparecem no perfil.
+                  </div>
+                )}
+                <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Ponto zero (Z0) {doNome}</div>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  {([["direita", "Face direita"], ["esquerda", "Face esquerda (virada)"]] as const).map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setZero((z) => ({ ...z, face: v }))}
+                      className={`px-2 py-2 rounded-lg border text-xs font-semibold transition ${zero.face === v ? "border-sky-500 ring-2 ring-sky-200 text-sky-800" : "border-zinc-300 hover:border-zinc-400"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="flex items-center justify-between gap-2 text-xs mb-3">
+                  <span className="text-zinc-600">Deslocar o zero em Z (mm)</span>
+                  <input
+                    key={stepTarget + prof.name + zero.face}
+                    type="number"
+                    step="0.1"
+                    defaultValue={zero.offsetZ}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value.replace(",", "."));
+                      setZero((z) => ({ ...z, offsetZ: isNaN(v) ? 0 : v }));
+                    }}
+                    className="w-20 border border-zinc-300 rounded px-1.5 py-1 text-right font-mono focus:outline-none focus:border-sky-500"
+                  />
+                </label>
+                {/* Cor das linhas (3 caixinhas) */}
+                <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Cor das linhas {doNome}</div>
+                <div className="flex items-center gap-2 mb-3">
+                  {[
+                    { v: "auto", label: "Cinza", show: "#94a3b8" },
+                    { v: "#0ea5e9", label: "Azul", show: "#0ea5e9" },
+                    { v: "#f59e0b", label: "Laranja", show: "#f59e0b" },
+                  ].map((c) => {
+                    const sel = colorNow === c.v;
+                    return (
+                      <button
+                        key={c.v}
+                        onClick={() => setLayerColors((prev) => ({ ...prev, [isPeca ? "peca" : "bruto"]: c.v }))}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-semibold transition ${sel ? "border-sky-500 ring-2 ring-sky-200" : "border-zinc-300 hover:border-zinc-400"}`}
+                      >
+                        <span className="w-4 h-4 rounded border border-zinc-400 flex items-center justify-center text-white" style={{ background: c.show }}>
+                          {sel && <Check className="w-3 h-3" />}
+                        </span>
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <label className="flex items-center gap-2 text-xs mb-3 cursor-pointer">
+                  <input type="checkbox" checked={shown} onChange={(e) => setShown(e.target.checked)} className="accent-sky-600" />
+                  Mostrar {oNome} no gráfico
+                </label>
+                <div className="flex gap-2">
+                  <button onClick={() => stepInputRef.current?.click()} className="flex-1 text-xs font-semibold border border-zinc-300 rounded-lg px-2 py-1.5 hover:bg-zinc-100">
+                    Trocar arquivo
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (isPeca) setPartProfile(null);
+                      else setStockProfile(null);
+                      setPartError(null);
+                    }}
+                    className="flex-1 text-xs font-semibold border border-rose-300 text-rose-700 rounded-lg px-2 py-1.5 hover:bg-rose-50"
+                  >
+                    Tirar {oNome}
+                  </button>
+                </div>
+              </>
+            );
+          })()}
           <p className="text-[10px] text-zinc-500 leading-snug mt-3">
-            O perfil é tirado direto das medidas do CAD (diâmetros, faces, chanfros e raios). As linhas da peça aparecem no
-            gráfico 2D, por baixo do caminho da ferramenta. Feito para peças de torno.
+            O perfil é tirado direto das medidas do CAD (diâmetros, faces, chanfros e raios). A peça aparece em linha cheia e o bruto em linha
+            tracejada. A Mira mede as linhas da peça, e com o botão PG do gráfico você toca nos pontos da peça e eles viram linhas do programa.
           </p>
         </div>
       )}
@@ -1520,16 +1623,16 @@ export default function App() {
 
                 {/* Peça (STEP): anexar o desenho 3D da peça */}
                 <button
-                  onClick={() => (partProfile ? setShowPartPanel((v) => !v) : stepInputRef.current?.click())}
+                  onClick={() => setShowPartPanel((v) => !v)}
                   className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
-                    partProfile
+                    partProfile || stockProfile
                       ? "bg-sky-500/15 text-sky-300 border-sky-500/50"
                       : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
                   }`}
                   title="Peça (STEP): anexar o desenho 3D da peça para ver o perfil no gráfico"
                 >
                   <Paperclip className="w-3 h-3" />
-                  <span className="hidden md:inline">{partProfile ? "Peça" : "STEP"}</span>
+                  <span className="hidden md:inline">{partProfile || stockProfile ? "Peça" : "STEP"}</span>
                 </button>
                 {/* Layout Mobile (tablet / celular) - liga/desliga */}
                 <button
@@ -1726,16 +1829,16 @@ export default function App() {
 
           {/* Peça (STEP): anexar o desenho 3D da peça */}
           <button
-            onClick={() => (partProfile ? setShowPartPanel((v) => !v) : stepInputRef.current?.click())}
+            onClick={() => setShowPartPanel((v) => !v)}
             className={`text-xs font-bold px-3 py-2 rounded-lg border transition flex items-center gap-1.5 ${
-              partProfile
+              partProfile || stockProfile
                 ? "bg-sky-500/15 text-sky-300 border-sky-500/50"
                 : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
             }`}
             title="Peça (STEP): anexar o desenho 3D da peça para ver o perfil no gráfico"
           >
             <Paperclip className="w-4 h-4" />
-            {partProfile ? "Peça" : "STEP"}
+            {partProfile || stockProfile ? "Peça" : "STEP"}
           </button>
           {/* Layout Mobile (tablet / celular) - liga/desliga */}
           <button
@@ -2240,7 +2343,8 @@ export default function App() {
                       isHighContrast={isHighContrast}
                       onError={setDiagnosticError}
                 bgColor={graphBg || undefined}
-                partCurves={partCurves}
+                partLayers={partLayers}
+                onInsertPoint={handleInsertProgramPoint}
                     />
                   )}
                 </div>
@@ -2293,7 +2397,8 @@ export default function App() {
                       setIsDriverActive={setIsDriverActive}
                       onError={setDiagnosticError}
                 bgColor={graphBg || undefined}
-                partCurves={partCurves}
+                partLayers={partLayers}
+                onInsertPoint={handleInsertProgramPoint}
                     />
                   )}
                 </div>
