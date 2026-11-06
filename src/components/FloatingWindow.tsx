@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, Move, Maximize2, Minimize2 } from "lucide-react";
+import { X, Move, Maximize2, Minimize2, Minus } from "lucide-react";
 
 interface FloatingWindowProps {
   title: string;
@@ -34,6 +34,14 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   const [size, setSize] = useState({ width: defaultWidth, height: defaultHeight });
   const [isDragging, setIsDragging] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  // Minimizar: a janela some da tela mas continua aberta por trás (guarda tudo exatamente onde você estava)
+  const [isMinimized, setIsMinimized] = useState(false);
+  const pillIndex = Math.max(0, ["assistant", "admin", "rpm", "feed", "thread", "drilling", "polygon", "tolerance", "ciclos"].indexOf(id));
+  // Se a janela for chamada de novo pelo botão do menu enquanto está minimizada, ela volta sozinha
+  useEffect(() => {
+    if (isMinimized && activeWindowId === id) setIsMinimized(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWindowId]);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +120,7 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
   const isActive = activeWindowId === id;
 
   return (
+    <>
     <div
       ref={windowRef}
       onPointerDown={() => {
@@ -136,6 +145,8 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
         maxHeight: "100vh",
         backgroundColor: "#17171e",
         zIndex: isActive ? (isMaximized ? 99999 : 99998) : (isMaximized ? 90 : 80),
+        visibility: isMinimized ? "hidden" : "visible",
+        pointerEvents: isMinimized ? "none" : undefined,
       }}
     >
       {/* Window Header / Drag Handle */}
@@ -157,6 +168,18 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
             {isMaximized ? "✥ TELA INTEIRA ATIVADA" : "✥ ARRASTE PARA MOVER | 🎚 CANTO PARA REDIMENSIONAR"}
           </span>
           
+          {/* Minimizar: esconde a janela para ver o programa e volta depois exatamente onde estava */}
+          <button
+            onClick={() => {
+              setIsMinimized(true);
+              onFocus("");
+            }}
+            className="text-zinc-400 hover:text-amber-300 p-1 hover:bg-zinc-800/60 rounded-md transition"
+            title="Minimizar (ver o programa e voltar depois exatamente onde estava)"
+          >
+            <Minus className="w-4 h-4" />
+          </button>
+
           {/* Maximize Toggle Button */}
           <button
             onClick={() => setIsMaximized(!isMaximized)}
@@ -185,5 +208,21 @@ export const FloatingWindow: React.FC<FloatingWindowProps> = ({
         {children}
       </div>
     </div>
+      {/* Botão flutuante da janela minimizada: toque para voltar */}
+      {isMinimized && (
+        <button
+          onClick={() => {
+            setIsMinimized(false);
+            onFocus(id);
+          }}
+          className="fixed z-[99999] flex items-center gap-2 bg-[#17171e] border border-cyan-400/70 text-cyan-300 text-xs font-bold px-3 py-2 rounded-full shadow-2xl hover:bg-cyan-950/60 transition"
+          style={{ right: 16, bottom: 16 + pillIndex * 48 }}
+          title="Voltar para a janela, exatamente onde você estava"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+          <span className="max-w-[240px] truncate">{title}</span>
+        </button>
+      )}
+    </>
   );
 };

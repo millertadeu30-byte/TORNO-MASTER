@@ -22,6 +22,7 @@ import {
   Moon,
   Target,
 } from "lucide-react";
+import { ResizableBox } from "./ResizableBox";
 
 interface CNCSimulator3DProps {
   gcodeText: string;
@@ -29,6 +30,7 @@ interface CNCSimulator3DProps {
   onLineChange: (lineIdx: number) => void;
   isHighContrast?: boolean;
   onClose?: () => void;
+  bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
 }
 
 interface Point3D {
@@ -47,6 +49,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   onLineChange,
   isHighContrast = false,
   onClose,
+  bgColor,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -79,7 +82,19 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const [showAxisZ, setShowAxisZ] = useState<boolean>(true);
   const [showAxisC, setShowAxisC] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
-  const [showMirinha, setShowMirinha] = useState<boolean>(true);
+  const [showMirinha, setShowMirinha] = useState<boolean>(() => localStorage.getItem("cnc3d_showMirinha") === "true");
+  // Painéis sobre o gráfico (DRO, legenda e caixas de eixos) - começam ocultos para a tela ficar limpa
+  const [showPaineis, setShowPaineis] = useState<boolean>(() => localStorage.getItem("cnc3d_showPaineis") === "true");
+  useEffect(() => { localStorage.setItem("cnc3d_showMirinha", String(showMirinha)); }, [showMirinha]);
+  useEffect(() => { localStorage.setItem("cnc3d_showPaineis", String(showPaineis)); }, [showPaineis]);
+  // Se uma cor de fundo foi escolhida em "Aparência", ajusta o tema (linhas/grade) para manter contraste
+  useEffect(() => {
+    if (!bgColor) return;
+    const h = bgColor.replace("#", "");
+    if (h.length !== 6) return;
+    const lum = 0.299 * parseInt(h.slice(0, 2), 16) + 0.587 * parseInt(h.slice(2, 4), 16) + 0.114 * parseInt(h.slice(4, 6), 16);
+    setIsDarkTheme(lum < 140);
+  }, [bgColor]);
 
   // Hover & Mirinha Screen Overlay State
   const [hoveredPoint, setHoveredPoint] = useState<(Point3D & { idx: number }) | null>(null);
@@ -287,7 +302,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
     // 1. Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(isDarkTheme ? 0x0b0b12 : 0xf1f5f9);
+    scene.background = new THREE.Color(bgColor || (isDarkTheme ? 0x0b0b12 : 0xf1f5f9));
     sceneRef.current = scene;
 
     // 2. Cameras (Perspective for 3D Iso, Orthographic for 2D Frente/Lado/Topo)
@@ -483,8 +498,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   // Update scene background color when theme toggles
   useEffect(() => {
     if (!sceneRef.current) return;
-    sceneRef.current.background = new THREE.Color(isDarkTheme ? 0x0b0b12 : 0xf1f5f9);
-  }, [isDarkTheme]);
+    sceneRef.current.background = new THREE.Color(bgColor || (isDarkTheme ? 0x0b0b12 : 0xf1f5f9));
+  }, [isDarkTheme, bgColor]);
 
   // Update Grid & Axes (X, Y, Z, C) visibility independently
   useEffect(() => {
@@ -923,11 +938,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
           <div>
             <h3 className="font-bold text-xs tracking-wide uppercase text-amber-300 flex items-center gap-1.5">
               <span>Simulador Gráfico 3D</span>
-              <span className="bg-cyan-500/20 text-cyan-400 text-[9px] px-1.5 py-0.2 rounded border border-cyan-500/30">
+              <span className="hidden xl:inline bg-cyan-500/20 text-cyan-400 text-[9px] px-1.5 py-0.2 rounded border border-cyan-500/30">
                 4 EIXOS (X, Y, Z, C)
               </span>
             </h3>
-            <p className="text-[10px] text-zinc-400 font-sans">
+            <p className="hidden xl:block text-[10px] text-zinc-400 font-sans">
               Centro de Usinagem & Torno com Ferramenta Acionada
             </p>
           </div>
@@ -997,6 +1012,20 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
               C
             </button>
           </div>
+
+          {/* Painéis (DRO / legenda / caixas de eixos) - ligar só quando precisar */}
+          <button
+            onClick={() => setShowPaineis(!showPaineis)}
+            className={`p-1 px-2 rounded-lg border text-[10px] font-sans font-bold transition flex items-center gap-1 cursor-pointer ${
+              showPaineis
+                ? "bg-cyan-950/60 text-cyan-300 border-cyan-500/50"
+                : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300"
+            }`}
+            title="Exibir / Ocultar painéis sobre o gráfico (Posição DRO, legenda e caixas de eixos)"
+          >
+            <Activity className="w-3 h-3" />
+            <span className="hidden sm:inline">Painéis</span>
+          </button>
 
           <button
             onClick={() => setShowGrid(!showGrid)}
@@ -1110,9 +1139,10 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         )}
 
         {/* Painel Esquerdo Fixo: DRO + Caixa de Posição da Mirinha (Foto 2) */}
-        <div className="absolute top-3 left-3 z-10 flex flex-col gap-2.5 pointer-events-none select-none min-w-[195px] max-w-[230px]">
+        {(showPaineis || showMirinha) && (
+        <ResizableBox id="sim3d_painel_dro" anchor="tl" className="absolute top-3 left-3 z-10 flex flex-col gap-2.5 pointer-events-none select-none min-w-[195px] max-w-[230px]">
           {/* DRO Overlay (Leitura de Posição dos 4 Eixos + Linha Atual) */}
-          {(() => {
+          {showPaineis && (() => {
             const curPt = currentPoint || { x: 0, y: 0, z: 0, c: 0, line: 0, rawText: "" };
             const cx = typeof curPt.x === "number" && !isNaN(curPt.x) ? curPt.x : 0;
             const cy = typeof curPt.y === "number" && !isNaN(curPt.y) ? curPt.y : 0;
@@ -1212,11 +1242,12 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
               </div>
             );
           })()}
-        </div>
+        </ResizableBox>
+        )}
 
         {/* Floating 3D Measurement Result Box */}
         {isMeasuring && (
-          <div className="absolute top-3 right-3 z-20 bg-[#111118]/95 border border-pink-500/70 rounded-xl p-3 font-mono text-[11px] shadow-2xl select-none w-64 text-left">
+          <ResizableBox id="sim3d_regua" anchor="tr" className="absolute top-3 right-3 z-20 bg-[#111118]/95 border border-pink-500/70 rounded-xl p-3 font-mono text-[11px] shadow-2xl select-none w-64 text-left">
             <div className="flex justify-between items-center border-b border-zinc-800 pb-1.5 mb-2 font-bold text-[10px] tracking-wider text-pink-400">
               <span className="flex items-center gap-1.5">
                 <Ruler className="w-3.5 h-3.5 animate-pulse text-pink-400" />
@@ -1292,12 +1323,12 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
                 Marcar P1 (Posição Atual L{currentPoint.line + 1})
               </button>
             )}
-          </div>
+          </ResizableBox>
         )}
 
         {/* Floating 3D Angular Measurement Result Box */}
         {isMeasuringAngle && (
-          <div className="absolute top-3 right-3 z-20 bg-[#111118]/95 border border-amber-500/70 rounded-xl p-3 font-mono text-[11px] shadow-2xl select-none w-64 text-left">
+          <ResizableBox id="sim3d_angulo" anchor="tr" className="absolute top-3 right-3 z-20 bg-[#111118]/95 border border-amber-500/70 rounded-xl p-3 font-mono text-[11px] shadow-2xl select-none w-64 text-left">
             <div className="flex justify-between items-center border-b border-zinc-800 pb-1.5 mb-2 font-bold text-[10px] tracking-wider text-amber-400">
               <span className="flex items-center gap-1.5">
                 <Compass className="w-3.5 h-3.5 animate-pulse text-amber-400" />
@@ -1363,15 +1394,18 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
                 Marcar Ponto Inicial V1
               </button>
             )}
-          </div>
+          </ResizableBox>
         )}
 
         {/* 3D Legend Controls Instruction */}
+        {showPaineis && (
         <div className="absolute bottom-3 left-3 z-10 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-lg text-[9px] text-zinc-400 font-mono border border-zinc-800/60 pointer-events-none">
           🖱️ Botão Esquerdo + Arrastar: Rotacionar 3D | Botão Direito / Shift: Mover | Scroll: Zoom
         </div>
+        )}
 
         {/* Ticar e Ocultar Eixos Individuais (X, Y, Z, C) e Grade (Fotos 2 & 3) */}
+        {showPaineis && (
         <div className="absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-2.5 bg-[#0f0f16]/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-zinc-800/90 shadow-2xl text-[10px] font-mono select-none">
           <label className="flex items-center gap-1 cursor-pointer text-rose-400 hover:text-rose-300 transition" title="Exibir/Ocultar Eixo X">
             <input
@@ -1437,6 +1471,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
             <span className="font-bold">🎯 Mira</span>
           </label>
         </div>
+        )}
       </div>
 
       {/* Bottom Control Playback & Tools Bar (Mesmas funções do 2D - Foto 2) */}

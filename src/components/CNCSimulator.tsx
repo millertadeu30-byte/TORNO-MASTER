@@ -1,7 +1,9 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge, Lock, Unlock } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
-import { calculateCycleTimeDetailed, formatCycleTime } from "../utils/cycleTimeCalculator";
+import { calculateCycleTimeDetailed, formatCycleTime, loadMachineParams, saveMachineParams, MachineParams } from "../utils/cycleTimeCalculator";
+import { ResizableBox } from "./ResizableBox";
+import { CycleTimePanel } from "./CycleTimePanel";
 
 interface CNCSimulatorProps {
   gcodeText: string;
@@ -13,6 +15,8 @@ interface CNCSimulatorProps {
   setIsDriverActive: (val: boolean) => void;
   isHighContrast: boolean;
   onError?: (error: string) => void;
+  bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
+  partCurves?: { x: number; z: number }[][]; // Perfil da peça importada do STEP (X em diâmetro, Z do programa)
 }
 
 export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
@@ -25,6 +29,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   setIsDriverActive,
   isHighContrast,
   onError,
+  bgColor,
+  partCurves,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -44,6 +50,14 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
   const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
+  // Se uma cor de fundo foi escolhida em "Aparência", ajusta linhas/textos do gráfico para manter contraste
+  useEffect(() => {
+    if (!bgColor) return;
+    const h = bgColor.replace("#", "");
+    if (h.length !== 6) return;
+    const lum = 0.299 * parseInt(h.slice(0, 2), 16) + 0.587 * parseInt(h.slice(2, 4), 16) + 0.114 * parseInt(h.slice(4, 6), 16);
+    setIsThemeDark(lum < 140);
+  }, [bgColor]);
 
   // Measuring overlay states
   const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
@@ -78,6 +92,50 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     localStorage.setItem("cnc_showMirinha2D", String(showMirinha));
   }, [showMirinha]);
 
+  // MIRA FIXA: 1º clique no botão Mira = painel fica FIXO na tela e pode ser arrastado; 2º clique = desliga
+  const [miraFixa, setMiraFixa] = useState<boolean>(() => localStorage.getItem("cnc_miraFixa2D") === "true");
+  const [miraPos, setMiraPos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const v = localStorage.getItem("cnc_miraPos2D");
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [miraUltimoPonto, setMiraUltimoPonto] = useState<HoveredPointInfo | null>(null);
+  const miraDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => { localStorage.setItem("cnc_miraFixa2D", String(miraFixa)); }, [miraFixa]);
+  useEffect(() => { if (miraPos) localStorage.setItem("cnc_miraPos2D", JSON.stringify(miraPos)); }, [miraPos]);
+  // Guarda o último ponto mirado, para o painel fixo continuar mostrando quando o dedo/mouse sai do gráfico
+  useEffect(() => { if (hoveredPoint) setMiraUltimoPonto(hoveredPoint); }, [hoveredPoint]);
+
+  // Arrastar o painel fixo da Mira para qualquer lugar do gráfico
+  const handleMiraPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const box = e.currentTarget;
+    const parent = box.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const br = box.getBoundingClientRect();
+    miraDragRef.current = { dx: e.clientX - br.left, dy: e.clientY - br.top };
+    if (!miraPos) setMiraPos({ x: br.left - pr.left, y: br.top - pr.top });
+    try { box.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.stopPropagation();
+  };
+  const handleMiraPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!miraDragRef.current) return;
+    const parent = e.currentTarget.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const x = Math.max(0, Math.min(pr.width - 40, e.clientX - pr.left - miraDragRef.current.dx));
+    const y = Math.max(0, Math.min(pr.height - 30, e.clientY - pr.top - miraDragRef.current.dy));
+    setMiraPos({ x, y });
+    e.stopPropagation();
+  };
+  const handleMiraPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    miraDragRef.current = null;
+    e.stopPropagation();
+  };
+
   // Playback Driver State
   const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
   const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
@@ -106,9 +164,17 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   }, [isCycleTimeLocked]);
 
   // Compute Base Physical Cycle Time and Calibrated Adjusted Cycle Time
+  // Parâmetros da máquina (rápidos, trocas, troca de peça...) - salvos no tablet
+  const [machineParams, setMachineParams] = useState<MachineParams>(() => loadMachineParams());
+  const [showCyclePanel, setShowCyclePanel] = useState<boolean>(false);
+  const handleChangeMachineParams = (p: MachineParams) => {
+    setMachineParams(p);
+    saveMachineParams(p);
+  };
+
   const cycleTimeDetails = useMemo(() => {
-    return calculateCycleTimeDetailed(gcodeText);
-  }, [gcodeText]);
+    return calculateCycleTimeDetailed(gcodeText, undefined, undefined, machineParams);
+  }, [gcodeText, machineParams]);
 
   const adjustedCycleTimeSec = useMemo(() => {
     return cycleTimeDetails.totalSeconds * (cycleTimeFactor / 100);
@@ -1441,6 +1507,27 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     ctx.fill();
     ctx.stroke();
 
+    // Perfil da PEÇA importada do STEP (linhas da peça real, por baixo do caminho da ferramenta)
+    if (partCurves && partCurves.length) {
+      ctx.save();
+      ctx.strokeStyle = isThemeDark ? "rgba(203, 213, 225, 0.9)" : "rgba(51, 65, 85, 0.9)";
+      ctx.lineWidth = 1.6;
+      for (const sgn of [1, -1]) {
+        ctx.globalAlpha = sgn === 1 ? 1 : 0.4; // metade de baixo (espelho) mais clara
+        partCurves.forEach((c) => {
+          ctx.beginPath();
+          c.forEach((p, i) => {
+            const px = originX + p.z * zoom * zDirSign;
+            const py = originY - sgn * (p.x / 2) * zoom;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+          ctx.stroke();
+        });
+      }
+      ctx.restore();
+    }
+
     // Helper: draw arc curves on canvas
     const drawArcCurve = (
       x1: number,
@@ -1948,6 +2035,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   }, [
     canvasSize,
     gcodeText,
+    partCurves,
     zoom,
     panX,
     panY,
@@ -2285,6 +2373,17 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             : "bg-zinc-50 border-zinc-200 text-zinc-800"
       }`}
     >
+      {/* Painel de detalhes do Tempo de Ciclo (abre ao tocar no tempo) */}
+      {showCyclePanel && (
+        <CycleTimePanel
+          details={cycleTimeDetails}
+          factorPercent={cycleTimeFactor}
+          params={machineParams}
+          onChangeParams={handleChangeMachineParams}
+          onClose={() => setShowCyclePanel(false)}
+        />
+      )}
+
       {/* Title Bar */}
       <div className={`flex flex-wrap justify-between items-center px-3 py-1.5 border-b gap-2 min-w-0 transition-colors duration-300 ${
         isHighContrast ? "bg-zinc-200 border-black" : isThemeDark ? "bg-[#1e1e24] border-zinc-800" : "bg-zinc-100 border-zinc-200"
@@ -2300,7 +2399,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           {/* Discrete Cycle Time Display + Potentiometer */}
           <div className="flex flex-wrap items-center gap-1.5 md:gap-2 bg-[#101016] border border-amber-500/30 rounded-lg px-2 py-0.5 text-xs font-mono shrink-0">
             <div 
-              className="flex items-center gap-1.5 text-amber-400 font-bold cursor-help shrink-0" 
+            onClick={() => setShowCyclePanel(true)}
+            className="flex items-center gap-1.5 text-amber-400 font-bold cursor-pointer hover:brightness-125 shrink-0"
               title={`Tempo de Ciclo Calibrado: ${formattedCycleTimeTenths}\n• Usinagem em Corte (G1/G2/G3/Ciclos): ${(cycleTimeDetails.feedSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Movimentos Rápidos (G00): ${(cycleTimeDetails.rapidSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Trocas e Pausas (T/M/G4): ${(cycleTimeDetails.delaySeconds * (cycleTimeFactor / 100)).toFixed(1)}s`}
             >
               <Clock size={13} className="text-amber-400 animate-pulse shrink-0" />
@@ -2388,16 +2488,23 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         <div className="flex flex-wrap gap-1.5 items-center shrink-0">
           {/* Mira 2D ON/OFF Toggle */}
           <button
-            onClick={() => setShowMirinha(!showMirinha)}
+            onClick={() => {
+              // Ciclo do botão: MIRA ON -> MIRA FIXA (painel fixo e arrastável) -> MIRA OFF -> MIRA ON
+              if (showMirinha && !miraFixa) setMiraFixa(true);
+              else if (showMirinha && miraFixa) {
+                setMiraFixa(false);
+                setShowMirinha(false);
+              } else setShowMirinha(true);
+            }}
             className={`px-2 py-1 text-[10px] font-bold rounded border uppercase flex items-center gap-1.5 transition cursor-pointer ${
               showMirinha
                 ? "bg-cyan-950/50 text-cyan-400 border-cyan-400/60 shadow-[0_0_8px_rgba(0,243,255,0.2)]"
                 : "bg-zinc-800/60 border-zinc-700 text-zinc-500 hover:text-zinc-300"
             }`}
-            title="Ligar/Desligar Mira de Precisão no Simulador 2D"
+            title="Mira: 1º toque = painel FIXO (arraste para onde quiser) | 2º toque = desliga | 3º toque = liga de novo"
           >
             <Target className="w-3.5 h-3.5" />
-            <span>Mira {showMirinha ? "ON" : "OFF"}</span>
+            <span>Mira {!showMirinha ? "OFF" : miraFixa ? "📌 FIXA" : "ON"}</span>
           </button>
 
           {/* Theme switcher */}
@@ -2466,38 +2573,50 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={() => setHoveredPoint(null)}
+          onMouseLeave={(e) => { if ((e.relatedTarget as HTMLElement | null)?.closest?.("[data-resize-handle]")) return; setHoveredPoint(null); }}
           onClick={handleCanvasClick}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           onTouchCancel={handleTouchEnd}
           className="w-full h-full block touch-none"
-          style={{ touchAction: 'none' }}
+          style={{ touchAction: 'none', ...(bgColor ? { background: bgColor } : {}) }}
         />
 
         {/* Precise Snapping Target Tooltip (Fixed at Bottom-Left as requested) */}
-        {showMirinha && hoveredPoint && !isMeasuring && !isMeasuringAngle && (
-          <div className="absolute bottom-4 left-4 pointer-events-none bg-[#111116]/95 backdrop-blur border-2 border-cyan-400 rounded-xl p-4 font-mono shadow-2xl z-30 select-none min-w-[300px] max-w-[400px] flex flex-col gap-2 text-left animate-in fade-in duration-100">
+        {showMirinha && (hoveredPoint || (miraFixa && miraUltimoPonto)) && !isMeasuring && !isMeasuringAngle && (() => {
+          const pt = (hoveredPoint || miraUltimoPonto) as HoveredPointInfo;
+          const posicionada = miraFixa && miraPos;
+          return (
+          <ResizableBox
+            id="sim2d_mira"
+            anchor={posicionada ? "tl" : "bl"}
+            style={posicionada ? { left: miraPos!.x, top: miraPos!.y } : undefined}
+            onPointerDown={miraFixa ? handleMiraPointerDown : undefined}
+            onPointerMove={miraFixa ? handleMiraPointerMove : undefined}
+            onPointerUp={miraFixa ? handleMiraPointerUp : undefined}
+            onPointerCancel={miraFixa ? handleMiraPointerUp : undefined}
+            className={`absolute ${posicionada ? "" : "bottom-4 left-4"} ${miraFixa ? "pointer-events-auto cursor-move touch-none" : "pointer-events-none"} bg-[#111116]/95 backdrop-blur border-2 border-cyan-400 rounded-xl p-4 font-mono shadow-2xl z-30 select-none min-w-[300px] max-w-[400px] flex flex-col gap-2 text-left animate-in fade-in duration-100`}>
             <div className="flex justify-between items-center border-b border-zinc-700/80 pb-1.5 text-zinc-300 font-bold text-xs tracking-wider">
-              <span>LINHA {hoveredPoint.gcodeLine + 1}</span>
+            <span>LINHA {pt.gcodeLine + 1}{miraFixa && <span className="ml-2 text-amber-400">📌 FIXA · arraste</span>}</span>
               <span className="text-cyan-400 font-black text-xs flex items-center gap-1.5">
                 <Target className="w-4 h-4 text-cyan-400" /> MIRA
               </span>
             </div>
             <div className="text-white font-sans font-black py-0.5 text-base tracking-wide truncate max-w-[370px]">
-              {hoveredPoint.gcodeText}
+              {pt.gcodeText}
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm mt-1 border-t border-zinc-700/80 pt-2 text-zinc-300 font-bold">
-              <div>X: <span className="text-[#39ff14] font-black text-base ml-1">Ø {hoveredPoint.latheX.toFixed(3)}</span></div>
-              <div>Z: <span className="text-orange-400 font-black text-base ml-1">{hoveredPoint.latheZ.toFixed(3)}</span></div>
+              <div>X: <span className="text-[#39ff14] font-black text-base ml-1">Ø {pt.latheX.toFixed(3)}</span></div>
+              <div>Z: <span className="text-orange-400 font-black text-base ml-1">{pt.latheZ.toFixed(3)}</span></div>
             </div>
-          </div>
-        )}
+          </ResizableBox>
+          );
+        })()}
 
         {/* Real-time coordinates HUD overlays */}
         {!isMeasuring && !isMeasuringAngle && (
-          <div className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
+          <ResizableBox id="sim2d_coordenadas" anchor="tl" className="absolute top-3 left-3 bg-black/80 backdrop-blur border border-zinc-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-zinc-400 flex flex-col gap-0.5">
             <div className="flex justify-between gap-4">
               <span>DIÂMETRO X:</span>
               <span className="text-[#39ff14] font-bold">Ø {(toolX * 2).toFixed(3)} mm</span>
@@ -2506,7 +2625,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               <span>POSIÇÃO Z:</span>
               <span className="text-orange-400 font-bold">Z {toolZ.toFixed(3)} mm</span>
             </div>
-          </div>
+          </ResizableBox>
         )}
 
         {/* Helper overlay displaying interactive tip */}
@@ -2516,7 +2635,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
         {/* Measuring mode info floating box */}
         {isMeasuring && (
-          <div 
+          <ResizableBox id="sim2d_regua" anchor="tl" 
             onMouseDown={handleMeasurePanelMouseDown}
             style={{ left: `${measurePanelPos.x}px`, top: `${measurePanelPos.y}px` }}
             className="absolute bg-[#111116]/95 border border-pink-500 rounded-lg p-3 font-mono text-[11px] shadow-2xl z-40 select-none w-64 text-left cursor-grab active:cursor-grabbing"
@@ -2577,12 +2696,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 </div>
               </div>
             )}
-          </div>
+          </ResizableBox>
         )}
 
         {/* Measuring Angle mode info floating box */}
         {isMeasuringAngle && (
-          <div 
+          <ResizableBox id="sim2d_angulo" anchor="tl" 
             onMouseDown={handleMeasurePanelMouseDown}
             style={{ left: `${measurePanelPos.x}px`, top: `${measurePanelPos.y}px` }}
             className="absolute bg-[#111116]/95 border border-amber-500 rounded-lg p-3 font-mono text-[11px] shadow-2xl z-40 select-none w-64 text-left cursor-grab active:cursor-grabbing"
@@ -2664,7 +2783,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 })()}
               </div>
             )}
-          </div>
+          </ResizableBox>
         )}
       </div>
 

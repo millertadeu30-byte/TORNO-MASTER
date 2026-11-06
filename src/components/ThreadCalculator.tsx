@@ -92,18 +92,18 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
   // Calculated Outputs
   const outputThreadHeight = React.useMemo(() => {
     if (calcPitch > 0) {
-      let multiplier = 0.65;
+      let multiplier = threadDirection === "interna" ? 0.5413 : 0.65; // Métrica ISO: externa 0,65×P (tabela SENAI) | interna 0,5413×P (altura H1)
       if (threadProfile === "whitworth") {
         multiplier = 0.6403;
       } else if (threadProfile === "npt") {
-        multiplier = 0.866;
+        multiplier = 0.8; // NPT: altura do filete h = 0,8 × P
       } else if (threadProfile === "unf_unc") {
         multiplier = 0.61343;
       }
       return Math.round(multiplier * calcPitch * 1000); // microns
     }
     return 0;
-  }, [calcPitch, threadProfile]);
+  }, [calcPitch, threadProfile, threadDirection]);
 
   const outputThreadRoot = React.useMemo(() => {
     if (calcPitch > 0 && calcDia > 0) {
@@ -214,13 +214,13 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
       multiplier = 0.6403;
       angle = "55";
     } else if (threadProfile === "npt") {
-      multiplier = 0.866;
+      multiplier = 0.8; // NPT: altura do filete h = 0,8 × P
       angle = "60";
     } else if (threadProfile === "unf_unc") {
       multiplier = 0.61343;
       angle = "60";
     } else {
-      multiplier = 0.65;
+      multiplier = threadDirection === "interna" ? 0.5413 : 0.65;
       angle = g76_a;
     }
 
@@ -238,7 +238,8 @@ export const ThreadCalculator: React.FC<ThreadCalculatorProps> = ({
     }
     const finalXStr = finalX.toFixed(2);
 
-    const q_first = Math.round(h_microns / Math.sqrt(threadPasses));
+  // 1ª profundidade (Q): os passes de desbaste vão até (altura - sobremetal de acabamento R), com área constante (Δd × √n)
+  const q_first = Math.round(Math.max(1, h_microns - g76_r_fin * 1000) / Math.sqrt(threadPasses));
     const taperAngle = 1.7833; // standard 1:16 conicity is 1.7833 deg
     const isConic = threadTaper === "conica" || threadProfile === "npt";
 

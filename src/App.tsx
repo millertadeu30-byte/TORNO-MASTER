@@ -35,7 +35,10 @@ import {
   Copy,
   Check,
   Box,
-  RefreshCw
+  RefreshCw,
+  Palette,
+  Smartphone,
+  Paperclip
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
@@ -49,6 +52,8 @@ import { RPMCalculator } from "./components/RPMCalculator";
 import { FeedCalculator } from "./components/FeedCalculator";
 import { ThreadCalculator } from "./components/ThreadCalculator";
 import { DrillingCalculator } from "./components/DrillingCalculator";
+import { CycleGenerator } from "./components/CycleGenerator";
+import { extractLatheProfile, profileToLathe, PartProfile, PartZeroConfig } from "./utils/stepProfile";
 import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
@@ -114,11 +119,13 @@ export default function App() {
   // Editors & Workspace Layout State
   const [layoutCount, setLayoutCount] = useState<number>(1); // 1, 2, or 3 panes
   const [isHeaderMinimized, setIsHeaderMinimized] = useState<boolean>(() => {
-    return localStorage.getItem("cnc_isHeaderMinimized") === "true";
+    // Começa com a barra compacta (tela limpa). Se o usuário expandir, a escolha fica salva no tablet.
+    const v = localStorage.getItem("cnc_headerCompacto_v2");
+    return v === null ? true : v === "true";
   });
 
   useEffect(() => {
-    localStorage.setItem("cnc_isHeaderMinimized", String(isHeaderMinimized));
+    localStorage.setItem("cnc_headerCompacto_v2", String(isHeaderMinimized));
   }, [isHeaderMinimized]);
 
   const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
@@ -171,6 +178,85 @@ export default function App() {
 
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [isHighContrast, setIsHighContrast] = useState<boolean>(false);
+  // Aparência: fundo do editor (escuro/branco) e do gráfico (cor livre) - escolhas independentes, salvas no tablet
+  const [editorBg, setEditorBg] = useState<"escuro" | "branco">(() => localStorage.getItem("cnc_editorBg") === "branco" ? "branco" : "escuro");
+  const [graphBg, setGraphBg] = useState<string>(() => localStorage.getItem("cnc_graphBg") || "");
+  const [showAppearance, setShowAppearance] = useState<boolean>(false);
+  useEffect(() => { localStorage.setItem("cnc_editorBg", editorBg); }, [editorBg]);
+  useEffect(() => { localStorage.setItem("cnc_graphBg", graphBg); }, [graphBg]);
+  // Layout Mobile (tablet / celular): botão 📱 liga/desliga. Na 1ª vez liga sozinho em telas pequenas.
+  const [isMobileLayout, setIsMobileLayout] = useState<boolean>(() => {
+    const v = localStorage.getItem("cnc_mobileLayout");
+    if (v !== null) return v === "true";
+    return typeof window !== "undefined" && window.innerWidth < 900;
+  });
+  const [mobileView, setMobileView] = useState<"programa" | "grafico" | "dividido">(() => {
+    const v = localStorage.getItem("cnc_mobileView");
+    return v === "programa" || v === "grafico" ? v : "dividido";
+  });
+  useEffect(() => { localStorage.setItem("cnc_mobileLayout", String(isMobileLayout)); }, [isMobileLayout]);
+  useEffect(() => { localStorage.setItem("cnc_mobileView", mobileView); }, [mobileView]);
+  // Peça importada do STEP (perfil de torno) + ponto zero - fica salva no tablet
+  const [partProfile, setPartProfile] = useState<PartProfile | null>(() => {
+    try {
+      const v = localStorage.getItem("cnc_partProfile");
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [partZero, setPartZero] = useState<PartZeroConfig>(() => {
+    try {
+      const v = localStorage.getItem("cnc_partZero");
+      return v ? JSON.parse(v) : { face: "direita", offsetZ: 0 };
+    } catch {
+      return { face: "direita", offsetZ: 0 };
+    }
+  });
+  const [showPart, setShowPart] = useState<boolean>(true);
+  const [showPartPanel, setShowPartPanel] = useState<boolean>(false);
+  const [partError, setPartError] = useState<string | null>(null);
+  const stepInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    try {
+      if (partProfile) localStorage.setItem("cnc_partProfile", JSON.stringify(partProfile));
+      else localStorage.removeItem("cnc_partProfile");
+    } catch {
+      /* peça grande demais para guardar no tablet */
+    }
+  }, [partProfile]);
+  useEffect(() => { localStorage.setItem("cnc_partZero", JSON.stringify(partZero)); }, [partZero]);
+  // Linhas da peça já no sistema do torno (X diâmetro, Z com o zero escolhido) para desenhar no gráfico
+  const partCurves = useMemo(
+    () => (partProfile && showPart ? profileToLathe(partProfile, partZero) : undefined),
+    [partProfile, partZero, showPart]
+  );
+  // Lê o arquivo STEP escolhido e monta o perfil
+  const handleStepFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const prof = extractLatheProfile(String(reader.result || ""), file.name);
+        prof.name = file.name;
+        setPartProfile(prof);
+        setPartError(null);
+        setShowPart(true);
+        setShowPartPanel(true);
+        if (simMode === "off") setSimMode("fixed");
+      } catch (err: any) {
+        setPartError(err?.message || "Não consegui ler o arquivo STEP.");
+        setShowPartPanel(true);
+      }
+    };
+    reader.onerror = () => {
+      setPartError("Não consegui abrir o arquivo.");
+      setShowPartPanel(true);
+    };
+    reader.readAsText(file);
+  };
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
     const saved = localStorage.getItem("cnc_autoSaveTexts");
@@ -451,6 +537,7 @@ export default function App() {
   const [showFeedCalc, setShowFeedCalc] = useState<boolean>(false);
   const [showThreadCalc, setShowThreadCalc] = useState<boolean>(false);
   const [showDrillingCalc, setShowDrillingCalc] = useState<boolean>(false);
+  const [showCycleGen, setShowCycleGen] = useState<boolean>(false); // Gerador de Ciclos Fanuc
   const [showToleranceCalc, setShowToleranceCalc] = useState<boolean>(false);
   const [isFloatingCalcOpen, setIsFloatingCalcOpen] = useState<boolean>(false);
 
@@ -1178,6 +1265,126 @@ export default function App() {
       {isAuthenticated && (
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           
+      {/* Arquivo STEP (escondido) + Painel "Peça (STEP)" */}
+      <input ref={stepInputRef} type="file" accept=".stp,.step,.STP,.STEP" onChange={handleStepFile} className="hidden" />
+      {showPartPanel && (
+        <div className="fixed top-14 right-4 z-[200] w-80 max-w-[calc(100vw-2rem)] bg-white text-zinc-800 border border-zinc-300 rounded-xl shadow-2xl p-4 font-sans select-none">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-bold flex items-center gap-1.5">
+              <Paperclip className="w-4 h-4 text-sky-600" /> Peça (STEP)
+            </span>
+            <button onClick={() => setShowPartPanel(false)} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" title="Fechar">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {partError && (
+            <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-3">{partError}</div>
+          )}
+          {partProfile ? (
+            <>
+              <div className="text-xs mb-3 leading-relaxed">
+                <b className="block truncate" title={partProfile.name}>{partProfile.name}</b>
+                Ø máximo <b>{(partProfile.rMax * 2).toFixed(3)}</b> mm · comprimento <b>{(partProfile.aMax - partProfile.aMin).toFixed(3)}</b> mm
+                {partProfile.rMinBore !== null && (
+                  <> · furo Ø<b>{(partProfile.rMinBore * 2).toFixed(3)}</b></>
+                )}
+              </div>
+              {partProfile.facesUsed < partProfile.facesTotal && (
+                <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3">
+                  {partProfile.facesTotal - partProfile.facesUsed} face(s) que não são de torno (rasgos, sextavados, furos fora do centro) não aparecem no perfil.
+                </div>
+              )}
+              <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Ponto zero (Z0)</div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {([["direita", "Face direita"], ["esquerda", "Face esquerda (peça virada)"]] as const).map(([v, label]) => (
+                  <button
+                    key={v}
+                    onClick={() => setPartZero((z) => ({ ...z, face: v }))}
+                    className={`px-2 py-2 rounded-lg border text-xs font-semibold transition ${partZero.face === v ? "border-sky-500 ring-2 ring-sky-200 text-sky-800" : "border-zinc-300 hover:border-zinc-400"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label className="flex items-center justify-between gap-2 text-xs mb-3">
+                <span className="text-zinc-600">Deslocar o zero em Z (mm)</span>
+                <input
+                  key={partProfile.name + partZero.face}
+                  type="number"
+                  step="0.1"
+                  defaultValue={partZero.offsetZ}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value.replace(",", "."));
+                    setPartZero((z) => ({ ...z, offsetZ: isNaN(v) ? 0 : v }));
+                  }}
+                  className="w-20 border border-zinc-300 rounded px-1.5 py-1 text-right font-mono focus:outline-none focus:border-sky-500"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs mb-3 cursor-pointer">
+                <input type="checkbox" checked={showPart} onChange={(e) => setShowPart(e.target.checked)} className="accent-sky-600" />
+                Mostrar a peça no gráfico
+              </label>
+              <div className="flex gap-2">
+                <button onClick={() => stepInputRef.current?.click()} className="flex-1 text-xs font-semibold border border-zinc-300 rounded-lg px-2 py-1.5 hover:bg-zinc-100">
+                  Trocar arquivo
+                </button>
+                <button
+                  onClick={() => {
+                    setPartProfile(null);
+                    setPartError(null);
+                  }}
+                  className="flex-1 text-xs font-semibold border border-rose-300 text-rose-700 rounded-lg px-2 py-1.5 hover:bg-rose-50"
+                >
+                  Tirar a peça
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              onClick={() => stepInputRef.current?.click()}
+              className="w-full text-sm font-bold bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-2.5 flex items-center justify-center gap-2"
+            >
+              <Paperclip className="w-4 h-4" /> Anexar arquivo STEP (.stp / .step)
+            </button>
+          )}
+          <p className="text-[10px] text-zinc-500 leading-snug mt-3">
+            O perfil é tirado direto das medidas do CAD (diâmetros, faces, chanfros e raios). As linhas da peça aparecem no
+            gráfico 2D, por baixo do caminho da ferramenta. Feito para peças de torno.
+          </p>
+        </div>
+      )}
+      {/* Painel "Aparência": fundo do editor e do gráfico (escolhas independentes, salvas no tablet) */}
+      {showAppearance && (
+        <div className="fixed top-14 right-4 z-[200] w-72 bg-white text-zinc-800 border border-zinc-300 rounded-xl shadow-2xl p-4 font-sans select-none">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-bold flex items-center gap-1.5"><Palette className="w-4 h-4 text-violet-600" /> Aparência</span>
+            <button onClick={() => setShowAppearance(false)} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" title="Fechar"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Fundo do Editor (programas)</div>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {([["escuro", "Escuro", "#0d0d11"], ["branco", "Branco", "#ffffff"]] as const).map(([val, label, cor]) => (
+              <button key={val} onClick={() => setEditorBg(val)} className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border text-xs font-semibold transition ${editorBg === val ? "border-violet-500 ring-2 ring-violet-200" : "border-zinc-300 hover:border-zinc-400"}`}>
+                <span className="w-5 h-5 rounded border border-zinc-300" style={{ background: cor }} />
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Fundo do Gráfico (simulador 2D e 3D)</div>
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            {["", "#ffffff", "#f1f5f9", "#d4d4d8", "#1e293b", "#0b0b12", "#000000"].map((cor) => (
+              <button key={cor || "padrao"} onClick={() => setGraphBg(cor)} title={cor ? cor : "Padrão do simulador"} className={`w-7 h-7 rounded-lg border transition text-[9px] font-bold ${graphBg === cor ? "border-violet-500 ring-2 ring-violet-200" : "border-zinc-300 hover:border-zinc-400"}`} style={cor ? { background: cor } : undefined}>
+                {cor ? "" : "Auto"}
+              </button>
+            ))}
+            <label className="flex items-center gap-1.5 text-xs font-semibold cursor-pointer" title="Escolher qualquer cor">
+              <input type="color" value={graphBg || "#0b0b12"} onChange={(e) => setGraphBg(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-zinc-300 bg-transparent p-0" />
+              Outra
+            </label>
+          </div>
+          <p className="text-[10px] text-zinc-500 leading-snug">As escolhas ficam salvas neste tablet. Linhas e textos do gráfico se ajustam sozinhos para continuar legíveis.</p>
+        </div>
+      )}
+
           {/* Top Header Toolbar (Collapsible / Minimizable) */}
           {isHeaderMinimized ? (
             <header className={`px-4 py-1.5 flex items-center justify-between gap-2 z-40 shadow-md transition-all duration-200 ${
@@ -1185,7 +1392,7 @@ export default function App() {
                 ? "bg-zinc-100 border-b-2 border-black text-black" 
                 : "bg-[#141418] border-b border-cyan-500/30 text-white"
             }`}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <div className="bg-cyan-950/40 p-1 rounded border border-cyan-500/20">
                   <Cpu className="w-3.5 h-3.5 text-cyan-400" />
                 </div>
@@ -1202,7 +1409,7 @@ export default function App() {
               </div>
 
               {/* Quick compact shortcuts in minimized mode */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto *:shrink-0">
                 {/* Assistant quick button */}
                 <button
                   onClick={() => { setShowAssistant(true); setActiveWindowId("assistant"); }}
@@ -1222,6 +1429,17 @@ export default function App() {
                   <Save className="w-3 h-3" />
                   <span className="hidden lg:inline">Salvar</span>
                 </button>
+
+            {/* Carregar quick button */}
+            <button
+              onClick={handleLoadLocal}
+              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-semibold py-1 px-2 rounded transition flex items-center gap-1"
+              title="Carregar arquivo do disco local"
+            >
+              <FolderOpen className="w-3 h-3" />
+              <span className="hidden lg:inline">Carregar</span>
+            </button>
+            <input ref={fileInputRef} type="file" accept=".txt,.pgm,.nc,.gcode" onChange={handleFileChange} className="hidden" />
 
                 {/* 1 / 2 / 3 Telas compact */}
                 <div className="bg-[#101014] p-0.5 rounded border border-zinc-800 flex items-center">
@@ -1255,6 +1473,20 @@ export default function App() {
                   <span className="hidden md:inline">3D</span>
                 </button>
 
+            {/* Simulador (Mini-TV / Fixo / Desligado) quick switch */}
+            <button
+              onClick={() => setSimMode(prev => prev === "tv" ? "fixed" : prev === "fixed" ? "off" : "tv")}
+              className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                simMode !== "off"
+                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                  : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+              }`}
+              title="Simulador: Mini-TV → Fixo → Desligado"
+            >
+              <Monitor className="w-3 h-3" />
+              <span className="hidden md:inline">{simMode === "tv" ? "Mini-TV" : simMode === "fixed" ? "Fixo" : "Sim. Off"}</span>
+            </button>
+
                 {/* Quick Sincronismos switch */}
                 <button
                   onClick={() => {
@@ -1272,14 +1504,58 @@ export default function App() {
                   <span>Sincronismos</span>
                 </button>
 
+            {/* Aparência (fundo do editor e do gráfico) */}
+            <button
+              onClick={() => setShowAppearance(v => !v)}
+              className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                showAppearance
+                  ? "bg-violet-500/20 text-violet-300 border-violet-500/50"
+                  : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+              }`}
+              title="Aparência: fundo do editor e do gráfico"
+            >
+              <Palette className="w-3 h-3" />
+              <span className="hidden md:inline">Aparência</span>
+            </button>
+
+                {/* Peça (STEP): anexar o desenho 3D da peça */}
+                <button
+                  onClick={() => (partProfile ? setShowPartPanel((v) => !v) : stepInputRef.current?.click())}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                    partProfile
+                      ? "bg-sky-500/15 text-sky-300 border-sky-500/50"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title="Peça (STEP): anexar o desenho 3D da peça para ver o perfil no gráfico"
+                >
+                  <Paperclip className="w-3 h-3" />
+                  <span className="hidden md:inline">{partProfile ? "Peça" : "STEP"}</span>
+                </button>
+                {/* Layout Mobile (tablet / celular) - liga/desliga */}
+                <button
+                  onClick={() => {
+                    // Ao ligar o modo mobile, a barra do topo fica compacta para sobrar espaço (o botão Menu continua abrindo tudo)
+                    if (!isMobileLayout) setIsHeaderMinimized(true);
+                    setIsMobileLayout(!isMobileLayout);
+                  }}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border transition flex items-center gap-1 cursor-pointer ${
+                    isMobileLayout
+                      ? "bg-sky-500/20 text-sky-300 border-sky-500/50"
+                      : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                  title={isMobileLayout ? "Layout Mobile LIGADO (tablet/celular) - toque para voltar ao layout normal" : "Ligar Layout Mobile (tablet/celular)"}
+                >
+                  <Smartphone className="w-3 h-3" />
+                </button>
+
                 {/* Expand Button */}
                 <button
                   onClick={() => setIsHeaderMinimized(false)}
-                  className="bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-300 hover:text-white text-[11px] font-extrabold py-1 px-3 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-[0_0_10px_rgba(0,243,255,0.2)] ml-1"
+              className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-[10px] font-bold py-1 px-2 rounded transition flex items-center gap-1 cursor-pointer ml-1"
                   title="Expandir barra superior completa com todos os menus"
                 >
-                  <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Expandir Menu</span>
+                  <ChevronDown className="w-3 h-3" />
+                  <span>Menu</span>
                 </button>
               </div>
             </header>
@@ -1435,6 +1711,49 @@ export default function App() {
                   {isHighContrast ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
 
+          {/* Aparência (fundo do editor e do gráfico) */}
+          <button
+            onClick={() => setShowAppearance(v => !v)}
+            className={`p-2 rounded-lg border transition ${
+              showAppearance
+                ? "bg-violet-500/20 text-violet-300 border-violet-500/50"
+                : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
+            }`}
+            title="Aparência: fundo do editor e do gráfico"
+          >
+            <Palette className="w-4 h-4" />
+          </button>
+
+          {/* Peça (STEP): anexar o desenho 3D da peça */}
+          <button
+            onClick={() => (partProfile ? setShowPartPanel((v) => !v) : stepInputRef.current?.click())}
+            className={`text-xs font-bold px-3 py-2 rounded-lg border transition flex items-center gap-1.5 ${
+              partProfile
+                ? "bg-sky-500/15 text-sky-300 border-sky-500/50"
+                : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
+            }`}
+            title="Peça (STEP): anexar o desenho 3D da peça para ver o perfil no gráfico"
+          >
+            <Paperclip className="w-4 h-4" />
+            {partProfile ? "Peça" : "STEP"}
+          </button>
+          {/* Layout Mobile (tablet / celular) - liga/desliga */}
+          <button
+            onClick={() => {
+                    // Ao ligar o modo mobile, a barra do topo fica compacta para sobrar espaço (o botão Menu continua abrindo tudo)
+                    if (!isMobileLayout) setIsHeaderMinimized(true);
+                    setIsMobileLayout(!isMobileLayout);
+                  }}
+            className={`p-2 rounded-lg border transition ${
+              isMobileLayout
+                ? "bg-sky-500/20 text-sky-300 border-sky-500/50"
+                : "bg-[#121216] border-zinc-800 text-zinc-400 hover:text-white"
+            }`}
+            title={isMobileLayout ? "Layout Mobile LIGADO (tablet/celular) - toque para voltar ao layout normal" : "Ligar Layout Mobile (tablet/celular)"}
+          >
+            <Smartphone className="w-4 h-4" />
+          </button>
+
                 <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
 
                 {/* Floating Simulator Switch */}
@@ -1558,7 +1877,26 @@ export default function App() {
           )}
 
           {/* Main workspace (split editor and simulator canvas) */}
-          <main className="flex-1 flex flex-col lg:flex-row p-4 gap-4 overflow-hidden relative">
+          <main className={`flex-1 flex flex-col ${isMobileLayout ? "p-2 gap-2" : "lg:flex-row p-4 gap-4"} overflow-hidden relative`}>
+            {/* Layout Mobile: escolha o que ver - Programa, Dividido (os dois) ou Gráfico */}
+            {isMobileLayout && (
+              <div className="flex items-center gap-1 shrink-0 bg-[#121216] border border-zinc-800 rounded-lg p-1 self-center">
+                {([["programa", "📝 Programa"], ["dividido", "⇅ Dividido"], ["grafico", "📈 Gráfico"]] as const).map(([v, label]) => (
+                  <button
+                    key={v}
+                    onClick={() => {
+                      setMobileView(v);
+                      if (v !== "programa" && simMode === "off") setSimMode("fixed");
+                    }}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-md transition ${
+                      mobileView === v ? "bg-cyan-500/20 text-cyan-300" : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             
             {/* Dynamic tooltips layer centered at top */}
             <AnimatePresence>
@@ -1809,7 +2147,7 @@ export default function App() {
             )}
 
             {/* Left side Split Editors Column */}
-            <div className="flex-1 min-w-0 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1">
+            <div className={`flex-1 min-w-0 min-h-0 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1 ${isMobileLayout && mobileView === "grafico" ? "hidden" : ""}`}>
               {Array.from({ length: layoutCount }).map((_, idx) => (
                 <CNCEditor
                   key={idx}
@@ -1820,7 +2158,7 @@ export default function App() {
                   onLineSelect={analyzeActiveLine}
                   isActive={activePaneIdx === idx}
                   onSetFocus={() => setActivePaneIdx(idx)}
-                  isHighContrast={isHighContrast}
+                  isHighContrast={isHighContrast || editorBg === "branco"}
                   fileName={fileNames[idx]}
                   onToggleFloatingCalculator={() => setIsFloatingCalcOpen(prev => !prev)}
                   isFloatingCalculatorOpen={isFloatingCalcOpen}
@@ -1835,7 +2173,7 @@ export default function App() {
             </div>
 
             {/* Floating Simulator (Mini-TV Panel) */}
-            {simMode === 'tv' && (
+            {!isMobileLayout && simMode === 'tv' && (
               <div
                 className={`bg-[#14141a]/95 border border-zinc-700 shadow-2xl overflow-hidden flex flex-col ${
                   isDraggingSim ? "transition-none" : "transition-all duration-300"
@@ -1888,6 +2226,7 @@ export default function App() {
                       onLineChange={analyzeActiveLine}
                       isHighContrast={isHighContrast}
                       onClose={() => setShow3DSimulator(false)}
+                bgColor={graphBg || undefined}
                     />
                   ) : (
                     <CNCSimulator
@@ -1900,6 +2239,8 @@ export default function App() {
                       setIsDriverActive={setIsDriverActive}
                       isHighContrast={isHighContrast}
                       onError={setDiagnosticError}
+                bgColor={graphBg || undefined}
+                partCurves={partCurves}
                     />
                   )}
                 </div>
@@ -1907,10 +2248,10 @@ export default function App() {
             )}
 
             {/* Right side Simulator Stage (Only when NOT floating) */}
-            {simMode === 'fixed' && (
+            {(isMobileLayout ? simMode !== 'off' : simMode === 'fixed') && (
               <div 
-                className="relative flex shrink-0 w-full max-w-full h-[400px] lg:h-full group select-none"
-                style={{ width: `${fixedSimWidth}px` }}
+                className={isMobileLayout ? `relative flex w-full min-h-0 flex-1 select-none ${mobileView === "programa" ? "hidden" : ""}` : "relative flex shrink-0 w-full max-w-full h-[400px] lg:h-full group select-none"}
+                style={isMobileLayout ? undefined : { width: `${fixedSimWidth}px` }}
               >
                 {/* Resizable Left Edge Handle */}
                 <div
@@ -1918,7 +2259,7 @@ export default function App() {
                   onPointerMove={handleFixedSimResizeMove}
                   onPointerUp={handleFixedSimResizeUp}
                   onPointerCancel={handleFixedSimResizeUp}
-                  className="absolute -left-3 top-0 bottom-0 w-5 z-30 cursor-ew-resize flex items-center justify-center select-none group/handle touch-none"
+                  className={`${isMobileLayout ? "hidden " : ""}absolute -left-3 top-0 bottom-0 w-5 z-30 cursor-ew-resize flex items-center justify-center select-none group/handle touch-none`}
                   title="Clique e arraste para a esquerda ou direita para ajustar o tamanho do simulador"
                 >
                   <div className={`w-2 h-14 rounded-full transition-all duration-150 flex flex-col items-center justify-center gap-1 ${
@@ -1939,6 +2280,7 @@ export default function App() {
                       onLineChange={analyzeActiveLine}
                       isHighContrast={isHighContrast}
                       onClose={() => setShow3DSimulator(false)}
+                bgColor={graphBg || undefined}
                     />
                   ) : (
                     <CNCSimulator
@@ -1950,6 +2292,8 @@ export default function App() {
                       isDriverActive={isDriverActive}
                       setIsDriverActive={setIsDriverActive}
                       onError={setDiagnosticError}
+                bgColor={graphBg || undefined}
+                partCurves={partCurves}
                     />
                   )}
                 </div>
@@ -1986,6 +2330,7 @@ export default function App() {
                   else if (type === "polygon") { setShowPolygonCalc(true); setActiveWindowId("polygon"); }
                   else if (type === "drilling") { setShowDrillingCalc(true); setActiveWindowId("drilling"); }
                   else if (type === "tolerance") { setShowToleranceCalc(true); setActiveWindowId("tolerance"); }
+                else if (type === "ciclos") { setShowCycleGen(true); setActiveWindowId("ciclos"); }
                 }}
               />
             </FloatingWindow>
@@ -2114,6 +2459,23 @@ export default function App() {
                 onInsertCode={handleInsertCalculatedCode}
                 isHighContrast={isHighContrast}
               />
+            </FloatingWindow>
+          )}
+
+          {/* Gerador de Ciclos Fanuc (G71, G72, G73, G90, G94, G75, G74, G83/84/85, G92, G76) */}
+          {showCycleGen && (
+            <FloatingWindow
+              id="ciclos"
+              title="Gerador de Ciclos Fanuc"
+              onClose={() => setShowCycleGen(false)}
+              activeWindowId={activeWindowId}
+              onFocus={setActiveWindowId}
+              defaultWidth="980px"
+              defaultHeight="680px"
+              minWidth="360px"
+              minHeight="320px"
+            >
+              <CycleGenerator onInsertCode={handleInsertCalculatedCode} />
             </FloatingWindow>
           )}
 

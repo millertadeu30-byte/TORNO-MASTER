@@ -59,7 +59,7 @@ interface MachiningAssistantProps {
   activeGCode?: string;
   isHighContrast: boolean;
   diagnosticError: string | null;
-  onOpenCalculator?: (type: "rpm" | "feed" | "thread" | "polygon" | "drilling" | "tolerance") => void;
+  onOpenCalculator?: (type: "rpm" | "feed" | "thread" | "polygon" | "drilling" | "tolerance" | "ciclos") => void;
   onToggleFloatingCalculator?: () => void;
   isFloatingCalculatorOpen?: boolean;
 }
@@ -3272,24 +3272,7 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                   Avanço Linear (Vf)
                 </button>
 
-                <button
-                  onClick={() => {
-                    if (onOpenCalculator) {
-                      onOpenCalculator("thread");
-                    } else {
-                      setActiveMode("tables");
-                      setCalcType("thread");
-                    }
-                  }}
-                  className={`text-left text-xs p-2.5 rounded-lg border transition flex items-center gap-2 ${
-                    activeMode === "tables" && calcType === "thread"
-                      ? "bg-emerald-950/20 text-emerald-400 border-emerald-400/40 font-bold"
-                      : "bg-[#1f1f26] border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  <Calculator className="w-3.5 h-3.5" />
-                  Rosca G76 Calculada
-                </button>
+              {/* "Rosca G76 Calculada" saiu daqui: agora fica no Gerador de Ciclos Fanuc (G76 / G92, paralela e cônica) */}
 
                 <button
                   onClick={() => {
@@ -3306,17 +3289,21 @@ export const MachiningAssistant: React.FC<MachiningAssistantProps> = ({
                   Conversor Pol. ⇄ mm
                 </button>
 
-                <button
-                  onClick={() => {
-                    if (onOpenCalculator) {
-                      onOpenCalculator("drilling");
-                    }
-                  }}
-                  className="text-left text-xs p-2.5 rounded-lg border border-zinc-800 transition flex items-center gap-2 bg-[#1f1f26] text-zinc-400 hover:text-zinc-200"
-                >
-                  <Calculator className="w-3.5 h-3.5 text-[#00f3ff]" />
-                  Ciclo de Furação G83
-                </button>
+              {/* "Ciclo de Furação G83" saiu daqui: agora fica no Gerador de Ciclos Fanuc (G83/G84/G85) */}
+
+              {/* Gerador de Ciclos Fanuc: monta G71, G72, G73, G90, G94, G75, G74, G83/G84/G85, G92 e G76 */}
+              <button
+                onClick={() => {
+                  if (onOpenCalculator) {
+                    onOpenCalculator("ciclos");
+                  }
+                }}
+                className="text-left text-xs p-2.5 rounded-lg border border-cyan-500/30 transition flex items-center gap-2 bg-[#1f1f26] text-cyan-300 hover:text-cyan-200 hover:border-cyan-400/60"
+                title="Monta os ciclos Fanuc mais usados (G71, G72, G73, G90, G94, G75, G74, G83/84/85, G92, G76) e insere no programa"
+              >
+                <Calculator className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="font-bold">Gerador de Ciclos Fanuc</span>
+              </button>
 
                 <button
                   onClick={() => {

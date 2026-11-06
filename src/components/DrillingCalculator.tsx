@@ -67,7 +67,7 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
     const pDwell = safeParseInt(dwellMs, 0);
 
     let lines: string[] = [];
-    lines.push(`; --- CICLO DE FURAÇÃO DE PRECISSÃO G83 ---`);
+    lines.push(`; --- CICLO DE FURAÇÃO DE PRECISÃO G83 ---`);
     lines.push(`; Furo final: Z${pZ.toFixed(2)} | Avanço: F${pF.toFixed(2)} | Q: ${peckMm || "0"}mm (${computedQMicrons} micra)`);
     
     // Safety & spindle start
@@ -83,13 +83,14 @@ export const DrillingCalculator: React.FC<DrillingCalculatorProps> = ({
     if (pDwell > 0) {
       g83Line += ` P${pDwell}`;
     }
-    if (pR !== 0) {
-      g83Line += ` R${pR.toFixed(3)}`;
-    }
+    // R no torno Fanuc é INCREMENTAL: distância do ponto inicial até o plano R.
+    // Como a aproximação (G00) já é feita no plano R, o R fica 0 e não precisa ser escrito.
+    // (Escrever R com o valor absoluto do plano faria a broca parar no lugar errado.)
     g83Line += ` F${pF.toFixed(3)};`;
     
     lines.push(g83Line);
     lines.push(`G80; (Cancela o ciclo de furação ativa)`);
+    lines.push(`; Alternativa com broca FIXA na torre (sem ferramenta acionada): G74 R0.5; G74 Z${pZ.toFixed(3)} Q${computedQMicrons} F${pF.toFixed(3)};`);
     lines.push(`G00 Z20.0 M09; (Recuo seguro de saída e desliga refrigerante)`);
 
     return lines.join("\n");
