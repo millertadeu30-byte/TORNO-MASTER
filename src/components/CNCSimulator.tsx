@@ -101,6 +101,32 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     try { localStorage.setItem("cnc_showToolpath", showToolpath ? "1" : "0"); } catch {}
   }, [showToolpath]);
   const [pgMsg, setPgMsg] = useState<string | null>(null);
+  // ===== FIXAÇÃO (zona proibida): onde a peça é presa no lado 1 e no lado 2 =====
+  type FixZone = { lado: 1 | 2; za: number; zb: number; d: number };
+  const [fixMode, setFixMode] = useState<boolean>(false);
+  const [fixZones, setFixZones] = useState<FixZone[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]");
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  });
+  const [fixLado, setFixLado] = useState<1 | 2>(() => {
+    try { return localStorage.getItem("cnc_fixLado2D") === "2" ? 2 : 1; } catch { return 1; }
+  });
+  const [fixFolga, setFixFolga] = useState<number>(() => {
+    try { const v = parseFloat(localStorage.getItem("cnc_fixFolga2D") || "1"); return isNaN(v) ? 1 : v; } catch { return 1; }
+  });
+  const [fixDraft, setFixDraft] = useState<{ z: number; d: number } | null>(null); // 1º toque (começo da pega)
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cnc_fixacoes2D", JSON.stringify(fixZones));
+      localStorage.setItem("cnc_fixLado2D", String(fixLado));
+      localStorage.setItem("cnc_fixFolga2D", String(fixFolga));
+    } catch { /* sem armazenamento */ }
+  }, [fixZones, fixLado, fixFolga]);
   const [showMirinha, setShowMirinha] = useState<boolean>(() => {
     return localStorage.getItem("cnc_showMirinha2D") !== "false";
   });
@@ -655,7 +681,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       return;
     }
 
-    if (!showMirinha && !pgMode) {
+    if (!showMirinha && !pgMode && !fixMode) {
       if (hoveredPoint) setHoveredPoint(null);
       return;
     }
@@ -699,7 +725,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
     // Linhas da peça/bruto (STEP) também entram na mira; vale a que estiver mais perto (no PG, sempre a peça)
     const partSnap = findPickSnap(mouseX, mouseY, canvas, pgMode ? 45 : 35); // peça (STEP) + desenho
-    if (partSnap && (pgMode || !closestItem || partSnap.dist < minDistance)) {
+    if (partSnap && (pgMode || fixMode || !closestItem || partSnap.dist < minDistance)) {
       setHoveredPoint({
         canvasX: partSnap.canvasX,
         canvasY: partSnap.canvasY,
@@ -1718,6 +1744,20 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Lê o programa só quando o texto muda (antes relia a cada movimento do mouse/zoom = travava)
   const { plotList, activeLineIndexes, error: parseError } = useMemo(() => parseGCode(), [gcodeText, simInvertZ]);
+  // COLISÃO: movimentos do programa (inclusive G00) que entram na fixação do lado ativo (+ folga)
+  const fixHits = useMemo(() => {
+    const zone = fixZones.find((f) => f.lado === fixLado);
+    const hits: { idx: number; linha: number }[] = [];
+    if (!zone) return hits;
+    const a = zone.za - fixFolga;
+    const b = zone.zb + fixFolga;
+    plotList.forEach((it, idx) => {
+      const lo = Math.min(it.z1, it.z2);
+      const hi = Math.max(it.z1, it.z2);
+      if (hi >= a && lo <= b) hits.push({ idx, linha: it.linhaId });
+    });
+    return hits;
+  }, [plotList, fixZones, fixLado, fixFolga]);
 
   const toggleFrozen = () => {
     setIsFrozen(!isFrozen);
@@ -1980,8 +2020,67 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.stroke();
     }
 
+    // ===== FIXAÇÃO: faixa vermelha (zona proibida) + castanhas + movimentos que batem =====
+    fixZones.forEach((f) => {
+      const ativa = f.lado === fixLado;
+      const fol = ativa ? fixFolga : 0;
+      const xa = originX + (f.za - fol) * zoom * zDirSign;
+      const xb = originX + (f.zb + fol) * zoom * zDirSign;
+      const left = Math.min(xa, xb);
+      const w = Math.abs(xb - xa);
+      ctx.save();
+      ctx.fillStyle = ativa ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.08)";
+      ctx.fillRect(left, 0, w, canvas.height);
+      const r = (f.d / 2) * zoom;
+      const jaw = Math.max(10, r * 0.6);
+      const xz1 = originX + f.za * zoom * zDirSign;
+      const xz2 = originX + f.zb * zoom * zDirSign;
+      const jl = Math.min(xz1, xz2);
+      const jw = Math.abs(xz2 - xz1);
+      ctx.fillStyle = ativa ? "rgba(239,68,68,0.55)" : "rgba(148,163,184,0.3)";
+      ctx.fillRect(jl, originY - r - jaw, jw, jaw);
+      ctx.fillRect(jl, originY + r, jw, jaw);
+      ctx.strokeStyle = ativa ? "#ef4444" : "#94a3b8";
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(left, 0, w, canvas.height);
+      ctx.setLineDash([]);
+      ctx.fillStyle = ativa ? "#fca5a5" : "#cbd5e1";
+      ctx.font = "bold 11px monospace";
+      ctx.fillText("FIXAÇÃO LADO " + f.lado + (ativa ? "" : " (inativa)"), left + 4, 16);
+      ctx.restore();
+    });
+    if (fixHits.length) {
+      ctx.save();
+      ctx.strokeStyle = "#ff1f1f";
+      ctx.lineWidth = 3.5;
+      ctx.shadowColor = "#ff0000";
+      ctx.shadowBlur = 8;
+      fixHits.forEach((h) => {
+        const it = plotList[h.idx];
+        if (!it) return;
+        ctx.beginPath();
+        ctx.moveTo(originX + it.z1 * zoom * zDirSign, originY - it.x1 * zoom);
+        ctx.lineTo(originX + it.z2 * zoom * zDirSign, originY - it.x2 * zoom);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+    if (fixMode && fixDraft) {
+      const px = originX + fixDraft.z * zoom * zDirSign;
+      ctx.save();
+      ctx.strokeStyle = "#ef4444";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, canvas.height);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Draw Hover/Snap Target ("Mira")
-    if ((showMirinha || pgMode) && hoveredPoint) { // no PG a mira aparece sempre
+    if ((showMirinha || pgMode || fixMode) && hoveredPoint) { // no PG a mira aparece sempre
       ctx.save();
       ctx.strokeStyle = isThemeDark ? "rgba(0, 243, 255, 0.4)" : "rgba(0, 150, 200, 0.4)";
       ctx.lineWidth = 1;
@@ -2337,6 +2436,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     drawSimulation();
   }, [
     showToolpath,
+    fixZones,
+    fixLado,
+    fixFolga,
+    fixDraft,
+    fixHits,
+    fixMode,
     cursorStyle,
     canvasSize,
     gcodeText,
@@ -2368,6 +2473,36 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (sketchTool !== "none") { handleSketchClick(e); return; } // ferramenta de desenho ligada
+    // FIXAÇÃO: 1º toque = começo da pega, 2º toque = fim da pega (no lado escolhido)
+    if (fixMode) {
+      const cnv = canvasRef.current;
+      if (!cnv) return;
+      const rct = cnv.getBoundingClientRect();
+      const mx = rct.width > 0 ? ((e.clientX - rct.left) / rct.width) * cnv.width : 0;
+      const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
+      const g = findPickSnap(mx, my, cnv, 45);
+      let z = 0;
+      let d = 0;
+      if (g) {
+        z = g.latheZ;
+        d = g.latheX;
+      } else {
+        const w = skToWorld(mx, my, sketchView(cnv));
+        z = w.z;
+        d = Math.abs(w.r) * 2;
+      }
+      if (!fixDraft) {
+        setFixDraft({ z, d });
+        setFixMsg("Começo da pega em Z" + z.toFixed(3) + ". Agora toque no FIM da pega.");
+        return;
+      }
+      const nova: FixZone = { lado: fixLado, za: Math.min(fixDraft.z, z), zb: Math.max(fixDraft.z, z), d: Math.max(fixDraft.d, d) };
+      setFixZones((arr) => [...arr.filter((f) => f.lado !== fixLado), nova]);
+      setFixDraft(null);
+      setFixMsg("Lado " + fixLado + ": pega de Z" + nova.za.toFixed(3) + " a Z" + nova.zb.toFixed(3) + " (" + (nova.zb - nova.za).toFixed(2) + " mm, Ø" + nova.d.toFixed(2) + ")");
+      setTimeout(() => setFixMsg(null), 4000);
+      return;
+    }
     // PG ligado: o ponto tocado no perfil da peça vira uma linha do programa
     if (pgMode) {
       const cnv = canvasRef.current;
@@ -2891,13 +3026,23 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           </button>
             {/* PG: ligado, cada toque num ponto da peça vira uma linha G01 X.. Z.. no programa */}
             <button
-              onClick={() => setPgMode((v) => !v)}
+              onClick={() => { setPgMode((v) => !v); setFixMode(false); setFixDraft(null); }}
               className={`text-[10px] font-bold border px-2 py-1 rounded transition ${
                 pgMode ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/60" : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
               }`}
               title="PG: ligado, cada toque num ponto do perfil da peça vira uma linha G01 X.. Z.. no programa (logo abaixo da linha do cursor)"
             >
               PG
+            </button>
+            {/* FIX: marcar onde a peça é presa (zona proibida para qualquer ferramenta) */}
+            <button
+              onClick={() => { setFixMode((v) => !v); setFixDraft(null); setFixMsg(null); setPgMode(false); }}
+              className={`text-[10px] font-bold border px-2 py-1 rounded transition ${
+                fixMode ? "bg-red-500/20 text-red-300 border-red-500/60" : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
+              }`}
+              title="FIX: toque no começo e no fim de onde a placa / pinça / contrafuso pega a peça. Essa área vira zona proibida: movimento que passar ali fica vermelho (colisão)"
+            >
+              FIX
             </button>
         </div>
       </div>
@@ -3009,6 +3154,58 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             {pgMsg ? `PG: ${pgMsg}` : "PG ligado: toque nos pontos do perfil da peça"}
           </div>
         )}
+          {/* Painel da FIXAÇÃO (zona proibida) */}
+          {fixMode && (
+            <div
+              className="absolute top-12 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-1"
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 bg-black/85 border border-red-500/60 rounded-lg px-2 py-1 text-[11px] font-bold text-red-200 shadow-lg">
+                <span>FIXAÇÃO</span>
+                {([1, 2] as const).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => { setFixLado(l); setFixDraft(null); }}
+                    className={`px-2 py-0.5 rounded border ${fixLado === l ? "bg-red-600 text-white border-red-400" : "border-zinc-600 text-zinc-300 hover:border-zinc-400"}`}
+                  >
+                    Lado {l}
+                  </button>
+                ))}
+                <label className="flex items-center gap-1 text-zinc-300 font-semibold" title="Distância mínima que a ferramenta deve ficar da fixação">
+                  Folga
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={fixFolga}
+                    onChange={(e) => { const v = parseFloat(e.target.value); setFixFolga(isNaN(v) ? 0 : v); }}
+                    className="w-12 bg-zinc-900 border border-zinc-600 rounded px-1 text-white"
+                  />
+                  mm
+                </label>
+                {fixZones.some((f) => f.lado === fixLado) && (
+                  <button
+                    onClick={() => { setFixZones((arr) => arr.filter((f) => f.lado !== fixLado)); setFixDraft(null); }}
+                    className="px-2 py-0.5 rounded border border-zinc-600 text-zinc-300 hover:border-red-400"
+                    title="Apagar a fixação deste lado"
+                  >
+                    Apagar
+                  </button>
+                )}
+              </div>
+              <div className="bg-black/75 text-red-200 text-[11px] font-semibold px-2 py-1 rounded pointer-events-none">
+                {fixMsg || (fixDraft ? "Toque no FIM da pega na peça" : "Toque no COMEÇO da pega (lado " + fixLado + ") na peça")}
+              </div>
+            </div>
+          )}
+          {/* Aviso de COLISÃO com a fixação (aparece sempre que tiver) */}
+          {fixHits.length > 0 && (
+            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-40 bg-red-600/95 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-lg pointer-events-none animate-pulse">
+              ⚠ COLISÃO: {fixHits.length} movimento(s) entram na fixação do lado {fixLado} — 1º na linha {Math.floor(fixHits[0].linha) + 1}
+            </div>
+          )}
 
         {/* Precise Snapping Target Tooltip (Fixed at Bottom-Left as requested) */}
         {showMirinha && (hoveredPoint || (miraFixa && miraUltimoPonto)) && !isMeasuring && !isMeasuringAngle && (() => {

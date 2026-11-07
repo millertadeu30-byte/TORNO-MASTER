@@ -62,6 +62,14 @@ import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPho
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
 const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
+// ===== O APP ABRE VAZIO =====
+// Tira do caminho o que era da peça anterior (programas, STEP, desenho, fixações). As preferências ficam.
+// O último trabalho não salvo fica guardado em "cnc_ultimoTrabalho" (dá para recuperar depois).
+try {
+  const anterior = localStorage.getItem("cnc_autoSaveTexts");
+  if (anterior) localStorage.setItem("cnc_ultimoTrabalho", anterior);
+  ["cnc_autoSaveTexts", "cnc_partProfile", "cnc_stockProfile", "cnc_sketch2D", "cnc_fixacoes2D"].forEach((k) => localStorage.removeItem(k));
+} catch { /* sem armazenamento */ }
 
 export default function App() {
   // Auth State
@@ -308,6 +316,7 @@ export default function App() {
   };
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [projVer, setProjVer] = useState<number>(0); // muda ao carregar um projeto (simuladores recarregam)
+  const [showIniciar, setShowIniciar] = useState<boolean>(false); // assistente ▶ Iniciar Programa
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
     const saved = localStorage.getItem("cnc_autoSaveTexts");
     if (saved) {
@@ -320,11 +329,7 @@ export default function App() {
         // Fallback
       }
     }
-    return [
-      CNC_TEMPLATES[0].code, // Eixo Completo G71/G75/G76
-      CNC_TEMPLATES[2].code, // Desbaste Interno Boring G71
-      CNC_TEMPLATES[4].code, // Rosca G76 M30x2.0
-    ];
+    return ["", "", ""]; // o app abre VAZIO (sem programa de exemplo)
   });
   const [activeLine, setActiveLine] = useState<number>(0);
   const [isAutoSaveActive, setIsAutoSaveActive] = useState<boolean>(() => {
@@ -933,7 +938,7 @@ export default function App() {
   const PROJ_KEYS_FORA = [
     "cnc_token", "cnc_clientName", "cnc_isAuthenticated", "cnc_daysLeft", "cnc_subscriptionType", "cnc_isAdmin",
     "cnc_supportPhone", "cnc_device_id", "cnc_autoSaveTexts", "cnc_autoSaveActive", "cnc_calc_history_v2",
-    "cnc_mobileLayout", "cnc_mobileView",
+    "cnc_mobileLayout", "cnc_mobileView", "cnc_ultimoTrabalho",
   ]; // login / licença / histórico deste tablet: NÃO vão para o projeto
   const baixarArquivo = (conteudo: string, nome: string, tipo = "text/plain") => {
     const blob = new Blob([conteudo], { type: tipo });
@@ -1678,6 +1683,16 @@ export default function App() {
                   <Wrench className="w-3 h-3" />
                   <span className="hidden lg:inline">Tabelas</span>
                 </button>
+
+          {/* ▶ INICIAR PROGRAMA: assistente que monta o programa a partir da máquina + STEP */}
+          <button
+            onClick={() => setShowIniciar(true)}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold py-1 px-2 rounded transition flex items-center gap-1"
+            title="Iniciar Programa: escolher máquina, peça (STEP), fixação e operações — o app monta o programa"
+          >
+            <span>▶</span>
+            <span className="hidden lg:inline">Iniciar</span>
+          </button>
 
                 {/* Save quick button */}
                 <button
@@ -2869,6 +2884,484 @@ export default function App() {
           </motion.div>
         </div>
       )}
+      {/* ▶ Assistente Iniciar Programa */}
+      <IniciarProgramaModal
+        open={showIniciar}
+        onClose={() => setShowIniciar(false)}
+        partProfile={partProfile}
+        partZero={partZero}
+        onAnexarStep={() => { setStepTarget("peca"); setTimeout(() => stepInputRef.current?.click(), 0); }}
+        onAplicar={(r) => {
+          try {
+            localStorage.setItem("cnc_fixacoes2D", JSON.stringify(r.fix)); // fixações viram zonas FIX no simulador
+            localStorage.setItem("cnc_fixLado2D", "1");
+          } catch { /* sem armazenamento */ }
+          setLayoutCount((n) => Math.max(n, 2));
+          setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
+          setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
+          setActivePaneIdx(0);
+          setProjVer((v) => v + 1);
+        }}
+      />
     </div>
   );
 }
+
+
+/* =====================================================================================
+ * ▶ INICIAR PROGRAMA - assistente que monta o programa a partir da MÁQUINA + STEP
+ * Passos: 1 Máquina  2 Peça/Bruto  3 Fixação  4 Operações  5 Gerar
+ * Versão 1 (Ergomat TBSy): torneamento EXTERNO do lado 1 (face, desbaste G71, acabamento G70,
+ * canais G75, corte) no CANAL 1 / HEAD1 e o esqueleto do lado 2 (contrafuso) no CANAL 2 / HEAD2.
+ * O programa SEMPRE deve ser conferido antes de rodar na máquina.
+ * ===================================================================================== */
+type TMPt = { x: number; z: number };
+type TMIntervalo = { zA: number; zB: number; xa: number; xb: number };
+
+const TM_MAQUINAS = [
+  { id: "TBSY", nome: "Ergomat TBSy 60", status: "PRONTA", info: "Fanuc 31i-A • 2 canais • HEAD1 torre inferior (estáticas) • HEAD2 torre superior (acionadas, C, Y) • contrafuso na T1" },
+  { id: "STAR_SR38", nome: "Star SR38", status: "EM CADASTRO", info: "Suíço • aguardando programas e manual" },
+  { id: "CITIZEN", nome: "Citizen", status: "EM CADASTRO", info: "Suíço • aguardando programas e manual" },
+  { id: "INDEX_ABC", nome: "Index ABC", status: "EM CADASTRO", info: "3 torres • aguardando programas" },
+  { id: "INDEX_C100", nome: "Index C100", status: "EM CADASTRO", info: "Aguardando programas e manual" },
+];
+
+const TM_MATERIAIS: Record<string, { vc: number; fd: number; ff: number; ap: number }> = {
+  "Aço carbono": { vc: 180, fd: 0.25, ff: 0.1, ap: 1.5 },
+  "Aço inox": { vc: 120, fd: 0.2, ff: 0.08, ap: 1.0 },
+  "Alumínio": { vc: 350, fd: 0.3, ff: 0.12, ap: 2.0 },
+  "Latão": { vc: 250, fd: 0.25, ff: 0.1, ap: 1.5 },
+};
+
+const tmFmt = (n: number) => {
+  let s = (Math.round(n * 1000) / 1000).toFixed(3).replace(/0+$/, "");
+  if (s.endsWith(".")) s += "0";
+  if (s === "-0.0") s = "0.0";
+  return s;
+};
+
+// Contorno EXTERNO da peça: para cada trecho em Z, o maior diâmetro (o que a ferramenta enxerga de fora)
+function tmContornoExterno(curves: TMPt[][]): TMIntervalo[] {
+  const segs: [TMPt, TMPt][] = [];
+  curves.forEach((c) => {
+    for (let i = 0; i < c.length - 1; i++) segs.push([c[i], c[i + 1]]);
+  });
+  const r4 = (n: number) => Math.round(n * 10000) / 10000;
+  const zset = new Set<number>();
+  segs.forEach(([a, b]) => { zset.add(r4(a.z)); zset.add(r4(b.z)); });
+  const zs = Array.from(zset).sort((a, b) => b - a); // da face (Z maior) para trás
+  const xAt = (s: [TMPt, TMPt], z: number) => {
+    const dz = s[1].z - s[0].z;
+    if (Math.abs(dz) < 1e-9) return Math.max(s[0].x, s[1].x);
+    return s[0].x + ((z - s[0].z) / dz) * (s[1].x - s[0].x);
+  };
+  const out: TMIntervalo[] = [];
+  for (let i = 0; i < zs.length - 1; i++) {
+    const zA = zs[i];
+    const zB = zs[i + 1];
+    if (zA - zB < 1e-4) continue;
+    const zm = (zA + zB) / 2;
+    let best: [TMPt, TMPt] | null = null;
+    let bx = -Infinity;
+    for (const s of segs) {
+      const lo = Math.min(s[0].z, s[1].z);
+      const hi = Math.max(s[0].z, s[1].z);
+      if (hi - lo < 1e-6 || zm < lo || zm > hi) continue;
+      const x = xAt(s, zm);
+      if (x > bx) { bx = x; best = s; }
+    }
+    if (!best) continue;
+    out.push({ zA, zB, xa: xAt(best, zA), xb: xAt(best, zB) });
+  }
+  return out;
+}
+
+// Perfil para G71/G70 (diâmetro só cresce indo para trás) + canais (onde a peça "afunda")
+function tmPerfilECanais(iv: TMIntervalo[]) {
+  let cur = 0;
+  const mono: TMIntervalo[] = [];
+  const canais: { zStart: number; zEnd: number; fundo: number; topo: number }[] = [];
+  let aberto: { zStart: number; zEnd: number; fundo: number; topo: number } | null = null;
+  iv.forEach((s) => {
+    const na = Math.max(s.xa, cur);
+    const nb = Math.max(s.xb, na);
+    cur = nb;
+    mono.push({ zA: s.zA, zB: s.zB, xa: na, xb: nb });
+    const afunda = s.xa < na - 0.01 || s.xb < nb - 0.01;
+    if (afunda) {
+      if (!aberto) aberto = { zStart: s.zA, zEnd: s.zB, fundo: Math.min(s.xa, s.xb), topo: nb };
+      else { aberto.zEnd = s.zB; aberto.fundo = Math.min(aberto.fundo, s.xa, s.xb); aberto.topo = Math.max(aberto.topo, nb); }
+    } else if (aberto) { canais.push(aberto); aberto = null; }
+  });
+  if (aberto) canais.push(aberto);
+  const pts: TMPt[] = [];
+  mono.forEach((s) => {
+    if (!pts.length) pts.push({ x: s.xa, z: s.zA });
+    else if (Math.abs(pts[pts.length - 1].x - s.xa) > 1e-3) pts.push({ x: s.xa, z: s.zA });
+    pts.push({ x: s.xb, z: s.zB });
+  });
+  // tira pontos no meio de uma mesma reta
+  const simp: TMPt[] = [];
+  pts.forEach((p) => {
+    if (simp.length >= 2) {
+      const a = simp[simp.length - 2];
+      const b = simp[simp.length - 1];
+      const cross = (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x);
+      if (Math.abs(cross) < 1e-6) simp.pop();
+    }
+    simp.push(p);
+  });
+  return { pts: simp, canais };
+}
+
+export interface TMResultado {
+  textos: [string, string];
+  nomes: [string, string];
+  fix: { lado: 1 | 2; za: number; zb: number; d: number }[];
+}
+
+export const IniciarProgramaModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  partProfile: PartProfile | null;
+  partZero: PartZeroConfig;
+  onAnexarStep: () => void;
+  onAplicar: (r: TMResultado) => void;
+}> = ({ open, onClose, partProfile, partZero, onAnexarStep, onAplicar }) => {
+  const [passo, setPasso] = useState<number>(1);
+  const [maq, setMaq] = useState<string>("TBSY");
+  const [material, setMaterial] = useState<string>("Aço carbono");
+  const [nome, setNome] = useState<string>("");
+  const [brutoD, setBrutoD] = useState<number>(0);
+  const [sobreFace, setSobreFace] = useState<number>(0.5);
+  const [pega1, setPega1] = useState<number>(15);
+  const [saida, setSaida] = useState<number>(5);
+  const [pega2, setPega2] = useState<number>(10);
+  const [larguraCorte, setLarguraCorte] = useState<number>(3);
+  const [larguraCanal, setLarguraCanal] = useState<number>(3);
+  const [rpmMax, setRpmMax] = useState<number>(3000);
+  const [vc, setVc] = useState<number>(180);
+  const [fd, setFd] = useState<number>(0.25);
+  const [ff, setFf] = useState<number>(0.1);
+  const [ap, setAp] = useState<number>(1.5);
+  const [ops, setOps] = useState({ face: true, desb: true, acab: true, canal: true, corte: true });
+  const [ferr, setFerr] = useState({ desb: "T0101", acab: "T0202", canal: "T0303", corte: "T0404" });
+
+  // dados da peça (contorno externo no sistema do torno: X diâmetro, Z com o zero escolhido)
+  const geo = useMemo(() => {
+    if (!partProfile) return null;
+    const curves = profileToLathe(partProfile, partZero);
+    const iv = tmContornoExterno(curves);
+    if (!iv.length) return null;
+    const { pts, canais } = tmPerfilECanais(iv);
+    const zFront = iv[0].zA;
+    const zBack = iv[iv.length - 1].zB;
+    const dMax = Math.max(...pts.map((p) => p.x));
+    const dTras = pts[pts.length - 1].x;
+    return { pts, canais, zFront, zBack, L: zFront - zBack, dMax, dTras, furo: partProfile.rMinBore };
+  }, [partProfile, partZero]);
+
+  // valores sugeridos quando abre / troca a peça
+  useEffect(() => {
+    if (!open) return;
+    if (geo) setBrutoD((v) => (v > 0 && v >= geo.dMax ? v : Math.ceil(geo.dMax + 1)));
+    if (partProfile && !nome) setNome(partProfile.name.replace(/\.[^.]+$/, "").toUpperCase().replace(/[^A-Z0-9_\-]/g, "_").slice(0, 20));
+  }, [open, geo, partProfile]);
+
+  const escolherMaterial = (m: string) => {
+    setMaterial(m);
+    const t = TM_MATERIAIS[m];
+    if (t) { setVc(t.vc); setFd(t.fd); setFf(t.ff); setAp(t.ap); }
+  };
+
+  const gerar = (): TMResultado | null => {
+    if (!geo) return null;
+    const bD = brutoD;
+    const nm = nome || "PECA";
+    const data = new Date().toLocaleDateString("pt-BR");
+    const h: string[] = [];
+    const L1 = (s: string) => h.push(s);
+    const rec = "G00 X" + tmFmt(bD + 20) + " Z50.0; (RECUO - CONFERIR)";
+    L1("O0001 (" + nm + " - LADO 1 - HEAD1);");
+    L1("(MAQUINA: ERGOMAT TBSY 60 - CANAL 1 / HEAD1 - TORRE INFERIOR);");
+    L1("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
+    L1("(BRUTO: BARRA D" + tmFmt(bD) + " - " + material.toUpperCase() + " - PECA L" + tmFmt(geo.L) + ");");
+    L1("");
+    L1("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
+    L1("G92 S" + rpmMax + "; (ROTACAO MAXIMA)");
+    const contorno = (comN: boolean) => {
+      const p0 = geo.pts[0];
+      L1((comN ? "N100 " : "") + "G00 X" + tmFmt(p0.x) + ";");
+      L1("G01 Z" + tmFmt(p0.z) + " F" + ff + ";");
+      for (let i = 1; i < geo.pts.length; i++) L1("G01 X" + tmFmt(geo.pts[i].x) + " Z" + tmFmt(geo.pts[i].z) + ";");
+      const pf = geo.pts[geo.pts.length - 1];
+      L1("G01 Z" + tmFmt(geo.zBack - larguraCorte - 0.5) + "; (PASSA DO CORTE)");
+      L1((comN ? "N200 " : "") + "G01 X" + tmFmt(Math.max(bD + 1, pf.x + 1)) + ";");
+    };
+    if (ops.face || ops.desb) {
+      L1("");
+      L1(ferr.desb + " (DESBASTE EXTERNO);");
+      L1("G96 S" + vc + " M03;");
+    }
+    if (ops.face) {
+      L1("(FACEAMENTO - SOBREMETAL " + tmFmt(sobreFace) + ");");
+      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + sobreFace + 1) + " M08;");
+      let z = geo.zFront + sobreFace;
+      const passos: number[] = [];
+      while (z - ap > geo.zFront + 1e-6) { z -= ap; passos.push(z); }
+      passos.push(geo.zFront);
+      passos.forEach((zp) => {
+        L1("G00 Z" + tmFmt(zp) + ";");
+        L1("G01 X-1.6 F" + tmFmt(fd * 0.6) + ";");
+        L1("G00 Z" + tmFmt(zp + 1) + ";");
+        L1("G00 X" + tmFmt(bD + 2) + ";");
+      });
+    }
+    if (ops.desb) {
+      L1("(DESBASTE EXTERNO G71);");
+      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + 2) + " M08;");
+      L1("G71 U" + tmFmt(ap) + " R0.5;");
+      L1("G71 P100 Q200 U0.4 W0.1 F" + fd + ";");
+      contorno(true);
+      L1(rec);
+    }
+    if (ops.acab) {
+      L1("");
+      L1(ferr.acab + " (ACABAMENTO EXTERNO);");
+      L1("G96 S" + Math.round(vc * 1.2) + " M03;");
+      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + 2) + " M08;");
+      if (ops.desb) L1("G70 P100 Q200;");
+      else contorno(false);
+      L1(rec);
+    }
+    if (ops.canal && geo.canais.length) {
+      L1("");
+      L1(ferr.canal + " (CANAIS G75 - BEDAME L" + tmFmt(larguraCanal) + " - REFERENCIA NO LADO DIREITO);");
+      const topoMax = Math.max(...geo.canais.map((c) => c.topo));
+      L1("G97 S" + Math.min(rpmMax, Math.round((vc * 0.7 * 1000) / (Math.PI * Math.max(topoMax, 1)))) + " M03;");
+      geo.canais.forEach((c, i) => {
+        const largura = c.zStart - c.zEnd;
+        L1("(CANAL " + (i + 1) + ": Z" + tmFmt(c.zStart) + " A Z" + tmFmt(c.zEnd) + " - FUNDO D" + tmFmt(c.fundo) + ");");
+        if (largura < larguraCanal - 0.01) L1("(ATENCAO: CANAL MAIS ESTREITO QUE O BEDAME - CONFERIR);");
+        const zFim = largura < larguraCanal ? c.zStart : c.zEnd + larguraCanal;
+        L1("G00 X" + tmFmt(c.topo + 2) + " Z" + tmFmt(c.zStart) + " M08;");
+        L1("G75 R0.5;");
+        L1("G75 X" + tmFmt(c.fundo) + " Z" + tmFmt(zFim) + " P1000 Q" + Math.round(larguraCanal * 0.8 * 1000) + " F0.05;");
+        L1("G00 X" + tmFmt(c.topo + 2) + ";");
+      });
+      L1(rec);
+    }
+    if (ops.corte) {
+      L1("");
+      L1("(CORTE - PECA PRESA NO CONTRAFUSO);");
+      L1("M400; (SINC: ESPERA O CONTRAFUSO PEGAR A PECA - CONFERIR NUMERO)");
+      L1(ferr.corte + " (BEDAME DE CORTE L" + tmFmt(larguraCorte) + " - REFERENCIA NO LADO DIREITO);");
+      L1("G97 S" + Math.min(rpmMax, Math.round((vc * 0.6 * 1000) / (Math.PI * bD))) + " M03;");
+      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zBack) + " M08;");
+      L1("G01 X1.0 F0.05;");
+      L1("G01 X-0.5 F0.03;");
+      L1("G00 X" + tmFmt(bD + 2) + ";");
+      L1("M401; (SINC: CORTE TERMINADO - CONTRAFUSO PODE RECUAR)");
+      L1("(AVANCO DA BARRA PARA A PROXIMA PECA - COMPLETAR CONFORME A MAQUINA);");
+    }
+    L1(rec.replace(";", " M09;"));
+    L1("M30;");
+
+    // ---------- CANAL 2 / HEAD2 (lado 2 - contrafuso) ----------
+    const g: string[] = [];
+    const L2 = (s: string) => g.push(s);
+    L2("O0002 (" + nm + " - LADO 2 - HEAD2 / CONTRAFUSO);");
+    L2("(MAQUINA: ERGOMAT TBSY 60 - CANAL 2 / HEAD2 - TORRE SUPERIOR);");
+    L2("(CONTRAFUSO NA POSICAO T1 - TRABALHA COM T521, T22, T23);");
+    L2("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
+    L2("");
+    L2("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
+    L2("(1 - CONTRAFUSO PEGA A PECA NO D" + tmFmt(geo.dTras) + " - PEGA DE " + tmFmt(pega2) + " MM, PERTO DO CORTE);");
+    L2("(COMPLETAR: CHAMADA DO CONTRAFUSO / ABRIR PINCA / AVANCO ATE A PEGA);");
+    L2("M400; (SINC: CONTRAFUSO PEGOU - HEAD1 PODE CORTAR)");
+    L2("M401; (SINC: ESPERA O CORTE TERMINAR)");
+    L2("(2 - RECUO DO CONTRAFUSO COM A PECA);");
+    L2("(3 - LADO 2: FACEAR O LADO DO CORTE ATE O COMPRIMENTO FINAL L" + tmFmt(geo.L) + ");");
+    L2("(COMPLETAR COM T521 / T22 / T23 CONFORME O LAYOUT DA TORRE);");
+    L2("M30;");
+
+    const fix: TMResultado["fix"] = [
+      { lado: 1, za: geo.zBack - larguraCorte - saida - pega1, zb: geo.zBack - larguraCorte - saida, d: bD },
+      { lado: 2, za: geo.zBack, zb: geo.zBack + pega2, d: geo.dTras },
+    ];
+    return { textos: [h.join("\n"), g.join("\n")], nomes: [nm + ".P-2", nm], fix };
+  };
+
+  const resultado = passo === 5 ? gerar() : null;
+  if (!open) return null;
+
+  const num = (v: number, set: (n: number) => void, step = 0.1, w = "w-20") => (
+    <input
+      type="number"
+      step={step}
+      value={v}
+      onChange={(e) => { const n = parseFloat(e.target.value); set(isNaN(n) ? 0 : n); }}
+      className={"bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white " + w}
+    />
+  );
+  const linha = (rotulo: string, campo: React.ReactNode, dica?: string) => (
+    <label className="flex items-center justify-between gap-3 py-1.5 border-b border-zinc-800/70" title={dica}>
+      <span className="text-sm text-zinc-300">{rotulo}</span>
+      {campo}
+    </label>
+  );
+  const nomesPassos = ["Máquina", "Peça", "Fixação", "Operações", "Gerar"];
+  const podeAvancar = passo === 1 ? maq === "TBSY" : passo === 2 ? !!geo && brutoD >= (geo ? geo.dMax : 0) : true;
+
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
+      <div className="w-full max-w-3xl max-h-[92vh] flex flex-col bg-[#111118] border border-zinc-700 rounded-2xl shadow-2xl text-zinc-100" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="text-base font-bold text-emerald-400">▶ Iniciar Programa</div>
+          <button onClick={onClose} className="text-zinc-400 hover:text-white px-2" title="Fechar">✕</button>
+        </div>
+        <div className="flex gap-1 px-4 py-2 border-b border-zinc-800 overflow-x-auto">
+          {nomesPassos.map((n, i) => (
+            <div key={n} className={"text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap " + (passo === i + 1 ? "bg-emerald-600 text-white" : passo > i + 1 ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-400")}>
+              {i + 1}. {n}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          {passo === 1 && (
+            <div className="grid gap-2">
+              <p className="text-sm text-zinc-400 mb-1">Escolha a máquina. Só as máquinas PRONTAS (com manual e programas de exemplo) podem gerar programa.</p>
+              {TM_MAQUINAS.map((m) => {
+                const ok = m.status === "PRONTA";
+                return (
+                  <button
+                    key={m.id}
+                    disabled={!ok}
+                    onClick={() => setMaq(m.id)}
+                    className={"text-left rounded-xl border px-3 py-2 transition " + (maq === m.id && ok ? "border-emerald-500 bg-emerald-950/40" : ok ? "border-zinc-700 hover:border-zinc-500" : "border-zinc-800 opacity-50 cursor-not-allowed")}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold">{m.nome}</span>
+                      <span className={"text-[10px] font-bold px-2 py-0.5 rounded " + (ok ? "bg-emerald-600 text-white" : "bg-zinc-700 text-zinc-300")}>{m.status}</span>
+                    </div>
+                    <div className="text-xs text-zinc-400 mt-0.5">{m.info}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {passo === 2 && (
+            <div>
+              {!geo ? (
+                <div className="text-center py-6">
+                  <p className="text-sm text-zinc-300 mb-3">Anexe o STEP da peça para o app ler o perfil.</p>
+                  <button onClick={onAnexarStep} className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm px-4 py-2 rounded-lg">Anexar STEP da peça</button>
+                </div>
+              ) : (
+                <div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 text-center">
+                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">PEÇA</div><div className="font-bold text-sm truncate">{partProfile ? partProfile.name : ""}</div></div>
+                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">COMPRIMENTO</div><div className="font-bold text-sm">{tmFmt(geo.L)} mm</div></div>
+                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">Ø MÁXIMO</div><div className="font-bold text-sm">{tmFmt(geo.dMax)} mm</div></div>
+                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">CANAIS ACHADOS</div><div className="font-bold text-sm">{geo.canais.length}</div></div>
+                  </div>
+                  {geo.furo !== null && geo.furo !== undefined && (
+                    <p className="text-xs text-amber-400 mb-2">⚠ A peça tem furo interno (Ø{tmFmt(geo.furo * 2)}). Nesta versão o furo/interno ainda não é gerado: complete à mão.</p>
+                  )}
+                  {linha("Nome do programa", <input value={nome} onChange={(e) => setNome(e.target.value.toUpperCase())} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white w-44" />)}
+                  {linha("Material", (
+                    <select value={material} onChange={(e) => escolherMaterial(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white">
+                      {Object.keys(TM_MATERIAIS).map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  ), "Ajusta velocidade de corte, avanços e profundidade sugeridos")}
+                  {linha("Ø da barra (bruto) mm", num(brutoD, setBrutoD, 0.5), "Precisa ser maior que o Ø máximo da peça")}
+                  {brutoD < geo.dMax && <p className="text-xs text-red-400">A barra precisa ser maior que o Ø máximo da peça ({tmFmt(geo.dMax)}).</p>}
+                  {linha("Sobremetal na face mm", num(sobreFace, setSobreFace))}
+                  <p className="text-xs text-zinc-500 mt-2">Zero da peça (Z0): face {partZero.face}{partZero.offsetZ ? " + " + tmFmt(partZero.offsetZ) + " mm" : ""} — muda no botão Peça.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {passo === 3 && (
+            <div>
+              <p className="text-sm text-zinc-400 mb-2">Onde a peça é presa. Essas áreas viram ZONA PROIBIDA (FIX) no simulador: movimento que passar ali aparece como colisão.</p>
+              <div className="text-xs font-bold text-red-300 mt-2 mb-1">LADO 1 — placa / pinça do fuso principal (HEAD1)</div>
+              {linha("Distância da placa até o corte mm", num(saida, setSaida, 0.5), "Quanto a barra fica para fora da placa depois do corte")}
+              {linha("Comprimento da pega mm", num(pega1, setPega1, 0.5))}
+              <div className="text-xs font-bold text-red-300 mt-3 mb-1">LADO 2 — contrafuso (posição T1 da torre superior)</div>
+              {linha("Comprimento da pega no contrafuso mm", num(pega2, setPega2, 0.5), "Pega no diâmetro já usinado do lado 1, perto do corte")}
+              {linha("Largura do bedame de corte mm", num(larguraCorte, setLarguraCorte, 0.5))}
+            </div>
+          )}
+
+          {passo === 4 && (
+            <div>
+              <p className="text-sm text-zinc-400 mb-2">Operações do lado 1 (CANAL 1 / HEAD1). Marque o que quer e confira ferramenta e dados de corte.</p>
+              {([
+                ["face", "Faceamento", "desb"],
+                ["desb", "Desbaste externo G71", "desb"],
+                ["acab", "Acabamento G70", "acab"],
+                ["canal", "Canais G75 (" + (geo ? geo.canais.length : 0) + " achados)", "canal"],
+                ["corte", "Corte (peça presa no contrafuso)", "corte"],
+              ] as const).map(([k, rot, f]) => (
+                <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-zinc-800/70">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={ops[k]} onChange={(e) => setOps((o) => ({ ...o, [k]: e.target.checked }))} />
+                    {rot}
+                  </label>
+                  <input value={ferr[f]} onChange={(e) => setFerr((x) => ({ ...x, [f]: e.target.value.toUpperCase() }))} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-amber-300 w-24" title="Ferramenta (posição na torre)" />
+                </div>
+              ))}
+              <div className="text-xs font-bold text-zinc-400 mt-3 mb-1">DADOS DE CORTE ({material})</div>
+              {linha("Rotação máxima G92 S", num(rpmMax, setRpmMax, 100, "w-24"))}
+              {linha("Velocidade de corte Vc m/min", num(vc, setVc, 5, "w-24"))}
+              {linha("Profundidade desbaste mm", num(ap, setAp))}
+              {linha("Avanço desbaste mm/volta", num(fd, setFd, 0.01))}
+              {linha("Avanço acabamento mm/volta", num(ff, setFf, 0.01))}
+              {linha("Largura do bedame de canal mm", num(larguraCanal, setLarguraCanal, 0.5))}
+            </div>
+          )}
+
+          {passo === 5 && resultado && (
+            <div>
+              <p className="text-sm text-zinc-400 mb-2">Confira. Ao colocar nos canais: CANAL 1 = lado 1 (HEAD1, arquivo .P-2), CANAL 2 = lado 2 (HEAD2), e as fixações viram zonas FIX no simulador.</p>
+              <div className="grid sm:grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs font-bold text-emerald-400 mb-1">CANAL 1 — {resultado.nomes[0]}</div>
+                  <textarea readOnly value={resultado.textos[0]} className="w-full h-72 bg-black border border-zinc-700 rounded p-2 font-mono text-[11px] text-zinc-200" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-emerald-400 mb-1">CANAL 2 — {resultado.nomes[1]}</div>
+                  <textarea readOnly value={resultado.textos[1]} className="w-full h-72 bg-black border border-zinc-700 rounded p-2 font-mono text-[11px] text-zinc-200" />
+                </div>
+              </div>
+              <p className="text-xs text-amber-400 mt-2">⚠ Programa gerado automaticamente: conferir cabeçalho, números de sincronismo, recuos e ferramentas antes de rodar (bloco a bloco / potenciômetro baixo).</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800">
+          <button onClick={() => (passo > 1 ? setPasso(passo - 1) : onClose())} className="text-sm font-semibold px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">
+            {passo > 1 ? "← Voltar" : "Cancelar"}
+          </button>
+          {passo < 5 ? (
+            <button disabled={!podeAvancar} onClick={() => setPasso(passo + 1)} className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (podeAvancar ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-zinc-800 text-zinc-500 cursor-not-allowed")}>
+              Próximo →
+            </button>
+          ) : (
+            <button
+              disabled={!resultado}
+              onClick={() => { if (resultado) { onAplicar(resultado); setPasso(1); onClose(); } }}
+              className="text-sm font-bold px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              ✔ Colocar nos canais
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
