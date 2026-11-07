@@ -68,7 +68,7 @@ const SESSION_ID = Math.random().toString(36).substring(2, 10).toUpperCase();
 try {
   const anterior = localStorage.getItem("cnc_autoSaveTexts");
   if (anterior) localStorage.setItem("cnc_ultimoTrabalho", anterior);
-  ["cnc_autoSaveTexts", "cnc_partProfile", "cnc_stockProfile", "cnc_sketch2D", "cnc_fixacoes2D"].forEach((k) => localStorage.removeItem(k));
+  ["cnc_autoSaveTexts", "cnc_ops_painel", "cnc_partProfile", "cnc_stockProfile", "cnc_sketch2D", "cnc_fixacoes2D"].forEach((k) => localStorage.removeItem(k));
 } catch { /* sem armazenamento */ }
 
 export default function App() {
@@ -317,6 +317,10 @@ export default function App() {
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [projVer, setProjVer] = useState<number>(0); // muda ao carregar um projeto (simuladores recarregam)
   const [showIniciar, setShowIniciar] = useState<boolean>(false); // assistente ▶ Iniciar Programa
+  const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" } | null>(null); // escolhendo região no simulador
+  const [regiaoPick, setRegiaoPick] = useState<{ seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null>(null);
+  const [painelRegioes, setPainelRegioes] = useState<TMRegiao[]>([]);
+  const [fixComando, setFixComando] = useState<{ seq: number; zones: TMFixZone[] } | null>(null);
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
     const saved = localStorage.getItem("cnc_autoSaveTexts");
     if (saved) {
@@ -1686,7 +1690,7 @@ export default function App() {
 
           {/* ▶ INICIAR PROGRAMA: assistente que monta o programa a partir da máquina + STEP */}
           <button
-            onClick={() => setShowIniciar(true)}
+            onClick={() => { setRegiaoSel(null); setShowIniciar((v) => !v); }}
             className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold py-1 px-2 rounded transition flex items-center gap-1"
             title="Iniciar Programa: escolher máquina, peça (STEP), fixação e operações — o app monta o programa"
           >
@@ -2437,8 +2441,34 @@ export default function App() {
               </div>
             )}
 
+            {/* ▶ PAINEL "Programa da peça" (fica no lugar dos editores enquanto você monta) */}
+            {showIniciar && (
+              <PainelPrograma
+                key={"painel" + projVer}
+                partProfile={partProfile}
+                partZero={partZero}
+                stockProfile={stockProfile}
+                showStock={showStock}
+                setShowStock={setShowStock}
+                onAnexarStep={(alvo) => { setStepTarget(alvo); setTimeout(() => stepInputRef.current?.click(), 0); }}
+                regiaoSel={regiaoSel}
+                setRegiaoSel={setRegiaoSel}
+                pick={regiaoPick}
+                onRegioes={setPainelRegioes}
+                onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
+                onGerar={(r) => {
+                  setLayoutCount((n) => Math.max(n, 2));
+                  setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
+                  setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
+                  setActivePaneIdx(0);
+                  setRegiaoSel(null);
+                  setShowIniciar(false);
+                }}
+                onClose={() => { setRegiaoSel(null); setShowIniciar(false); }}
+              />
+            )}
             {/* Left side Split Editors Column */}
-            <div className={`flex-1 min-w-0 min-h-0 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1 ${isMobileLayout && mobileView === "grafico" ? "hidden" : ""}`}>
+            <div className={`flex-1 min-w-0 min-h-0 flex flex-col md:flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1 ${(isMobileLayout && mobileView === "grafico") || showIniciar ? "hidden" : ""}`}>
               {Array.from({ length: layoutCount }).map((_, idx) => (
                 <CNCEditor
                   key={idx}
@@ -2525,6 +2555,10 @@ export default function App() {
                   ) : (
                     <CNCSimulator
                       key={"proj" + projVer}
+                      regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
+                      regioes={showIniciar ? painelRegioes : undefined}
+                      fixComando={fixComando}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2585,6 +2619,10 @@ export default function App() {
                   ) : (
                     <CNCSimulator
                       key={"proj" + projVer}
+                      regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
+                      regioes={showIniciar ? painelRegioes : undefined}
+                      fixComando={fixComando}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2884,53 +2922,65 @@ export default function App() {
           </motion.div>
         </div>
       )}
-      {/* ▶ Assistente Iniciar Programa */}
-      <IniciarProgramaModal
-        open={showIniciar}
-        onClose={() => setShowIniciar(false)}
-        partProfile={partProfile}
-        partZero={partZero}
-        onAnexarStep={() => { setStepTarget("peca"); setTimeout(() => stepInputRef.current?.click(), 0); }}
-        onAplicar={(r) => {
-          try {
-            localStorage.setItem("cnc_fixacoes2D", JSON.stringify(r.fix)); // fixações viram zonas FIX no simulador
-            localStorage.setItem("cnc_fixLado2D", "1");
-          } catch { /* sem armazenamento */ }
-          setLayoutCount((n) => Math.max(n, 2));
-          setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
-          setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
-          setActivePaneIdx(0);
-          setProjVer((v) => v + 1);
-        }}
-      />
+      {/* (▶ o assistente virou o painel "Programa da peça", no lugar dos editores) */}
     </div>
   );
 }
 
 
 /* =====================================================================================
- * ▶ INICIAR PROGRAMA - assistente que monta o programa a partir da MÁQUINA + STEP
- * Passos: 1 Máquina  2 Peça/Bruto  3 Fixação  4 Operações  5 Gerar
- * Versão 1 (Ergomat TBSy): torneamento EXTERNO do lado 1 (face, desbaste G71, acabamento G70,
- * canais G75, corte) no CANAL 1 / HEAD1 e o esqueleto do lado 2 (contrafuso) no CANAL 2 / HEAD2.
- * O programa SEMPRE deve ser conferido antes de rodar na máquina.
+ * ▶ PROGRAMA DA PEÇA - painel de operações (estilo árvore do SolidCAM, simples)
+ * Fica no lugar do editor enquanto você monta; a peça fica no simulador 2D ao lado.
+ * Cada operação: ferramenta, ciclo ligado/desligado, dados de corte e a REGIÃO que ela usina
+ * (marcada clicando na peça: começo/fim ou linha por linha). Fixações liga/desliga.
+ * Gera o CANAL 1 (lado 1 / HEAD1, arquivo .P-2) e o CANAL 2 (lado 2 / HEAD2, contrafuso).
+ * Máquina desta versão: Ergomat TBSy 60. SEMPRE conferir o programa antes de rodar.
  * ===================================================================================== */
 type TMPt = { x: number; z: number };
 type TMIntervalo = { zA: number; zB: number; xa: number; xb: number };
+type TMFaixa = [number, number];
+type TMOpTipo = "face" | "desbExt" | "acabExt" | "canal" | "roscaExt" | "centro" | "furo" | "desbInt" | "acabInt" | "roscaInt" | "macho" | "corte";
+interface TMOp {
+  id: string;
+  tipo: TMOpTipo;
+  ativo: boolean;
+  ferr: string;
+  ciclo: boolean;
+  cor: string;
+  faixas: TMFaixa[];
+  p: Record<string, number>;
+  nomeFerr?: string; // nome da ferramenta
+  cab?: "H1" | "H2"; // onde fica na máquina: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)
+}
+type TMParam = { k: string; rot: string; def: number; step: number };
 
-const TM_MAQUINAS = [
-  { id: "TBSY", nome: "Ergomat TBSy 60", status: "PRONTA", info: "Fanuc 31i-A • 2 canais • HEAD1 torre inferior (estáticas) • HEAD2 torre superior (acionadas, C, Y) • contrafuso na T1" },
-  { id: "STAR_SR38", nome: "Star SR38", status: "EM CADASTRO", info: "Suíço • aguardando programas e manual" },
-  { id: "CITIZEN", nome: "Citizen", status: "EM CADASTRO", info: "Suíço • aguardando programas e manual" },
-  { id: "INDEX_ABC", nome: "Index ABC", status: "EM CADASTRO", info: "3 torres • aguardando programas" },
-  { id: "INDEX_C100", nome: "Index C100", status: "EM CADASTRO", info: "Aguardando programas e manual" },
-];
+const TM_CORES = ["#22d3ee", "#a3e635", "#f472b6", "#fb923c", "#c084fc", "#facc15", "#60a5fa", "#34d399", "#f87171", "#e879f9", "#fbbf24", "#2dd4bf"];
 
-const TM_MATERIAIS: Record<string, { vc: number; fd: number; ff: number; ap: number }> = {
-  "Aço carbono": { vc: 180, fd: 0.25, ff: 0.1, ap: 1.5 },
-  "Aço inox": { vc: 120, fd: 0.2, ff: 0.08, ap: 1.0 },
-  "Alumínio": { vc: 350, fd: 0.3, ff: 0.12, ap: 2.0 },
-  "Latão": { vc: 250, fd: 0.25, ff: 0.1, ap: 1.5 },
+const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean; ciclo: string; ferr: string; params: TMParam[] }> = {
+  face: { nome: "Faceamento", grupo: "EXTERNO", regiao: false, ciclo: "", ferr: "T0101", params: [
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.15, step: 0.01 }, { k: "sobre", rot: "Sobremetal face mm", def: 0.5, step: 0.1 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 } ] },
+  desbExt: { nome: "Desbaste externo", grupo: "EXTERNO", regiao: true, ciclo: "G71", ferr: "T0101", params: [
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 } ] },
+  acabExt: { nome: "Acabamento externo", grupo: "EXTERNO", regiao: true, ciclo: "G70", ferr: "T0202", params: [
+    { k: "vc", rot: "Vc m/min", def: 220, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 } ] },
+  canal: { nome: "Canal", grupo: "EXTERNO", regiao: true, ciclo: "G75", ferr: "T0303", params: [
+    { k: "vc", rot: "Vc m/min", def: 120, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau X mm", def: 1, step: 0.1 } ] },
+  roscaExt: { nome: "Rosca externa", grupo: "EXTERNO", regiao: true, ciclo: "G76", ferr: "T0404", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 800, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.25, step: 0.01 } ] },
+  centro: { nome: "Furo de centro", grupo: "INTERNO", regiao: false, ciclo: "", ferr: "T0505", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 1500, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "prof", rot: "Profundidade mm", def: 2, step: 0.1 } ] },
+  furo: { nome: "Furação", grupo: "INTERNO", regiao: true, ciclo: "G83", ferr: "T0606", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 1200, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "d", rot: "Ø broca mm", def: 8, step: 0.1 }, { k: "q", rot: "Pica-pau Q mm", def: 5, step: 0.5 } ] },
+  desbInt: { nome: "Desbaste interno", grupo: "INTERNO", regiao: true, ciclo: "G71", ferr: "T0707", params: [
+    { k: "vc", rot: "Vc m/min", def: 150, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.2, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.3, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 } ] },
+  acabInt: { nome: "Acabamento interno", grupo: "INTERNO", regiao: true, ciclo: "G70", ferr: "T0808", params: [
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 } ] },
+  roscaInt: { nome: "Rosca interna", grupo: "INTERNO", regiao: true, ciclo: "G76", ferr: "T0909", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.2, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 } ] },
+  macho: { nome: "Rosca com macho", grupo: "INTERNO", regiao: true, ciclo: "G84", ferr: "T1010", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 } ] },
+  corte: { nome: "Corte", grupo: "FINAL", regiao: false, ciclo: "", ferr: "T0404", params: [
+    { k: "vc", rot: "Vc m/min", def: 100, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 } ] },
 };
 
 const tmFmt = (n: number) => {
@@ -2939,428 +2989,742 @@ const tmFmt = (n: number) => {
   if (s === "-0.0") s = "0.0";
   return s;
 };
+const tmNaFaixa = (z: number, faixas: TMFaixa[]) => faixas.some(([a, b]) => z >= Math.min(a, b) - 1e-6 && z <= Math.max(a, b) + 1e-6);
 
-// Contorno EXTERNO da peça: para cada trecho em Z, o maior diâmetro (o que a ferramenta enxerga de fora)
-function tmContornoExterno(curves: TMPt[][]): TMIntervalo[] {
+// Para cada trecho em Z: maior diâmetro (externo) e, onde tem furo, o menor diâmetro (interno)
+function tmEnvelopes(curves: TMPt[][]) {
   const segs: [TMPt, TMPt][] = [];
-  curves.forEach((c) => {
-    for (let i = 0; i < c.length - 1; i++) segs.push([c[i], c[i + 1]]);
-  });
+  curves.forEach((c) => { for (let i = 0; i < c.length - 1; i++) segs.push([c[i], c[i + 1]]); });
   const r4 = (n: number) => Math.round(n * 10000) / 10000;
   const zset = new Set<number>();
   segs.forEach(([a, b]) => { zset.add(r4(a.z)); zset.add(r4(b.z)); });
-  const zs = Array.from(zset).sort((a, b) => b - a); // da face (Z maior) para trás
+  const zs = Array.from(zset).sort((a, b) => b - a);
   const xAt = (s: [TMPt, TMPt], z: number) => {
     const dz = s[1].z - s[0].z;
     if (Math.abs(dz) < 1e-9) return Math.max(s[0].x, s[1].x);
     return s[0].x + ((z - s[0].z) / dz) * (s[1].x - s[0].x);
   };
-  const out: TMIntervalo[] = [];
+  const ext: TMIntervalo[] = [];
+  const int: TMIntervalo[] = [];
   for (let i = 0; i < zs.length - 1; i++) {
     const zA = zs[i];
     const zB = zs[i + 1];
     if (zA - zB < 1e-4) continue;
     const zm = (zA + zB) / 2;
-    let best: [TMPt, TMPt] | null = null;
-    let bx = -Infinity;
+    const cobre: { s: [TMPt, TMPt]; x: number }[] = [];
     for (const s of segs) {
       const lo = Math.min(s[0].z, s[1].z);
       const hi = Math.max(s[0].z, s[1].z);
       if (hi - lo < 1e-6 || zm < lo || zm > hi) continue;
       const x = xAt(s, zm);
-      if (x > bx) { bx = x; best = s; }
+      if (x > 0.01) cobre.push({ s, x });
     }
-    if (!best) continue;
-    out.push({ zA, zB, xa: xAt(best, zA), xb: xAt(best, zB) });
+    if (!cobre.length) continue;
+    cobre.sort((a, b) => b.x - a.x);
+    const top = cobre[0].s;
+    ext.push({ zA, zB, xa: xAt(top, zA), xb: xAt(top, zB) });
+    if (cobre.length >= 2) {
+      const bot = cobre[cobre.length - 1].s;
+      int.push({ zA, zB, xa: xAt(bot, zA), xb: xAt(bot, zB) });
+    }
   }
-  return out;
+  return { ext, int };
 }
 
-// Perfil para G71/G70 (diâmetro só cresce indo para trás) + canais (onde a peça "afunda")
-function tmPerfilECanais(iv: TMIntervalo[]) {
-  let cur = 0;
+// Monta o perfil para o ciclo: externo = diâmetro só cresce indo para trás; interno = só diminui.
+// Onde a peça "afunda" (externo) vira CANAL.
+function tmPerfil(iv: TMIntervalo[], interno: boolean) {
+  let cur = interno ? Infinity : 0;
   const mono: TMIntervalo[] = [];
   const canais: { zStart: number; zEnd: number; fundo: number; topo: number }[] = [];
-  let aberto: { zStart: number; zEnd: number; fundo: number; topo: number } | null = null;
+  let ab: { zStart: number; zEnd: number; fundo: number; topo: number } | null = null;
   iv.forEach((s) => {
-    const na = Math.max(s.xa, cur);
-    const nb = Math.max(s.xb, na);
+    const na = interno ? Math.min(s.xa, cur) : Math.max(s.xa, cur);
+    const nb = interno ? Math.min(s.xb, na) : Math.max(s.xb, na);
     cur = nb;
     mono.push({ zA: s.zA, zB: s.zB, xa: na, xb: nb });
-    const afunda = s.xa < na - 0.01 || s.xb < nb - 0.01;
-    if (afunda) {
-      if (!aberto) aberto = { zStart: s.zA, zEnd: s.zB, fundo: Math.min(s.xa, s.xb), topo: nb };
-      else { aberto.zEnd = s.zB; aberto.fundo = Math.min(aberto.fundo, s.xa, s.xb); aberto.topo = Math.max(aberto.topo, nb); }
-    } else if (aberto) { canais.push(aberto); aberto = null; }
+    if (!interno) {
+      const afunda = s.xa < na - 0.01 || s.xb < nb - 0.01;
+      if (afunda) {
+        if (!ab) ab = { zStart: s.zA, zEnd: s.zB, fundo: Math.min(s.xa, s.xb), topo: nb };
+        else { ab.zEnd = s.zB; ab.fundo = Math.min(ab.fundo, s.xa, s.xb); ab.topo = Math.max(ab.topo, nb); }
+      } else if (ab) { canais.push(ab); ab = null; }
+    }
   });
-  if (aberto) canais.push(aberto);
+  if (ab) canais.push(ab);
   const pts: TMPt[] = [];
   mono.forEach((s) => {
     if (!pts.length) pts.push({ x: s.xa, z: s.zA });
-    else if (Math.abs(pts[pts.length - 1].x - s.xa) > 1e-3) pts.push({ x: s.xa, z: s.zA });
+    else if (Math.abs(pts[pts.length - 1].x - s.xa) > 1e-3 || Math.abs(pts[pts.length - 1].z - s.zA) > 1e-3) pts.push({ x: s.xa, z: s.zA });
     pts.push({ x: s.xb, z: s.zB });
   });
-  // tira pontos no meio de uma mesma reta
   const simp: TMPt[] = [];
   pts.forEach((p) => {
     if (simp.length >= 2) {
       const a = simp[simp.length - 2];
       const b = simp[simp.length - 1];
-      const cross = (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x);
-      if (Math.abs(cross) < 1e-6) simp.pop();
+      if (Math.abs((b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)) < 1e-6) simp.pop();
     }
     simp.push(p);
   });
   return { pts: simp, canais };
 }
 
-export interface TMResultado {
-  textos: [string, string];
-  nomes: [string, string];
-  fix: { lado: 1 | 2; za: number; zb: number; d: number }[];
+const TM_MAT_FATOR: Record<string, { vc: number; f: number }> = {
+  "Aço carbono": { vc: 1, f: 1 },
+  "Aço inox": { vc: 0.65, f: 0.8 },
+  "Alumínio": { vc: 1.9, f: 1.2 },
+  "Latão": { vc: 1.4, f: 1 },
+};
+
+type TMGeo = {
+  ext: TMIntervalo[];
+  int: TMIntervalo[];
+  zFront: number;
+  zBack: number;
+  L: number;
+  dMax: number;
+  dTras: number;
+  intZmin: number;
+  intZmax: number;
+  intDmin: number;
+};
+
+function tmGeo(partProfile: PartProfile | null, partZero: PartZeroConfig): TMGeo | null {
+  if (!partProfile) return null;
+  const { ext, int } = tmEnvelopes(profileToLathe(partProfile, partZero));
+  if (!ext.length) return null;
+  const zFront = ext[0].zA;
+  const zBack = ext[ext.length - 1].zB;
+  const pf = tmPerfil(ext, false);
+  return {
+    ext, int, zFront, zBack, L: zFront - zBack,
+    dMax: Math.max(...pf.pts.map((p) => p.x)),
+    dTras: ext[ext.length - 1].xb,
+    intZmin: int.length ? Math.min(...int.map((s) => s.zB)) : 0,
+    intZmax: int.length ? Math.max(...int.map((s) => s.zA)) : 0,
+    intDmin: int.length ? Math.min(...int.map((s) => Math.min(s.xa, s.xb))) : 0,
+  };
 }
 
-export const IniciarProgramaModal: React.FC<{
-  open: boolean;
-  onClose: () => void;
+function tmNovaOp(tipo: TMOpTipo, faixas: TMFaixa[], i: number, material: string): TMOp {
+  const fat = TM_MAT_FATOR[material] || TM_MAT_FATOR["Aço carbono"];
+  const p: Record<string, number> = {};
+  TM_TIPOS[tipo].params.forEach((pr) => {
+    let v = pr.def;
+    if (pr.k === "vc") v = Math.round(pr.def * fat.vc);
+    if (pr.k === "f") v = Math.round(pr.def * fat.f * 1000) / 1000;
+    p[pr.k] = v;
+  });
+  return { id: tipo + "_" + Date.now().toString(36) + "_" + i, tipo, ativo: true, ferr: TM_TIPOS[tipo].ferr, nomeFerr: TM_TIPOS[tipo].nome.toUpperCase(), cab: "H1", ciclo: !!TM_TIPOS[tipo].ciclo, cor: TM_CORES[i % TM_CORES.length], faixas, p };
+}
+
+function tmOpsPadrao(geo: TMGeo, material: string): TMOp[] {
+  const toda: TMFaixa[] = [[geo.zBack, geo.zFront]];
+  const ops: TMOp[] = [];
+  let i = 0;
+  ops.push(tmNovaOp("face", [], i++, material));
+  ops.push(tmNovaOp("desbExt", toda, i++, material));
+  ops.push(tmNovaOp("acabExt", toda, i++, material));
+  const { canais } = tmPerfil(geo.ext, false);
+  if (canais.length) ops.push(tmNovaOp("canal", canais.map((c) => [c.zEnd, c.zStart] as TMFaixa), i++, material));
+  if (geo.int.length) {
+    const furo: TMFaixa[] = [[geo.intZmin, geo.intZmax]];
+    ops.push(tmNovaOp("centro", [], i++, material));
+    const fu = tmNovaOp("furo", furo, i++, material);
+    fu.p.d = Math.max(1, Math.floor(geo.intDmin * 0.9 * 10) / 10);
+    ops.push(fu);
+    const di = tmNovaOp("desbInt", furo, i++, material);
+    di.p.d0 = fu.p.d;
+    ops.push(di);
+    const ai = tmNovaOp("acabInt", furo, i++, material);
+    ai.p.d0 = fu.p.d;
+    ops.push(ai);
+  }
+  ops.push(tmNovaOp("corte", [], i++, material));
+  return ops;
+}
+
+// zona Z onde o perfil (externo: diâmetro crescendo) alcança o diâmetro xAlvo
+function tmZOnde(pts: TMPt[], xAlvo: number, interno: boolean) {
+  const passou = (x: number) => (interno ? x <= xAlvo : x >= xAlvo);
+  if (passou(pts[0].x)) return pts[0].z;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (!passou(a.x) && passou(b.x)) {
+      if (Math.abs(b.x - a.x) < 1e-9) return a.z;
+      return a.z + ((xAlvo - a.x) / (b.x - a.x)) * (b.z - a.z);
+    }
+  }
+  return pts[pts.length - 1].z;
+}
+
+function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string }) {
+  const f = tmFmt;
+  const out: string[] = [];
+  const h2: string[] = []; // operações da torre superior (H2) vão para o CANAL 2
+  let alvo = out;
+  const W = (s: string) => alvo.push(s);
+  const data = new Date().toLocaleDateString("pt-BR");
+  const nm = cfg.nome || "PECA";
+  const bD = cfg.bD;
+  const zF = geo.zFront;
+  const rec = "G00 X" + f(bD + 20) + " Z50.0; (RECUO - CONFERIR)";
+  const ativos = ops.filter((o) => o.ativo);
+  const corteOp = ativos.find((o) => o.tipo === "corte");
+  const largCorte = corteOp ? corteOp.p.larg : 3;
+  const acabExt = ativos.find((o) => o.tipo === "acabExt");
+  const acabInt = ativos.find((o) => o.tipo === "acabInt");
+  const ciclos: Record<string, { p: number; q: number }> = {};
+  let nIdx = 1;
+  const sub = (iv: TMIntervalo[], faixas: TMFaixa[]) => iv.filter((s) => tmNaFaixa((s.zA + s.zB) / 2, faixas));
+
+  W("O0001 (" + nm + " - LADO 1 - HEAD1);");
+  W("(MAQUINA: ERGOMAT TBSY 60 - CANAL 1 / HEAD1 - TORRE INFERIOR);");
+  W("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
+  W("(PECA L" + f(geo.L) + " - D MAX " + f(geo.dMax) + " - BRUTO D" + f(bD) + " - " + cfg.material.toUpperCase() + ");");
+  W("");
+  W("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
+  W("G92 S" + cfg.rpmMax + "; (ROTACAO MAXIMA)");
+
+  const contorno = (pts: TMPt[], fAcab: number, xSaida: number, n1: number | null, n2: number | null, passaCorte: boolean) => {
+    W((n1 ? "N" + n1 + " " : "") + "G00 X" + f(pts[0].x) + ";");
+    W("G01 Z" + f(pts[0].z) + " F" + fAcab + ";");
+    for (let i = 1; i < pts.length; i++) W("G01 X" + f(pts[i].x) + " Z" + f(pts[i].z) + ";");
+    if (passaCorte) W("G01 Z" + f(geo.zBack - largCorte - 0.5) + "; (PASSA DO CORTE)");
+    W((n2 ? "N" + n2 + " " : "") + "G01 X" + f(xSaida) + ";");
+  };
+
+  ativos.forEach((op, i) => {
+    const T = TM_TIPOS[op.tipo];
+    const p = op.p;
+    const chave = JSON.stringify(op.faixas);
+    alvo = op.cab === "H2" ? h2 : out;
+    W("");
+    W("(OP " + (i + 1) + " - " + T.nome.toUpperCase() + (T.ciclo && op.ciclo ? " " + T.ciclo : T.ciclo ? " SEM CICLO" : "") + ");");
+    if (T.regiao && !op.faixas.length) { W("(SEM REGIAO MARCADA NA PECA - OPERACAO PULADA);"); return; }
+    W(op.ferr + " (" + (op.nomeFerr || T.nome.toUpperCase()) + " - " + (op.cab || "H1") + ");");
+
+    if (op.tipo === "face") {
+      W("G96 S" + p.vc + " M03;");
+      W("G00 X" + f(bD + 2) + " Z" + f(zF + p.sobre + 1) + " M08;");
+      const passos: number[] = [];
+      let z = zF + p.sobre;
+      while (z - p.ap > zF + 1e-6) { z -= p.ap; passos.push(z); }
+      passos.push(zF);
+      passos.forEach((zp) => { W("G00 Z" + f(zp) + ";"); W("G01 X-1.6 F" + p.f + ";"); W("G00 Z" + f(zp + 1) + ";"); W("G00 X" + f(bD + 2) + ";"); });
+      W(rec);
+      return;
+    }
+    if (op.tipo === "desbExt" || op.tipo === "acabExt") {
+      const s = sub(geo.ext, op.faixas);
+      if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); return; }
+      const pts = tmPerfil(s, false).pts;
+      const zS = s[0].zA;
+      const zE = s[s.length - 1].zB;
+      const passa = Math.abs(zE - geo.zBack) < 1e-3;
+      const xSai = Math.max(bD + 1, pts[pts.length - 1].x + 1);
+      const fAc = acabExt ? acabExt.p.f : 0.1;
+      W("G96 S" + p.vc + " M03;");
+      W("G00 X" + f(bD + 2) + " Z" + f(zS + 2) + " M08;");
+      if (op.tipo === "desbExt") {
+        if (op.ciclo) {
+          const n1 = nIdx * 100; const n2 = n1 + 50; nIdx++;
+          ciclos["E" + chave] = { p: n1, q: n2 };
+          W("G71 U" + f(p.ap) + " R0.5;");
+          W("G71 P" + n1 + " Q" + n2 + " U" + f(p.u) + " W" + f(p.w) + " F" + p.f + ";");
+          contorno(pts, fAc, xSai, n1, n2, passa);
+        } else {
+          const xMin = Math.min(...pts.map((q) => q.x)) + p.u;
+          let xp = bD;
+          while (xp > xMin + 1e-6) {
+            xp = Math.max(xMin, xp - 2 * p.ap);
+            const zl = tmZOnde(pts, xp + 1e-6, false);
+            if (zl >= zS - 1e-6) continue;
+            W("G00 X" + f(xp) + " Z" + f(zS + 1) + ";");
+            W("G01 Z" + f(zl + p.w) + " F" + p.f + ";");
+            W("G01 X" + f(xp + 1) + ";");
+            W("G00 Z" + f(zS + 1) + ";");
+          }
+        }
+      } else {
+        const c = ciclos["E" + chave];
+        if (op.ciclo && c) W("G70 P" + c.p + " Q" + c.q + ";");
+        else contorno(pts, p.f, xSai, null, null, passa);
+      }
+      W(rec);
+      return;
+    }
+    if (op.tipo === "canal") {
+      const s = sub(geo.ext, op.faixas);
+      if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); return; }
+      let canais = tmPerfil(s, false).canais;
+      if (!canais.length) canais = [{ zStart: s[0].zA, zEnd: s[s.length - 1].zB, fundo: Math.min(...s.map((q) => Math.min(q.xa, q.xb))), topo: Math.max(...s.map((q) => Math.max(q.xa, q.xb))) }];
+      const topoMax = Math.max(...canais.map((c) => c.topo));
+      W("G97 S" + Math.min(cfg.rpmMax, Math.round((p.vc * 1000) / (Math.PI * Math.max(topoMax, 1)))) + " M03; (BEDAME L" + f(p.larg) + " - REFERENCIA NO LADO DIREITO)");
+      canais.forEach((c) => {
+        const larg = c.zStart - c.zEnd;
+        W("(CANAL Z" + f(c.zStart) + " A Z" + f(c.zEnd) + " - FUNDO D" + f(c.fundo) + ");");
+        if (larg < p.larg - 0.01) W("(ATENCAO: CANAL MAIS ESTREITO QUE O BEDAME - CONFERIR);");
+        const zFim = larg < p.larg ? c.zStart : c.zEnd + p.larg;
+        W("G00 X" + f(c.topo + 2) + " Z" + f(c.zStart) + " M08;");
+        if (op.ciclo) {
+          W("G75 R0.5;");
+          W("G75 X" + f(c.fundo) + " Z" + f(zFim) + " P" + Math.round(p.pk * 1000) + " Q" + Math.round(p.larg * 0.8 * 1000) + " F" + p.f + ";");
+        } else {
+          let z = c.zStart;
+          for (;;) {
+            W("G00 Z" + f(z) + ";");
+            W("G01 X" + f(c.fundo) + " F" + p.f + ";");
+            W("G00 X" + f(c.topo + 2) + ";");
+            if (z <= zFim + 1e-6) break;
+            z = Math.max(zFim, z - p.larg * 0.8);
+          }
+        }
+        W("G00 X" + f(c.topo + 2) + ";");
+      });
+      W(rec);
+      return;
+    }
+    if (op.tipo === "roscaExt") {
+      const s = sub(geo.ext, op.faixas);
+      if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); return; }
+      const maior = Math.max(...s.map((q) => Math.max(q.xa, q.xb)));
+      const h = p.h > 0 ? p.h : 0.6134 * p.passo;
+      const zS = s[0].zA;
+      const zE = s[s.length - 1].zB;
+      W("(ROSCA EXTERNA D" + f(maior) + " X PASSO " + f(p.passo) + " - Z" + f(zS) + " A Z" + f(zE) + ");");
+      W("G97 S" + p.rpm + " M03;");
+      W("G00 X" + f(maior + 2) + " Z" + f(zS + 3 * p.passo) + " M08;");
+      W("G76 P010060 Q50 R0.05;");
+      W("G76 X" + f(maior - 2 * h) + " Z" + f(zE) + " P" + Math.round(h * 1000) + " Q" + Math.round(p.q * 1000) + " F" + p.passo + ";");
+      W(rec);
+      return;
+    }
+    if (op.tipo === "centro") {
+      W("G97 S" + p.rpm + " M03;");
+      W("G00 X0.0 Z" + f(zF + 2) + " M08;");
+      W("G01 Z" + f(zF - p.prof) + " F" + p.f + ";");
+      W("G00 Z" + f(zF + 2) + ";");
+      W(rec);
+      return;
+    }
+    if (op.tipo === "furo" || op.tipo === "macho") {
+      const zFim = Math.min(...op.faixas.map((fx) => Math.min(fx[0], fx[1])));
+      if (op.tipo === "furo") {
+        W("(BROCA D" + f(p.d) + " ATE Z" + f(zFim) + ");");
+        W("G97 S" + p.rpm + " M03;");
+        W("G00 X0.0 Z" + f(zF + 2) + " M08;");
+        if (op.ciclo) {
+          W("G83 X0.0 Z" + f(zFim) + " Q" + Math.round(p.q * 1000) + " F" + p.f + "; (Q EM MILESIMO)");
+          W("G80;");
+        } else {
+          let z = zF;
+          while (z > zFim + 1e-6) {
+            z = Math.max(zFim, z - p.q);
+            W("G01 Z" + f(z) + " F" + p.f + ";");
+            W("G00 Z" + f(zF + 2) + ";");
+            if (z > zFim + 1e-6) W("G00 Z" + f(z + 0.5) + ";");
+          }
+        }
+      } else {
+        W("(MACHO PASSO " + f(p.passo) + " ATE Z" + f(zFim) + ");");
+        W("M29 S" + p.rpm + "; (MACHO RIGIDO - CONFERIR)");
+        W("G00 X0.0 Z" + f(zF + 5) + " M08;");
+        W("G84 Z" + f(zFim) + " F" + p.passo + ";");
+        W("G80;");
+      }
+      W(rec);
+      return;
+    }
+    if (op.tipo === "desbInt" || op.tipo === "acabInt") {
+      const s = sub(geo.int, op.faixas);
+      if (!s.length) { W("(REGIAO SEM PERFIL INTERNO);"); return; }
+      const pts = tmPerfil(s, true).pts;
+      const zS = s[0].zA;
+      const d0 = p.d0 || 8;
+      const fAc = acabInt ? acabInt.p.f : 0.08;
+      W("G96 S" + p.vc + " M03;");
+      W("G00 X" + f(d0 - 1) + " Z" + f(zS + 2) + " M08;");
+      if (op.tipo === "desbInt") {
+        if (op.ciclo) {
+          const n1 = nIdx * 100; const n2 = n1 + 50; nIdx++;
+          ciclos["I" + chave] = { p: n1, q: n2 };
+          W("G71 U" + f(p.ap) + " R0.5;");
+          W("G71 P" + n1 + " Q" + n2 + " U-" + f(p.u) + " W" + f(p.w) + " F" + p.f + ";");
+          contorno(pts, fAc, d0 - 1, n1, n2, false);
+        } else {
+          const xMax = Math.max(...pts.map((q) => q.x)) - p.u;
+          let xp = d0;
+          while (xp < xMax - 1e-6) {
+            xp = Math.min(xMax, xp + 2 * p.ap);
+            const zl = tmZOnde(pts, xp - 1e-6, true);
+            if (zl >= zS - 1e-6) continue;
+            W("G00 X" + f(xp) + " Z" + f(zS + 1) + ";");
+            W("G01 Z" + f(zl + p.w) + " F" + p.f + ";");
+            W("G01 X" + f(xp - 1) + ";");
+            W("G00 Z" + f(zS + 1) + ";");
+          }
+        }
+      } else {
+        const c = ciclos["I" + chave];
+        if (op.ciclo && c) W("G70 P" + c.p + " Q" + c.q + ";");
+        else contorno(pts, p.f, d0 - 1, null, null, false);
+      }
+      W("G00 Z" + f(zF + 2) + "; (SAI DO FURO)");
+      W(rec);
+      return;
+    }
+    if (op.tipo === "roscaInt") {
+      const s = sub(geo.int, op.faixas);
+      if (!s.length) { W("(REGIAO SEM PERFIL INTERNO);"); return; }
+      const menor = p.d0 > 0 ? p.d0 : Math.min(...s.map((q) => Math.min(q.xa, q.xb)));
+      const h = p.h > 0 ? p.h : 0.5413 * p.passo;
+      const zS = s[0].zA;
+      const zE = s[s.length - 1].zB;
+      W("(ROSCA INTERNA - MENOR D" + f(menor) + " X PASSO " + f(p.passo) + ");");
+      W("G97 S" + p.rpm + " M03;");
+      W("G00 X" + f(menor - 1) + " Z" + f(zS + 3 * p.passo) + " M08;");
+      W("G76 P010060 Q50 R0.05;");
+      W("G76 X" + f(menor + 2 * h) + " Z" + f(zE) + " P" + Math.round(h * 1000) + " Q" + Math.round(p.q * 1000) + " F" + p.passo + ";");
+      W("G00 Z" + f(zF + 2) + "; (SAI DO FURO)");
+      W(rec);
+      return;
+    }
+    if (op.tipo === "corte") {
+      W("M400; (SINC: ESPERA O CONTRAFUSO PEGAR A PECA - CONFERIR NUMERO)");
+      W("G97 S" + Math.min(cfg.rpmMax, Math.round((p.vc * 1000) / (Math.PI * bD))) + " M03; (BEDAME L" + f(p.larg) + " - REFERENCIA NO LADO DIREITO)");
+      W("G00 X" + f(bD + 2) + " Z" + f(geo.zBack) + " M08;");
+      W("G01 X1.0 F" + p.f + ";");
+      W("G01 X-0.5 F" + f(p.f * 0.6) + ";");
+      W("G00 X" + f(bD + 2) + ";");
+      W("M401; (SINC: CORTE TERMINADO - CONTRAFUSO PODE RECUAR)");
+      W("(AVANCO DA BARRA PARA A PROXIMA PECA - COMPLETAR CONFORME A MAQUINA);");
+      W(rec);
+    }
+  });
+  alvo = out;
+  W("");
+  W(rec.replace(";", " M09;"));
+  W("M30;");
+
+  const g: string[] = [];
+  const G = (s: string) => g.push(s);
+  G("O0002 (" + nm + " - LADO 2 - HEAD2 / CONTRAFUSO);");
+  G("(MAQUINA: ERGOMAT TBSY 60 - CANAL 2 / HEAD2 - TORRE SUPERIOR);");
+  G("(CONTRAFUSO NA POSICAO T1 - TRABALHA COM T521, T22, T23);");
+  G("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
+  G("");
+  G("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
+  if (h2.length) {
+    G("");
+    G("(=== OPERACOES DA TORRE SUPERIOR H2 NO LADO 1 - CONFERIR SINCRONISMO COM O HEAD1 ===);");
+    h2.forEach((s) => G(s));
+    G("");
+  }
+  G("(1 - CONTRAFUSO PEGA A PECA NO D" + f(geo.dTras) + ", PERTO DO CORTE);");
+  G("(COMPLETAR: CHAMADA DO CONTRAFUSO / ABRIR PINCA / AVANCO ATE A PEGA);");
+  G("M400; (SINC: CONTRAFUSO PEGOU - HEAD1 PODE CORTAR)");
+  G("M401; (SINC: ESPERA O CORTE TERMINAR)");
+  G("(2 - RECUO DO CONTRAFUSO COM A PECA);");
+  G("(3 - LADO 2: FACEAR O LADO DO CORTE ATE O COMPRIMENTO FINAL L" + f(geo.L) + ");");
+  G("(COMPLETAR COM T521 / T22 / T23 CONFORME O LAYOUT DA TORRE);");
+  G("M30;");
+  return { textos: [out.join("\n"), g.join("\n")] as [string, string], nomes: [nm + ".P-2", nm] as [string, string] };
+}
+
+export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean };
+export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number };
+
+export const PainelPrograma: React.FC<{
   partProfile: PartProfile | null;
   partZero: PartZeroConfig;
-  onAnexarStep: () => void;
-  onAplicar: (r: TMResultado) => void;
-}> = ({ open, onClose, partProfile, partZero, onAnexarStep, onAplicar }) => {
-  const [passo, setPasso] = useState<number>(1);
-  const [maq, setMaq] = useState<string>("TBSY");
-  const [material, setMaterial] = useState<string>("Aço carbono");
-  const [nome, setNome] = useState<string>("");
-  const [brutoD, setBrutoD] = useState<number>(0);
-  const [sobreFace, setSobreFace] = useState<number>(0.5);
-  const [pega1, setPega1] = useState<number>(15);
-  const [saida, setSaida] = useState<number>(5);
-  const [pega2, setPega2] = useState<number>(10);
-  const [larguraCorte, setLarguraCorte] = useState<number>(3);
-  const [larguraCanal, setLarguraCanal] = useState<number>(3);
-  const [rpmMax, setRpmMax] = useState<number>(3000);
-  const [vc, setVc] = useState<number>(180);
-  const [fd, setFd] = useState<number>(0.25);
-  const [ff, setFf] = useState<number>(0.1);
-  const [ap, setAp] = useState<number>(1.5);
-  const [ops, setOps] = useState({ face: true, desb: true, acab: true, canal: true, corte: true });
-  const [ferr, setFerr] = useState({ desb: "T0101", acab: "T0202", canal: "T0303", corte: "T0404" });
+  stockProfile: PartProfile | null;
+  showStock: boolean;
+  setShowStock: (v: boolean) => void;
+  onAnexarStep: (alvo: "peca" | "bruto") => void;
+  regiaoSel: { opId: string; modo: "cf" | "linha" } | null;
+  setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" } | null) => void;
+  pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
+  onRegioes: (r: TMRegiao[]) => void;
+  onFix: (z: TMFixZone[]) => void;
+  onGerar: (r: { textos: [string, string]; nomes: [string, string] }) => void;
+  onClose: () => void;
+}> = ({ partProfile, partZero, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onRegioes, onFix, onGerar, onClose }) => {
+  const ler = <T,>(k: string, padrao: T): T => {
+    try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
+  };
+  const [cfg, setCfg] = useState(() => ler("cnc_painel_cfg", { maq: "TBSY", material: "Aço carbono", nome: "", rpmMax: 3000, l1: true, saida: 5, pega1: 15, l2: true, pega2: 10 }));
+  const [ops, setOps] = useState<TMOp[]>(() => {
+    try { const v = JSON.parse(localStorage.getItem("cnc_ops_painel") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+  });
+  const [aberta, setAberta] = useState<string | null>(null);
+  const [addTipo, setAddTipo] = useState<string>("");
+  const primeiroRef = useRef<number | null>(null);
+  useEffect(() => { try { localStorage.setItem("cnc_painel_cfg", JSON.stringify(cfg)); } catch {} }, [cfg]);
+  useEffect(() => { try { localStorage.setItem("cnc_ops_painel", JSON.stringify(ops)); } catch {} }, [ops]);
 
-  // dados da peça (contorno externo no sistema do torno: X diâmetro, Z com o zero escolhido)
-  const geo = useMemo(() => {
-    if (!partProfile) return null;
-    const curves = profileToLathe(partProfile, partZero);
-    const iv = tmContornoExterno(curves);
-    if (!iv.length) return null;
-    const { pts, canais } = tmPerfilECanais(iv);
-    const zFront = iv[0].zA;
-    const zBack = iv[iv.length - 1].zB;
-    const dMax = Math.max(...pts.map((p) => p.x));
-    const dTras = pts[pts.length - 1].x;
-    return { pts, canais, zFront, zBack, L: zFront - zBack, dMax, dTras, furo: partProfile.rMinBore };
-  }, [partProfile, partZero]);
+  const geo = useMemo(() => tmGeo(partProfile, partZero), [partProfile, partZero]);
+  const bD = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
 
-  // valores sugeridos quando abre / troca a peça
+  // peça nova sem operações: sugere as operações
   useEffect(() => {
-    if (!open) return;
-    if (geo) setBrutoD((v) => (v > 0 && v >= geo.dMax ? v : Math.ceil(geo.dMax + 1)));
-    if (partProfile && !nome) setNome(partProfile.name.replace(/\.[^.]+$/, "").toUpperCase().replace(/[^A-Z0-9_\-]/g, "_").slice(0, 20));
-  }, [open, geo, partProfile]);
+    if (geo && !ops.length) setOps(tmOpsPadrao(geo, cfg.material));
+    if (partProfile && !cfg.nome) setCfg((c) => ({ ...c, nome: partProfile.name.replace(/\.[^.]+$/, "").toUpperCase().replace(/[^A-Z0-9_\-]/g, "_").slice(0, 20) }));
+  }, [geo]);
 
-  const escolherMaterial = (m: string) => {
-    setMaterial(m);
-    const t = TM_MATERIAIS[m];
-    if (t) { setVc(t.vc); setFd(t.fd); setFf(t.ff); setAp(t.ap); }
+  // regiões pintadas na peça
+  useEffect(() => {
+    onRegioes(ops.filter((o) => o.ativo && TM_TIPOS[o.tipo].regiao).map((o) => ({ cor: o.cor, faixas: o.faixas, ativa: aberta === o.id || (regiaoSel ? regiaoSel.opId === o.id : false) })));
+  }, [ops, aberta, regiaoSel]);
+
+  // fixações ligadas/desligadas viram zonas FIX no simulador
+  useEffect(() => {
+    if (!geo) { onFix([]); return; }
+    const corteOp = ops.find((o) => o.tipo === "corte" && o.ativo);
+    const lc = corteOp ? corteOp.p.larg : 3;
+    const z: TMFixZone[] = [];
+    if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD });
+    if (cfg.l2) z.push({ lado: 2, za: geo.zBack, zb: geo.zBack + cfg.pega2, d: geo.dTras });
+    onFix(z);
+  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, bD, ops]);
+
+  // toque na peça (vem do simulador) vira região da operação escolhida
+  useEffect(() => {
+    if (!pick || !regiaoSel) return;
+    const r = pick.r;
+    const sel = regiaoSel;
+    if (sel.modo === "linha") {
+      if (r.za === undefined || r.zb === undefined) return;
+      const nova: TMFaixa = [Math.min(r.za, r.zb), Math.max(r.za, r.zb)];
+      setOps((arr) => arr.map((o) => {
+        if (o.id !== sel.opId) return o;
+        const ja = o.faixas.findIndex((fx) => Math.abs(fx[0] - nova[0]) < 1e-3 && Math.abs(fx[1] - nova[1]) < 1e-3);
+        return { ...o, faixas: ja >= 0 ? o.faixas.filter((_, k) => k !== ja) : [...o.faixas, nova] };
+      }));
+      return;
+    }
+    if (primeiroRef.current === null) { primeiroRef.current = r.z; return; }
+    const z1 = primeiroRef.current;
+    primeiroRef.current = null;
+    setOps((arr) => arr.map((o) => (o.id === sel.opId ? { ...o, faixas: [[Math.min(z1, r.z), Math.max(z1, r.z)]] } : o)));
+    setRegiaoSel(null);
+  }, [pick ? pick.seq : -1]);
+
+  const setOp = (id: string, mud: Partial<TMOp>) => setOps((arr) => arr.map((o) => (o.id === id ? { ...o, ...mud } : o)));
+  const mover = (id: string, d: number) => setOps((arr) => {
+    const i = arr.findIndex((o) => o.id === id);
+    const j = i + d;
+    if (i < 0 || j < 0 || j >= arr.length) return arr;
+    const c = [...arr];
+    const t = c[i]; c[i] = c[j]; c[j] = t;
+    return c;
+  });
+  const escolherRegiao = (id: string, modo: "cf" | "linha") => {
+    primeiroRef.current = null;
+    if (regiaoSel && regiaoSel.opId === id && regiaoSel.modo === modo) setRegiaoSel(null);
+    else setRegiaoSel({ opId: id, modo });
+  };
+  const textoRegiao = (o: TMOp) => {
+    if (!TM_TIPOS[o.tipo].regiao) return "peça toda";
+    if (!o.faixas.length) return "sem região";
+    return o.faixas.map((fx) => "Z" + tmFmt(Math.max(fx[0], fx[1])) + "→Z" + tmFmt(Math.min(fx[0], fx[1]))).join("  ");
+  };
+  const toda = (o: TMOp): TMFaixa[] => {
+    if (!geo) return [];
+    const grupo = TM_TIPOS[o.tipo].grupo;
+    if (grupo === "INTERNO") return geo.int.length ? [[geo.intZmin, geo.intZmax]] : [];
+    return [[geo.zBack, geo.zFront]];
+  };
+  const gerar = () => {
+    if (!geo) return;
+    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material }));
   };
 
-  const gerar = (): TMResultado | null => {
-    if (!geo) return null;
-    const bD = brutoD;
-    const nm = nome || "PECA";
-    const data = new Date().toLocaleDateString("pt-BR");
-    const h: string[] = [];
-    const L1 = (s: string) => h.push(s);
-    const rec = "G00 X" + tmFmt(bD + 20) + " Z50.0; (RECUO - CONFERIR)";
-    L1("O0001 (" + nm + " - LADO 1 - HEAD1);");
-    L1("(MAQUINA: ERGOMAT TBSY 60 - CANAL 1 / HEAD1 - TORRE INFERIOR);");
-    L1("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
-    L1("(BRUTO: BARRA D" + tmFmt(bD) + " - " + material.toUpperCase() + " - PECA L" + tmFmt(geo.L) + ");");
-    L1("");
-    L1("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
-    L1("G92 S" + rpmMax + "; (ROTACAO MAXIMA)");
-    const contorno = (comN: boolean) => {
-      const p0 = geo.pts[0];
-      L1((comN ? "N100 " : "") + "G00 X" + tmFmt(p0.x) + ";");
-      L1("G01 Z" + tmFmt(p0.z) + " F" + ff + ";");
-      for (let i = 1; i < geo.pts.length; i++) L1("G01 X" + tmFmt(geo.pts[i].x) + " Z" + tmFmt(geo.pts[i].z) + ";");
-      const pf = geo.pts[geo.pts.length - 1];
-      L1("G01 Z" + tmFmt(geo.zBack - larguraCorte - 0.5) + "; (PASSA DO CORTE)");
-      L1((comN ? "N200 " : "") + "G01 X" + tmFmt(Math.max(bD + 1, pf.x + 1)) + ";");
-    };
-    if (ops.face || ops.desb) {
-      L1("");
-      L1(ferr.desb + " (DESBASTE EXTERNO);");
-      L1("G96 S" + vc + " M03;");
-    }
-    if (ops.face) {
-      L1("(FACEAMENTO - SOBREMETAL " + tmFmt(sobreFace) + ");");
-      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + sobreFace + 1) + " M08;");
-      let z = geo.zFront + sobreFace;
-      const passos: number[] = [];
-      while (z - ap > geo.zFront + 1e-6) { z -= ap; passos.push(z); }
-      passos.push(geo.zFront);
-      passos.forEach((zp) => {
-        L1("G00 Z" + tmFmt(zp) + ";");
-        L1("G01 X-1.6 F" + tmFmt(fd * 0.6) + ";");
-        L1("G00 Z" + tmFmt(zp + 1) + ";");
-        L1("G00 X" + tmFmt(bD + 2) + ";");
-      });
-    }
-    if (ops.desb) {
-      L1("(DESBASTE EXTERNO G71);");
-      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + 2) + " M08;");
-      L1("G71 U" + tmFmt(ap) + " R0.5;");
-      L1("G71 P100 Q200 U0.4 W0.1 F" + fd + ";");
-      contorno(true);
-      L1(rec);
-    }
-    if (ops.acab) {
-      L1("");
-      L1(ferr.acab + " (ACABAMENTO EXTERNO);");
-      L1("G96 S" + Math.round(vc * 1.2) + " M03;");
-      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zFront + 2) + " M08;");
-      if (ops.desb) L1("G70 P100 Q200;");
-      else contorno(false);
-      L1(rec);
-    }
-    if (ops.canal && geo.canais.length) {
-      L1("");
-      L1(ferr.canal + " (CANAIS G75 - BEDAME L" + tmFmt(larguraCanal) + " - REFERENCIA NO LADO DIREITO);");
-      const topoMax = Math.max(...geo.canais.map((c) => c.topo));
-      L1("G97 S" + Math.min(rpmMax, Math.round((vc * 0.7 * 1000) / (Math.PI * Math.max(topoMax, 1)))) + " M03;");
-      geo.canais.forEach((c, i) => {
-        const largura = c.zStart - c.zEnd;
-        L1("(CANAL " + (i + 1) + ": Z" + tmFmt(c.zStart) + " A Z" + tmFmt(c.zEnd) + " - FUNDO D" + tmFmt(c.fundo) + ");");
-        if (largura < larguraCanal - 0.01) L1("(ATENCAO: CANAL MAIS ESTREITO QUE O BEDAME - CONFERIR);");
-        const zFim = largura < larguraCanal ? c.zStart : c.zEnd + larguraCanal;
-        L1("G00 X" + tmFmt(c.topo + 2) + " Z" + tmFmt(c.zStart) + " M08;");
-        L1("G75 R0.5;");
-        L1("G75 X" + tmFmt(c.fundo) + " Z" + tmFmt(zFim) + " P1000 Q" + Math.round(larguraCanal * 0.8 * 1000) + " F0.05;");
-        L1("G00 X" + tmFmt(c.topo + 2) + ";");
-      });
-      L1(rec);
-    }
-    if (ops.corte) {
-      L1("");
-      L1("(CORTE - PECA PRESA NO CONTRAFUSO);");
-      L1("M400; (SINC: ESPERA O CONTRAFUSO PEGAR A PECA - CONFERIR NUMERO)");
-      L1(ferr.corte + " (BEDAME DE CORTE L" + tmFmt(larguraCorte) + " - REFERENCIA NO LADO DIREITO);");
-      L1("G97 S" + Math.min(rpmMax, Math.round((vc * 0.6 * 1000) / (Math.PI * bD))) + " M03;");
-      L1("G00 X" + tmFmt(bD + 2) + " Z" + tmFmt(geo.zBack) + " M08;");
-      L1("G01 X1.0 F0.05;");
-      L1("G01 X-0.5 F0.03;");
-      L1("G00 X" + tmFmt(bD + 2) + ";");
-      L1("M401; (SINC: CORTE TERMINADO - CONTRAFUSO PODE RECUAR)");
-      L1("(AVANCO DA BARRA PARA A PROXIMA PECA - COMPLETAR CONFORME A MAQUINA);");
-    }
-    L1(rec.replace(";", " M09;"));
-    L1("M30;");
-
-    // ---------- CANAL 2 / HEAD2 (lado 2 - contrafuso) ----------
-    const g: string[] = [];
-    const L2 = (s: string) => g.push(s);
-    L2("O0002 (" + nm + " - LADO 2 - HEAD2 / CONTRAFUSO);");
-    L2("(MAQUINA: ERGOMAT TBSY 60 - CANAL 2 / HEAD2 - TORRE SUPERIOR);");
-    L2("(CONTRAFUSO NA POSICAO T1 - TRABALHA COM T521, T22, T23);");
-    L2("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
-    L2("");
-    L2("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
-    L2("(1 - CONTRAFUSO PEGA A PECA NO D" + tmFmt(geo.dTras) + " - PEGA DE " + tmFmt(pega2) + " MM, PERTO DO CORTE);");
-    L2("(COMPLETAR: CHAMADA DO CONTRAFUSO / ABRIR PINCA / AVANCO ATE A PEGA);");
-    L2("M400; (SINC: CONTRAFUSO PEGOU - HEAD1 PODE CORTAR)");
-    L2("M401; (SINC: ESPERA O CORTE TERMINAR)");
-    L2("(2 - RECUO DO CONTRAFUSO COM A PECA);");
-    L2("(3 - LADO 2: FACEAR O LADO DO CORTE ATE O COMPRIMENTO FINAL L" + tmFmt(geo.L) + ");");
-    L2("(COMPLETAR COM T521 / T22 / T23 CONFORME O LAYOUT DA TORRE);");
-    L2("M30;");
-
-    const fix: TMResultado["fix"] = [
-      { lado: 1, za: geo.zBack - larguraCorte - saida - pega1, zb: geo.zBack - larguraCorte - saida, d: bD },
-      { lado: 2, za: geo.zBack, zb: geo.zBack + pega2, d: geo.dTras },
-    ];
-    return { textos: [h.join("\n"), g.join("\n")], nomes: [nm + ".P-2", nm], fix };
-  };
-
-  const resultado = passo === 5 ? gerar() : null;
-  if (!open) return null;
-
-  const num = (v: number, set: (n: number) => void, step = 0.1, w = "w-20") => (
-    <input
-      type="number"
-      step={step}
-      value={v}
-      onChange={(e) => { const n = parseFloat(e.target.value); set(isNaN(n) ? 0 : n); }}
-      className={"bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white " + w}
-    />
+  const inp = "bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white";
+  const sw = (on: boolean, onClick: () => void, rot: string) => (
+    <button onClick={onClick} className={"text-[10px] font-bold px-2 py-0.5 rounded border transition " + (on ? "bg-emerald-600/80 border-emerald-400 text-white" : "bg-zinc-900 border-zinc-700 text-zinc-500")}>
+      {rot} {on ? "ON" : "OFF"}
+    </button>
   );
-  const linha = (rotulo: string, campo: React.ReactNode, dica?: string) => (
-    <label className="flex items-center justify-between gap-3 py-1.5 border-b border-zinc-800/70" title={dica}>
-      <span className="text-sm text-zinc-300">{rotulo}</span>
-      {campo}
-    </label>
+  const num = (v: number, set: (n: number) => void, step = 0.1, w = "w-16") => (
+    <input type="number" step={step} value={v} onChange={(e) => { const n = parseFloat(e.target.value); set(isNaN(n) ? 0 : n); }} className={inp + " " + w} />
   );
-  const nomesPassos = ["Máquina", "Peça", "Fixação", "Operações", "Gerar"];
-  const podeAvancar = passo === 1 ? maq === "TBSY" : passo === 2 ? !!geo && brutoD >= (geo ? geo.dMax : 0) : true;
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
-      <div className="w-full max-w-3xl max-h-[92vh] flex flex-col bg-[#111118] border border-zinc-700 rounded-2xl shadow-2xl text-zinc-100" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-          <div className="text-base font-bold text-emerald-400">▶ Iniciar Programa</div>
-          <button onClick={onClose} className="text-zinc-400 hover:text-white px-2" title="Fechar">✕</button>
+    <div className="flex-1 min-w-0 min-h-[60vh] md:min-h-0 flex flex-col bg-[#111118] border border-zinc-800 rounded-xl overflow-hidden text-zinc-100">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-[#0d0d14]">
+        <div className="text-sm font-bold text-emerald-400">▶ Programa da peça</div>
+        <div className="flex items-center gap-2">
+          <select value={cfg.maq} onChange={(e) => setCfg({ ...cfg, maq: e.target.value })} className={inp}>
+            <option value="TBSY">Ergomat TBSy 60</option>
+            <option value="X" disabled>Star SR38 (em cadastro)</option>
+            <option value="Y" disabled>Citizen (em cadastro)</option>
+            <option value="Z" disabled>Index ABC (em cadastro)</option>
+          </select>
+          <button onClick={onClose} className="text-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded border border-zinc-700" title="Fechar o painel e voltar aos programas">Programas ✕</button>
         </div>
-        <div className="flex gap-1 px-4 py-2 border-b border-zinc-800 overflow-x-auto">
-          {nomesPassos.map((n, i) => (
-            <div key={n} className={"text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap " + (passo === i + 1 ? "bg-emerald-600 text-white" : passo > i + 1 ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-400")}>
-              {i + 1}. {n}
-            </div>
-          ))}
-        </div>
+      </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          {passo === 1 && (
-            <div className="grid gap-2">
-              <p className="text-sm text-zinc-400 mb-1">Escolha a máquina. Só as máquinas PRONTAS (com manual e programas de exemplo) podem gerar programa.</p>
-              {TM_MAQUINAS.map((m) => {
-                const ok = m.status === "PRONTA";
-                return (
-                  <button
-                    key={m.id}
-                    disabled={!ok}
-                    onClick={() => setMaq(m.id)}
-                    className={"text-left rounded-xl border px-3 py-2 transition " + (maq === m.id && ok ? "border-emerald-500 bg-emerald-950/40" : ok ? "border-zinc-700 hover:border-zinc-500" : "border-zinc-800 opacity-50 cursor-not-allowed")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold">{m.nome}</span>
-                      <span className={"text-[10px] font-bold px-2 py-0.5 rounded " + (ok ? "bg-emerald-600 text-white" : "bg-zinc-700 text-zinc-300")}>{m.status}</span>
-                    </div>
-                    <div className="text-xs text-zinc-400 mt-0.5">{m.info}</div>
-                  </button>
-                );
-              })}
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {/* PEÇA E BRUTO */}
+        <div className="rounded-lg border border-zinc-800 p-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-bold text-sky-300">PEÇA</span>
+            <button onClick={() => onAnexarStep("peca")} className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600">{partProfile ? "Trocar STEP" : "Anexar STEP"}</button>
+          </div>
+          {geo && partProfile ? (
+            <div className="text-xs text-zinc-300 flex flex-wrap gap-x-3 gap-y-1">
+              <span className="font-bold text-white truncate max-w-[180px]">{partProfile.name}</span>
+              <span>L {tmFmt(geo.L)}</span>
+              <span>Ø máx {tmFmt(geo.dMax)}</span>
+              {geo.int.length > 0 && <span>Furo Ø{tmFmt(geo.intDmin)}</span>}
             </div>
-          )}
-
-          {passo === 2 && (
-            <div>
-              {!geo ? (
-                <div className="text-center py-6">
-                  <p className="text-sm text-zinc-300 mb-3">Anexe o STEP da peça para o app ler o perfil.</p>
-                  <button onClick={onAnexarStep} className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm px-4 py-2 rounded-lg">Anexar STEP da peça</button>
-                </div>
-              ) : (
-                <div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 text-center">
-                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">PEÇA</div><div className="font-bold text-sm truncate">{partProfile ? partProfile.name : ""}</div></div>
-                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">COMPRIMENTO</div><div className="font-bold text-sm">{tmFmt(geo.L)} mm</div></div>
-                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">Ø MÁXIMO</div><div className="font-bold text-sm">{tmFmt(geo.dMax)} mm</div></div>
-                    <div className="bg-zinc-900 rounded-lg p-2"><div className="text-[10px] text-zinc-400">CANAIS ACHADOS</div><div className="font-bold text-sm">{geo.canais.length}</div></div>
-                  </div>
-                  {geo.furo !== null && geo.furo !== undefined && (
-                    <p className="text-xs text-amber-400 mb-2">⚠ A peça tem furo interno (Ø{tmFmt(geo.furo * 2)}). Nesta versão o furo/interno ainda não é gerado: complete à mão.</p>
-                  )}
-                  {linha("Nome do programa", <input value={nome} onChange={(e) => setNome(e.target.value.toUpperCase())} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white w-44" />)}
-                  {linha("Material", (
-                    <select value={material} onChange={(e) => escolherMaterial(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-white">
-                      {Object.keys(TM_MATERIAIS).map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  ), "Ajusta velocidade de corte, avanços e profundidade sugeridos")}
-                  {linha("Ø da barra (bruto) mm", num(brutoD, setBrutoD, 0.5), "Precisa ser maior que o Ø máximo da peça")}
-                  {brutoD < geo.dMax && <p className="text-xs text-red-400">A barra precisa ser maior que o Ø máximo da peça ({tmFmt(geo.dMax)}).</p>}
-                  {linha("Sobremetal na face mm", num(sobreFace, setSobreFace))}
-                  <p className="text-xs text-zinc-500 mt-2">Zero da peça (Z0): face {partZero.face}{partZero.offsetZ ? " + " + tmFmt(partZero.offsetZ) + " mm" : ""} — muda no botão Peça.</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {passo === 3 && (
-            <div>
-              <p className="text-sm text-zinc-400 mb-2">Onde a peça é presa. Essas áreas viram ZONA PROIBIDA (FIX) no simulador: movimento que passar ali aparece como colisão.</p>
-              <div className="text-xs font-bold text-red-300 mt-2 mb-1">LADO 1 — placa / pinça do fuso principal (HEAD1)</div>
-              {linha("Distância da placa até o corte mm", num(saida, setSaida, 0.5), "Quanto a barra fica para fora da placa depois do corte")}
-              {linha("Comprimento da pega mm", num(pega1, setPega1, 0.5))}
-              <div className="text-xs font-bold text-red-300 mt-3 mb-1">LADO 2 — contrafuso (posição T1 da torre superior)</div>
-              {linha("Comprimento da pega no contrafuso mm", num(pega2, setPega2, 0.5), "Pega no diâmetro já usinado do lado 1, perto do corte")}
-              {linha("Largura do bedame de corte mm", num(larguraCorte, setLarguraCorte, 0.5))}
-            </div>
-          )}
-
-          {passo === 4 && (
-            <div>
-              <p className="text-sm text-zinc-400 mb-2">Operações do lado 1 (CANAL 1 / HEAD1). Marque o que quer e confira ferramenta e dados de corte.</p>
-              {([
-                ["face", "Faceamento", "desb"],
-                ["desb", "Desbaste externo G71", "desb"],
-                ["acab", "Acabamento G70", "acab"],
-                ["canal", "Canais G75 (" + (geo ? geo.canais.length : 0) + " achados)", "canal"],
-                ["corte", "Corte (peça presa no contrafuso)", "corte"],
-              ] as const).map(([k, rot, f]) => (
-                <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-zinc-800/70">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={ops[k]} onChange={(e) => setOps((o) => ({ ...o, [k]: e.target.checked }))} />
-                    {rot}
-                  </label>
-                  <input value={ferr[f]} onChange={(e) => setFerr((x) => ({ ...x, [f]: e.target.value.toUpperCase() }))} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-amber-300 w-24" title="Ferramenta (posição na torre)" />
-                </div>
-              ))}
-              <div className="text-xs font-bold text-zinc-400 mt-3 mb-1">DADOS DE CORTE ({material})</div>
-              {linha("Rotação máxima G92 S", num(rpmMax, setRpmMax, 100, "w-24"))}
-              {linha("Velocidade de corte Vc m/min", num(vc, setVc, 5, "w-24"))}
-              {linha("Profundidade desbaste mm", num(ap, setAp))}
-              {linha("Avanço desbaste mm/volta", num(fd, setFd, 0.01))}
-              {linha("Avanço acabamento mm/volta", num(ff, setFf, 0.01))}
-              {linha("Largura do bedame de canal mm", num(larguraCanal, setLarguraCanal, 0.5))}
-            </div>
-          )}
-
-          {passo === 5 && resultado && (
-            <div>
-              <p className="text-sm text-zinc-400 mb-2">Confira. Ao colocar nos canais: CANAL 1 = lado 1 (HEAD1, arquivo .P-2), CANAL 2 = lado 2 (HEAD2), e as fixações viram zonas FIX no simulador.</p>
-              <div className="grid sm:grid-cols-2 gap-2">
-                <div>
-                  <div className="text-xs font-bold text-emerald-400 mb-1">CANAL 1 — {resultado.nomes[0]}</div>
-                  <textarea readOnly value={resultado.textos[0]} className="w-full h-72 bg-black border border-zinc-700 rounded p-2 font-mono text-[11px] text-zinc-200" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-emerald-400 mb-1">CANAL 2 — {resultado.nomes[1]}</div>
-                  <textarea readOnly value={resultado.textos[1]} className="w-full h-72 bg-black border border-zinc-700 rounded p-2 font-mono text-[11px] text-zinc-200" />
-                </div>
-              </div>
-              <p className="text-xs text-amber-400 mt-2">⚠ Programa gerado automaticamente: conferir cabeçalho, números de sincronismo, recuos e ferramentas antes de rodar (bloco a bloco / potenciômetro baixo).</p>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800">
-          <button onClick={() => (passo > 1 ? setPasso(passo - 1) : onClose())} className="text-sm font-semibold px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">
-            {passo > 1 ? "← Voltar" : "Cancelar"}
-          </button>
-          {passo < 5 ? (
-            <button disabled={!podeAvancar} onClick={() => setPasso(passo + 1)} className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (podeAvancar ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-zinc-800 text-zinc-500 cursor-not-allowed")}>
-              Próximo →
-            </button>
           ) : (
-            <button
-              disabled={!resultado}
-              onClick={() => { if (resultado) { onAplicar(resultado); setPasso(1); onClose(); } }}
-              className="text-sm font-bold px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white"
-            >
-              ✔ Colocar nos canais
-            </button>
+            <div className="text-xs text-zinc-500">Anexe o STEP da peça para montar as operações.</div>
           )}
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+            <span className="text-zinc-400">Nome</span>
+            <input value={cfg.nome} onChange={(e) => setCfg({ ...cfg, nome: e.target.value.toUpperCase() })} className={inp + " w-32"} />
+            <span className="text-zinc-400">Material</span>
+            <select value={cfg.material} onChange={(e) => setCfg({ ...cfg, material: e.target.value })} className={inp}>
+              {Object.keys(TM_MAT_FATOR).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <span className="text-zinc-400">G92 S</span>
+            {num(cfg.rpmMax, (n) => setCfg({ ...cfg, rpmMax: n }), 100)}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+            <span className="text-zinc-400">Bruto:</span>
+            {stockProfile ? sw(showStock, () => setShowStock(!showStock), "STEP do bruto Ø" + tmFmt(stockProfile.rMax * 2)) : <span className="text-zinc-500">sem STEP do bruto (usando Ø{tmFmt(bD)})</span>}
+            <button onClick={() => onAnexarStep("bruto")} className="text-[10px] font-bold px-2 py-0.5 rounded border border-zinc-700 hover:border-zinc-500">{stockProfile ? "Trocar bruto" : "Anexar bruto (opcional)"}</button>
+          </div>
         </div>
+
+        {/* FIXAÇÕES */}
+        <div className="rounded-lg border border-red-900/60 p-2">
+          <div className="text-[11px] font-bold text-red-300 mb-1">FIXAÇÕES (zona proibida)</div>
+          <div className="flex flex-wrap items-center gap-2 text-xs mb-1">
+            {sw(cfg.l1, () => setCfg({ ...cfg, l1: !cfg.l1 }), "Lado 1")}
+            <span className="text-zinc-400">placa: pega</span>{num(cfg.pega1, (n) => setCfg({ ...cfg, pega1: n }), 0.5, "w-14")}
+            <span className="text-zinc-400">dist. do corte</span>{num(cfg.saida, (n) => setCfg({ ...cfg, saida: n }), 0.5, "w-14")}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {sw(cfg.l2, () => setCfg({ ...cfg, l2: !cfg.l2 }), "Lado 2")}
+            <span className="text-zinc-400">contrafuso (T1): pega</span>{num(cfg.pega2, (n) => setCfg({ ...cfg, pega2: n }), 0.5, "w-14")}
+          </div>
+        </div>
+
+        {/* OPERAÇÕES */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-bold text-amber-300">ÁRVORE DE OPERAÇÕES — LADO 1</span>
+            {geo && <button onClick={() => { if (confirm("Trocar as operações pelas sugeridas para esta peça?")) setOps(tmOpsPadrao(geo, cfg.material)); }} className="text-[10px] text-zinc-400 hover:text-white underline">sugerir de novo</button>}
+          </div>
+          {regiaoSel && (
+            <div className="text-[11px] font-bold bg-amber-500/20 border border-amber-500/60 text-amber-200 rounded px-2 py-1 mb-2">
+              {regiaoSel.modo === "cf" ? "Toque na peça no COMEÇO e depois no FIM da região" : "Toque nas LINHAS da peça (toque de novo para tirar). Clique em OK quando terminar."}
+              <button onClick={() => setRegiaoSel(null)} className="ml-2 px-2 rounded bg-amber-600 text-white">OK</button>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {ops.map((o, i) => {
+              const T = TM_TIPOS[o.tipo];
+              const aberto = aberta === o.id;
+              const escolhendo = regiaoSel && regiaoSel.opId === o.id;
+              return (
+                <div key={o.id} className={"rounded-lg border " + (aberto || escolhendo ? "border-zinc-500 bg-zinc-900" : "border-zinc-800 bg-zinc-900/50") + (o.ativo ? "" : " opacity-50")}>
+                  <div className="flex items-center gap-2 px-2 py-1.5">
+                    <input type="checkbox" checked={o.ativo} onChange={(e) => setOp(o.id, { ativo: e.target.checked })} title="Usar esta operação" />
+                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: o.cor }} />
+                    <button onClick={() => setAberta(aberto ? null : o.id)} className="flex-1 min-w-0 text-left">
+                      <div className="text-xs font-bold truncate">{i + 1}. {T.nome} <span className="text-[9px] text-zinc-500">{T.grupo}</span></div>
+                      <div className="text-[10px] text-zinc-400 truncate">{textoRegiao(o)}</div>
+                    </button>
+                    <input value={o.ferr} onChange={(e) => setOp(o.id, { ferr: e.target.value.toUpperCase() })} className={inp + " w-16 text-amber-300"} title="Ferramenta" />
+                    {T.ciclo && (
+                      <button onClick={() => setOp(o.id, { ciclo: !o.ciclo })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (o.ciclo ? "border-cyan-500 text-cyan-300" : "border-zinc-700 text-zinc-500")} title="Usar ciclo ou escrever linha a linha">
+                        {o.ciclo ? T.ciclo : "sem ciclo"}
+                      </button>
+                    )}
+                    <button onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (o.cab === "H2" ? "border-purple-500 text-purple-300" : "border-sky-600 text-sky-300")} title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)">{o.cab || "H1"}</button>
+                    <button
+                      onClick={() => {
+                        const c: TMOp = { ...o, id: o.tipo + "_" + Date.now().toString(36), cor: TM_CORES[ops.length % TM_CORES.length], faixas: o.faixas.map((fx) => [fx[0], fx[1]] as TMFaixa), p: { ...o.p } };
+                        setOps((arr) => { const k = arr.findIndex((x) => x.id === o.id); return [...arr.slice(0, k + 1), c, ...arr.slice(k + 1)]; });
+                        setAberta(c.id);
+                      }}
+                      className="text-zinc-500 hover:text-white text-xs"
+                      title="Copiar esta operação (depois é só mudar região, parâmetros ou ferramenta)"
+                    >
+                      ⧉
+                    </button>
+                    <button onClick={() => mover(o.id, -1)} className="text-zinc-500 hover:text-white text-xs" title="Subir">▲</button>
+                    <button onClick={() => mover(o.id, 1)} className="text-zinc-500 hover:text-white text-xs" title="Descer">▼</button>
+                    <button onClick={() => { setOps((arr) => arr.filter((x) => x.id !== o.id)); if (escolhendo) setRegiaoSel(null); }} className="text-zinc-500 hover:text-red-400 text-xs" title="Apagar">✕</button>
+                  </div>
+                  {aberto && (
+                    <div className="px-2 pb-2 border-t border-zinc-800">
+                      <div className="flex items-center gap-2 pt-1.5 text-[11px]">
+                        <span className="text-zinc-400">Nome da ferramenta</span>
+                        <input value={o.nomeFerr || ""} onChange={(e) => setOp(o.id, { nomeFerr: e.target.value.toUpperCase() })} className={inp + " flex-1"} placeholder="EX: PASTILHA VNMG 1604" />
+                      </div>
+                      {T.regiao && (
+                        <div className="flex flex-wrap items-center gap-1.5 py-1.5">
+                          <span className="text-[10px] text-zinc-400">Região:</span>
+                          <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
+                          <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
+                          <button onClick={() => setOp(o.id, { faixas: toda(o) })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
+                          <button onClick={() => setOp(o.id, { faixas: [] })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        {T.params.map((pr) => (
+                          <label key={pr.k} className="flex items-center justify-between gap-2 text-[11px] text-zinc-300">
+                            <span className="truncate">{pr.rot}</span>
+                            {num(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def, (n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } }), pr.step, "w-16")}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2 mt-2">
+            <select value={addTipo} onChange={(e) => setAddTipo(e.target.value)} className={inp + " flex-1"}>
+              <option value="">+ Adicionar operação…</option>
+              {(["EXTERNO", "INTERNO", "FINAL"] as const).map((gr) => (
+                <optgroup key={gr} label={gr}>
+                  {(Object.keys(TM_TIPOS) as TMOpTipo[]).filter((t) => TM_TIPOS[t].grupo === gr).map((t) => <option key={t} value={t}>{TM_TIPOS[t].nome}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <button
+              disabled={!addTipo}
+              onClick={() => {
+                const t = addTipo as TMOpTipo;
+                const nova = tmNovaOp(t, [], ops.length, cfg.material);
+                nova.faixas = geo ? toda(nova) : [];
+                const iCorte = ops.findIndex((x) => x.tipo === "corte");
+                setOps((arr) => (iCorte >= 0 && t !== "corte" ? [...arr.slice(0, iCorte), nova, ...arr.slice(iCorte)] : [...arr, nova]));
+                setAberta(nova.id);
+                setAddTipo("");
+              }}
+              className={"text-xs font-bold px-3 py-1 rounded " + (addTipo ? "bg-emerald-700 hover:bg-emerald-600" : "bg-zinc-800 text-zinc-500")}
+            >
+              Adicionar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-3 py-2 border-t border-zinc-800 flex items-center justify-between gap-2 bg-[#0d0d14]">
+        <span className="text-[10px] text-amber-400">⚠ Conferir o programa antes de rodar</span>
+        <button disabled={!geo} onClick={gerar} className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (geo ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-zinc-800 text-zinc-500")}>
+          ✔ Gerar programa nos canais
+        </button>
       </div>
     </div>
   );

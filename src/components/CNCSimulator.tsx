@@ -17,6 +17,11 @@ interface CNCSimulatorProps {
   onError?: (error: string) => void;
   bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
   cursorStyle?: CursorStyle; // cores e tamanho da mira e do quadradinho do desenho (Aparência)
+  // Painel ▶ Programa da peça: escolher a REGIÃO de cada operação clicando na peça e mostrar as regiões
+  regiaoModo?: "cf" | "linha" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
+  onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
+  regioes?: { cor: string; faixas: [number, number][]; ativa: boolean }[];
+  fixComando?: { seq: number; zones: { lado: 1 | 2; za: number; zb: number; d: number }[] } | null; // painel liga/desliga fixações
   partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
 }
@@ -33,6 +38,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   onError,
   bgColor,
   cursorStyle,
+  regiaoModo,
+  onRegiaoPick,
+  regioes,
+  fixComando,
   partLayers,
   onInsertPoint,
 }) => {
@@ -120,6 +129,10 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   });
   const [fixDraft, setFixDraft] = useState<{ z: number; d: number } | null>(null); // 1º toque (começo da pega)
   const [fixMsg, setFixMsg] = useState<string | null>(null);
+  // painel ▶ Programa da peça manda ligar/desligar as fixações
+  useEffect(() => {
+    if (fixComando) setFixZones(fixComando.zones);
+  }, [fixComando ? fixComando.seq : -1]);
   useEffect(() => {
     try {
       localStorage.setItem("cnc_fixacoes2D", JSON.stringify(fixZones));
@@ -681,7 +694,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       return;
     }
 
-    if (!showMirinha && !pgMode && !fixMode) {
+    if (!showMirinha && !pgMode && !fixMode && !regiaoModo) {
       if (hoveredPoint) setHoveredPoint(null);
       return;
     }
@@ -725,7 +738,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
     // Linhas da peça/bruto (STEP) também entram na mira; vale a que estiver mais perto (no PG, sempre a peça)
     const partSnap = findPickSnap(mouseX, mouseY, canvas, pgMode ? 45 : 35); // peça (STEP) + desenho
-    if (partSnap && (pgMode || fixMode || !closestItem || partSnap.dist < minDistance)) {
+    if (partSnap && (pgMode || fixMode || !!regiaoModo || !closestItem || partSnap.dist < minDistance)) {
       setHoveredPoint({
         canvasX: partSnap.canvasX,
         canvasY: partSnap.canvasY,
@@ -2066,6 +2079,33 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       });
       ctx.restore();
     }
+    // ===== REGIÕES das operações (painel ▶ Programa da peça): linhas da peça pintadas na cor da operação =====
+    if (regioes && regioes.length && partLayers && partLayers.length) {
+      const pecaL = partLayers.find((Lr) => Lr.id === "peca") || partLayers[0];
+      regioes.forEach((rg) => {
+        if (!rg.faixas.length) return;
+        ctx.save();
+        ctx.strokeStyle = rg.cor;
+        ctx.lineWidth = rg.ativa ? 5 : 3;
+        ctx.globalAlpha = rg.ativa ? 0.95 : 0.5;
+        ctx.lineCap = "round";
+        pecaL.curves.forEach((c) => {
+          for (let i = 0; i < c.length - 1; i++) {
+            const a = c[i];
+            const b = c[i + 1];
+            const zm = (a.z + b.z) / 2;
+            if (!rg.faixas.some(([za, zb]) => zm >= Math.min(za, zb) - 1e-6 && zm <= Math.max(za, zb) + 1e-6)) continue;
+            for (const sgn of [1, -1]) {
+              ctx.beginPath();
+              ctx.moveTo(originX + a.z * zoom * zDirSign, originY - sgn * (a.x / 2) * zoom);
+              ctx.lineTo(originX + b.z * zoom * zDirSign, originY - sgn * (b.x / 2) * zoom);
+              ctx.stroke();
+            }
+          }
+        });
+        ctx.restore();
+      });
+    }
     if (fixMode && fixDraft) {
       const px = originX + fixDraft.z * zoom * zDirSign;
       ctx.save();
@@ -2080,7 +2120,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
 
     // Draw Hover/Snap Target ("Mira")
-    if ((showMirinha || pgMode || fixMode) && hoveredPoint) { // no PG a mira aparece sempre
+    if ((showMirinha || pgMode || fixMode || !!regiaoModo) && hoveredPoint) { // no PG a mira aparece sempre
       ctx.save();
       ctx.strokeStyle = isThemeDark ? "rgba(0, 243, 255, 0.4)" : "rgba(0, 150, 200, 0.4)";
       ctx.lineWidth = 1;
@@ -2442,6 +2482,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     fixDraft,
     fixHits,
     fixMode,
+    regioes,
+    regiaoModo,
     cursorStyle,
     canvasSize,
     gcodeText,
@@ -2473,6 +2515,45 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   // Click on Canvas toolpath to highlight editor line
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (sketchTool !== "none") { handleSketchClick(e); return; } // ferramenta de desenho ligada
+    // PAINEL: escolhendo a REGIÃO de uma operação (começo/fim ou linha por linha)
+    if (regiaoModo && onRegiaoPick) {
+      const cnv = canvasRef.current;
+      if (!cnv) return;
+      const rct = cnv.getBoundingClientRect();
+      const mx = rct.width > 0 ? ((e.clientX - rct.left) / rct.width) * cnv.width : 0;
+      const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
+      if (regiaoModo === "linha") {
+        // acha a LINHA (ou arco) do perfil mais perto do toque e manda o começo e o fim dela em Z
+        if (!partLayers || !partLayers.length) return;
+        const pecaL = partLayers.find((Lr) => Lr.id === "peca") || partLayers[0];
+        const zDir = simInvertZ ? -1 : 1;
+        const oX = cnv.width / 2 + 50 + panX;
+        const oY = cnv.height / 2 + 50 + panY;
+        let melhor: { x: number; z: number }[] | null = null;
+        let bd = 45;
+        for (const c of pecaL.curves) {
+          for (const sgn of [1, -1]) {
+            for (let i = 0; i < c.length - 1; i++) {
+              const res = getDistanceToSegment(mx, my, oX + c[i].z * zoom * zDir, oY - sgn * (c[i].x / 2) * zoom, oX + c[i + 1].z * zoom * zDir, oY - sgn * (c[i + 1].x / 2) * zoom);
+              if (res.distance < bd) { bd = res.distance; melhor = c; }
+            }
+          }
+        }
+        const m = melhor as { x: number; z: number }[] | null;
+        if (m) {
+          const zs = m.map((p) => p.z);
+          onRegiaoPick({ z: (Math.min(...zs) + Math.max(...zs)) / 2, x: Math.max(...m.map((p) => p.x)), za: Math.min(...zs), zb: Math.max(...zs) });
+        }
+        return;
+      }
+      const g = findPickSnap(mx, my, cnv, 45);
+      if (g) onRegiaoPick({ z: g.latheZ, x: g.latheX });
+      else {
+        const w = skToWorld(mx, my, sketchView(cnv));
+        onRegiaoPick({ z: w.z, x: Math.abs(w.r) * 2 });
+      }
+      return;
+    }
     // FIXAÇÃO: 1º toque = começo da pega, 2º toque = fim da pega (no lado escolhido)
     if (fixMode) {
       const cnv = canvasRef.current;
