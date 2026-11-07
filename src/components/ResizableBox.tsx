@@ -18,12 +18,13 @@ interface ResizableBoxProps extends React.HTMLAttributes<HTMLDivElement> {
   id: string;
   anchor?: Anchor;
   children?: React.ReactNode;
+  movable?: boolean; // true = aparece uma alça para ARRASTAR a caixa pela tela
 }
 
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 3;
 
-export const ResizableBox: React.FC<ResizableBoxProps> = ({ id, anchor = "tl", className = "", style, children, ...rest }) => {
+export const ResizableBox: React.FC<ResizableBoxProps> = ({ id, anchor = "tl", movable = false, className = "", style, children, ...rest }) => {
   const storageKey = "cnc_boxScale_" + id;
   const [scale, setScale] = useState<number>(() => {
     try {
@@ -45,6 +46,41 @@ export const ResizableBox: React.FC<ResizableBoxProps> = ({ id, anchor = "tl", c
   const handleRight = anchor !== "tr";
   const handleBottom = anchor !== "bl";
   const origin = anchor === "tl" ? "top left" : anchor === "bl" ? "bottom left" : "top right";
+  // ===== Arrastar a caixa pela tela (só quando "movable") — posição fica salva neste tablet =====
+  const posKey = "cnc_boxPos_" + id;
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(posKey) || "null");
+      return v && typeof v.x === "number" && typeof v.y === "number" ? v : { x: 0, y: 0 };
+    } catch {
+      return { x: 0, y: 0 };
+    }
+  });
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const moveRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const onMoveDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    moveRef.current = { x: e.clientX, y: e.clientY, px: posRef.current.x, py: posRef.current.y };
+  };
+  const onMoveMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!moveRef.current) return;
+    e.stopPropagation();
+    setPos({ x: moveRef.current.px + (e.clientX - moveRef.current.x), y: moveRef.current.py + (e.clientY - moveRef.current.y) });
+  };
+  const onMoveUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!moveRef.current) return;
+    e.stopPropagation();
+    moveRef.current = null;
+    try { localStorage.setItem(posKey, JSON.stringify(posRef.current)); } catch { /* sem armazenamento */ }
+  };
+  const resetPos = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPos({ x: 0, y: 0 });
+    try { localStorage.setItem(posKey, JSON.stringify({ x: 0, y: 0 })); } catch { /* sem armazenamento */ }
+  };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
@@ -76,9 +112,32 @@ export const ResizableBox: React.FC<ResizableBoxProps> = ({ id, anchor = "tl", c
     <div
       {...rest}
       className={className}
-      style={{ ...style, transform: `scale(${scale})`, transformOrigin: origin }}
+      style={{ ...style, transform: (movable ? `translate(${pos.x}px, ${pos.y}px) ` : "") + `scale(${scale})`, transformOrigin: origin }}
     >
       {children}
+      {/* Alça de ARRASTAR a caixa pela tela (toque duplo = volta para o lugar original) */}
+      {movable && (
+        <div
+          onPointerDown={onMoveDown}
+          onPointerMove={onMoveMove}
+          onPointerUp={onMoveUp}
+          onPointerCancel={onMoveUp}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={resetPos}
+          title="Arraste para mudar a caixa de lugar (toque duplo = volta ao lugar original)"
+          className="absolute w-6 h-6 flex items-center justify-center pointer-events-auto cursor-move opacity-70 hover:opacity-100 z-50 rounded-md bg-black/60 border border-zinc-600 text-zinc-200"
+          style={{
+            touchAction: "none",
+            ...(handleRight ? { right: -2 } : { left: -2 }),
+            ...(handleBottom ? { top: -2 } : { bottom: -2 }),
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3" />
+          </svg>
+        </div>
+      )}
       {/* Alça de redimensionar (arraste para aumentar / diminuir) */}
       <div
         data-resize-handle="1"

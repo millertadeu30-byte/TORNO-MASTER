@@ -31,6 +31,8 @@ interface CNCSimulator3DProps {
   isHighContrast?: boolean;
   onClose?: () => void;
   bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
+  partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça / bruto do STEP (perfil do torno)
+  partSolid?: PartSolidInfo | null; // Peça REAL do STEP (com rasgos): eixo + zero da peça
 }
 
 interface Point3D {
@@ -50,6 +52,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   isHighContrast = false,
   onClose,
   bgColor,
+  partLayers,
+  partSolid,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -71,22 +75,32 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
   // Simulation State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [showFullPath, setShowFullPath] = useState<boolean>(true); // true = traçado completo do programa na tela
   const [currentStepIdx, setCurrentStepIdx] = useState<number>(0);
   const [simSpeed, setSimSpeed] = useState<number>(70); // %
-  const [cameraView, setCameraView] = useState<"iso" | "front" | "side" | "top">("iso");
+  const [cameraView, setCameraView] = useState<"iso" | "front" | "side" | "top" | "reta">("iso");
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(!isHighContrast);
 
   // Visibility Controls for Clean Screen (Eixos X, Y, Z, C, Grade & Mirinha)
-  const [showAxisX, setShowAxisX] = useState<boolean>(true);
-  const [showAxisY, setShowAxisY] = useState<boolean>(true);
-  const [showAxisZ, setShowAxisZ] = useState<boolean>(true);
-  const [showAxisC, setShowAxisC] = useState<boolean>(true);
-  const [showGrid, setShowGrid] = useState<boolean>(true);
-  const [showMirinha, setShowMirinha] = useState<boolean>(() => localStorage.getItem("cnc3d_showMirinha") === "true");
+  const [showAxisX, setShowAxisX] = useState<boolean>(false);
+  const [showAxisY, setShowAxisY] = useState<boolean>(false);
+  const [showAxisZ, setShowAxisZ] = useState<boolean>(false);
+  const [showAxisC, setShowAxisC] = useState<boolean>(false);
+  const [showGrid, setShowGrid] = useState<boolean>(false);
+  // Ao abrir o 3D tudo começa DESLIGADO (eixos, grade e mira); liga pelos botões da barra de cima
+  const [showMirinha, setShowMirinha] = useState<boolean>(false);
   // Painéis sobre o gráfico (DRO, legenda e caixas de eixos) - começam ocultos para a tela ficar limpa
   const [showPaineis, setShowPaineis] = useState<boolean>(() => localStorage.getItem("cnc3d_showPaineis") === "true");
   useEffect(() => { localStorage.setItem("cnc3d_showMirinha", String(showMirinha)); }, [showMirinha]);
   useEffect(() => { localStorage.setItem("cnc3d_showPaineis", String(showPaineis)); }, [showPaineis]);
+  // Traços de usinagem no 3D: ligado/desligado (botãozinho no canto de baixo, fica gravado no aparelho)
+  const [showToolpath3D, setShowToolpath3D] = useState<boolean>(() => {
+    try { return localStorage.getItem("cnc3d_showToolpath") !== "0"; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("cnc3d_showToolpath", showToolpath3D ? "1" : "0"); } catch {}
+    if (pathLinesGroupRef.current) pathLinesGroupRef.current.visible = showToolpath3D;
+  });
   // Se uma cor de fundo foi escolhida em "Aparência", ajusta o tema (linhas/grade) para manter contraste
   useEffect(() => {
     if (!bgColor) return;
@@ -244,6 +258,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const handleStepChange = (newStepIdx: number) => {
     const clamped = Math.min(Math.max(0, newStepIdx), trajectoryPoints.length - 1);
     setCurrentStepIdx(clamped);
+    setShowFullPath(false);
     const point = trajectoryPoints[clamped];
     if (point && point.line >= 0) {
       isInternalStepRef.current = true;
@@ -259,6 +274,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const handleStop = () => {
     setIsPlaying(false);
     handleStepChange(0);
+    setShowFullPath(true); // Parar: volta ao início e mostra o programa inteiro desenhado (igual ao 2D)
   };
 
   const handleTogglePlay = () => {
@@ -268,6 +284,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       if (currentStepIdx >= trajectoryPoints.length - 1) {
         handleStepChange(0);
       }
+      setShowFullPath(false);
       setIsPlaying(true);
     }
   };
@@ -490,6 +507,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         if (rendererRef.current.domElement && container && container.contains(rendererRef.current.domElement)) {
           container.removeChild(rendererRef.current.domElement);
         }
+        rendererRef.current.forceContextLoss(); // libera a placa de vídeo ao fechar o 3D
         rendererRef.current.dispose();
       }
     };
@@ -500,6 +518,129 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     if (!sceneRef.current) return;
     sceneRef.current.background = new THREE.Color(bgColor || (isDarkTheme ? 0x0b0b12 : 0xf1f5f9));
   }, [isDarkTheme, bgColor]);
+
+  // ===== PEÇA DO STEP EM 3D (gira o perfil do torno em volta do eixo Z) =====
+  const [showPart3D, setShowPart3D] = useState<boolean>(true);
+  const [viewLocked, setViewLocked] = useState<boolean>(false); // Travar vista: a peça não mexe mais, só o traçado anda
+  const viewLockedRef = useRef<boolean>(false);
+  useEffect(() => { viewLockedRef.current = viewLocked; }, [viewLocked]);
+  // Peça REAL do STEP (com rasgos, sextavados...) ou só o perfil girado + giro da peça em volta do eixo
+  const [partMode3D, setPartMode3D] = useState<"real" | "perfil">(() => {
+    try { return localStorage.getItem("cnc_partMode3D") === "perfil" ? "perfil" : "real"; } catch { return "real"; }
+  });
+  const [partRotDeg, setPartRotDeg] = useState<number>(() => {
+    try { return Number(localStorage.getItem("cnc_partRot3D")) || 0; } catch { return 0; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("cnc_partMode3D", partMode3D);
+      localStorage.setItem("cnc_partRot3D", String(partRotDeg));
+    } catch {}
+  }, [partMode3D, partRotDeg]);
+  const [solid, setSolid] = useState<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry } | null>(null);
+  const [solidMsg, setSolidMsg] = useState<string>("");
+  const solidKey = partSolid
+    ? [partSolid.key, partSolid.name, partSolid.face, partSolid.offsetZ, partSolid.aMin, partSolid.aMax, partSolid.axis ? partSolid.axis.o.join(",") + "/" + partSolid.axis.z.join(",") : "sem-eixo"].join("|")
+    : "";
+  useEffect(() => {
+    if (!partSolid || partMode3D !== "real") {
+      setSolid(null);
+      setSolidMsg("");
+      return;
+    }
+    let cancel = false;
+    setSolidMsg("Carregando peça real...");
+    (async () => {
+      const text = await loadStepText(partSolid.key);
+      if (cancel) return;
+      if (!text || !partSolid.axis) {
+        setSolid(null);
+        setSolidMsg("Anexe o STEP de novo para ver a peça real");
+        return;
+      }
+      try {
+        const s = await buildSolidFromStep(text, partSolid);
+        if (cancel) {
+          s.mesh.dispose();
+          s.edges.dispose();
+          return;
+        }
+        setSolid(s);
+        setSolidMsg("");
+      } catch (err: any) {
+        if (!cancel) {
+          setSolid(null);
+          setSolidMsg((err && err.message) || "Não consegui montar a peça real");
+        }
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [solidKey, partMode3D]);
+  // libera a memória da peça real antiga quando troca
+  useEffect(() => () => {
+    if (solid) {
+      solid.mesh.dispose();
+      solid.edges.dispose();
+    }
+  }, [solid]);
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const group = new THREE.Group();
+    group.name = "pecaSTEP3D";
+    if (showPart3D && partLayers && partLayers.length) {
+      partLayers.forEach((L) => {
+        const isStock = L.dashed; // bruto = bem transparente
+        const col = new THREE.Color(L.color === "auto" ? (isDarkTheme ? 0xcbd5e1 : 0x475569) : L.color);
+        const mat = new THREE.MeshStandardMaterial({ color: col, metalness: 0.35, roughness: 0.45, transparent: true, opacity: isStock ? 0.12 : 0.5, side: THREE.DoubleSide, depthWrite: false });
+        const edgeMat = new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: isStock ? 0.35 : 0.9 });
+        // Peça REAL do STEP (com rasgos): usa o sólido no lugar do perfil girado, com o giro escolhido
+        if (L.id === "peca" && partMode3D === "real" && solid) {
+          const rot = (partRotDeg * Math.PI) / 180;
+          const sm = new THREE.Mesh(solid.mesh, mat);
+          sm.userData.keepGeo = true;
+          sm.rotation.z = rot;
+          group.add(sm);
+          const se = new THREE.LineSegments(solid.edges, edgeMat);
+          se.userData.keepGeo = true;
+          se.rotation.z = rot;
+          group.add(se);
+          return;
+        }
+        L.curves.forEach((c) => {
+          if (!c || c.length < 2) return;
+          // Superfície: cada trecho do perfil (X em diâmetro) vira uma "casca" girada 360°
+          const pts = c.map((p) => new THREE.Vector2(Math.max(0, p.x / 2), p.z));
+          const geo = new THREE.LatheGeometry(pts, 64);
+          geo.rotateX(Math.PI / 2); // eixo do torno = Z
+          geo.computeVertexNormals();
+          group.add(new THREE.Mesh(geo, mat));
+          // Anéis nas pontas de cada trecho (arestas da peça)
+          [c[0], c[c.length - 1]].forEach((p) => {
+            const rr = p.x / 2;
+            if (rr <= 0.001) return;
+            const ring: THREE.Vector3[] = [];
+            for (let k = 0; k <= 64; k++) {
+              const a = (k / 64) * Math.PI * 2;
+              ring.push(new THREE.Vector3(rr * Math.cos(a), rr * Math.sin(a), p.z));
+            }
+            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ring), edgeMat));
+          });
+          // Silhueta do perfil (em cima e embaixo, no plano do traçado)
+          for (const sg of [1, -1]) {
+            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.map((p) => new THREE.Vector3((sg * p.x) / 2, 0, p.z))), edgeMat));
+          }
+        });
+      });
+    }
+    scene.add(group);
+    return () => {
+      scene.remove(group);
+      group.traverse((o: any) => { if (o.geometry && !(o.userData && o.userData.keepGeo)) o.geometry.dispose(); });
+    };
+  }, [partLayers, showPart3D, isDarkTheme, solid, partMode3D, partRotDeg]);
 
   // Update Grid & Axes (X, Y, Z, C) visibility independently
   useEffect(() => {
@@ -526,6 +667,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
   // Orbit / Pan / Zoom Mouse Events
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (viewLockedRef.current) return; // vista travada: não gira nem arrasta
     isMouseDownRef.current = true;
     isRightClickRef.current = e.button === 2 || e.shiftKey;
     previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
@@ -580,6 +722,20 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         camera.up.set(0, 1, 0);
         camera.position.set(target.x + 500, target.y, target.z);
         camera.lookAt(target.x, target.y, target.z);
+      } else if (cameraView === "reta") {
+        // Vista escolhida no cubo (Espaço / Vistas): ortográfica, sem perspectiva, como o SolidWorks
+        const { theta, phi } = cameraAnglesRef.current;
+        const dx = Math.sin(phi) * Math.sin(theta);
+        const dy = Math.cos(phi);
+        const dz = Math.sin(phi) * Math.cos(theta);
+        if (Math.abs(dy) > 0.999) {
+          // olhando de cima/baixo: o lado de cima da tela continua o mesmo de antes (sem virar a peça)
+          const sg = dy > 0 ? -1 : 1;
+          camera.up.set(sg * Math.sin(theta), 0, sg * Math.cos(theta));
+        }
+        else camera.up.set(0, 1, 0);
+        camera.position.set(target.x + dx * 500, target.y + dy * 500, target.z + dz * 500);
+        camera.lookAt(target.x, target.y, target.z);
       }
 
       camera.updateProjectionMatrix();
@@ -610,7 +766,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       }
     } else {
       // Rotacionar em 3D (Se estiver em vista 2D ortográfica, alterna para 3D "iso" suavemente)
-      if (cameraView !== "iso") {
+      if (cameraView !== "iso" && cameraView !== "reta") { // vista reta do cubo continua sem perspectiva ao girar
         setCameraView("iso");
       }
 
@@ -633,6 +789,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent) => {
+    if (viewLockedRef.current) return; // vista travada: não muda o zoom
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 1.12 : 0.88;
     // Zoom sem limites (de 0.01 a 100000)
@@ -826,7 +983,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     }
 
     // Only render segments up to currentStepIdx (progressive drawing step-by-step)
-    const maxIdx = Math.min(currentStepIdx, trajectoryPoints.length - 1);
+    // Parado (botão Stop): mostra o programa inteiro desenhado; rodando/passo a passo: só até o passo atual
+    const maxIdx = showFullPath ? trajectoryPoints.length - 1 : Math.min(currentStepIdx, trajectoryPoints.length - 1);
 
     for (let i = 0; i < maxIdx; i++) {
       const p1 = trajectoryPoints[i];
@@ -857,7 +1015,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         pathGroup.add(line);
       }
     }
-  }, [trajectoryPoints, currentStepIdx]);
+  }, [trajectoryPoints, currentStepIdx, showFullPath]);
 
   // Update Tool Position & C-Axis Ring in 3D Scene
   useEffect(() => {
@@ -925,6 +1083,61 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     updateCameraPosition();
   };
 
+  // ===== Seletor de vista (igual ao SolidWorks): tecla Espaço ou botão "Vistas" =====
+  const [showViewSel, setShowViewSel] = useState<boolean>(false);
+  const updCamRef = useRef(updateCameraPosition);
+  updCamRef.current = updateCameraPosition;
+  const viewAnimRef = useRef<number>(0);
+  // direção de onde a câmera está olhando a peça (para o cubo girar junto)
+  const getCamDir3D = (): THREE.Vector3 => {
+    const c = cameraRef.current;
+    if (!c) return new THREE.Vector3(1, 1, 1).normalize();
+    const d = c.position.clone().sub(cameraTargetRef.current);
+    return d.lengthSq() > 1e-9 ? d.normalize() : new THREE.Vector3(1, 1, 1).normalize();
+  };
+  // leva a câmera suave até a direção escolhida no cubo
+  const goToViewDir = (dir: THREE.Vector3) => {
+    const d = dir.clone().normalize();
+    const phiT = Math.acos(Math.max(-1, Math.min(1, d.y))); // vista reta: sem inclinação nenhuma
+    const a0 = { ...cameraAnglesRef.current };
+    let thetaT = Math.abs(d.x) < 1e-9 && Math.abs(d.z) < 1e-9 ? a0.theta : Math.atan2(d.x, d.z);
+    // olhando de cima/baixo (Y): mantém o lado que já estava para cima, só "endireita" no eixo mais perto (não vira a peça)
+    if (Math.abs(d.y) > 0.999) thetaT = Math.round(a0.theta / (Math.PI / 2)) * (Math.PI / 2);
+    let dT = thetaT - a0.theta;
+    dT = (((dT + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI; // gira pelo caminho mais curto
+    if (cameraView !== "reta") setCameraView("reta"); // vista do cubo: reta (ortográfica, sem perspectiva) igual ao SolidWorks
+    cancelAnimationFrame(viewAnimRef.current);
+    const t0 = performance.now();
+    const T = 380;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / T);
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      cameraAnglesRef.current = { theta: a0.theta + dT * e, phi: a0.phi + (phiT - a0.phi) * e };
+      updCamRef.current();
+      if (k < 1) viewAnimRef.current = requestAnimationFrame(step);
+    };
+    viewAnimRef.current = requestAnimationFrame(step);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+      if (e.key === "Escape") {
+        setShowViewSel(false);
+        return;
+      }
+      if (e.code !== "Space" && e.key !== " ") return;
+      if (typing) return; // digitando no programa: o espaço continua normal
+      e.preventDefault();
+      setShowViewSel((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(viewAnimRef.current);
+    };
+  }, []);
+
   return (
     <div className={`relative flex flex-col h-full w-full rounded-xl overflow-hidden border shadow-2xl transition-all ${
       isDarkTheme ? "bg-zinc-950 border-zinc-700 text-white" : "bg-slate-100 border-slate-300 text-slate-900"
@@ -949,6 +1162,17 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Seletor de vista igual ao SolidWorks (também abre com a tecla Espaço) */}
+          <button
+            onClick={() => setShowViewSel((v) => !v)}
+            className={"p-1 px-2 rounded-lg border text-[10px] font-sans font-bold transition flex items-center gap-1 " + (showViewSel
+              ? "bg-amber-500 text-black border-amber-400"
+              : "bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white")}
+            title="Escolher a vista no cubo (tecla Espaço)"
+          >
+            <Box className="w-3 h-3" />
+            <span className="hidden sm:inline">Vistas</span>
+          </button>
           {/* Preset View Controls */}
           <div className="flex items-center bg-zinc-900/80 p-0.5 rounded-lg border border-zinc-800 text-[10px] font-semibold">
             <button
@@ -1039,6 +1263,72 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
             <Grid className="w-3 h-3" />
             <span className="hidden sm:inline">Grade</span>
           </button>
+          {/* Peça do STEP em 3D (liga / desliga) */}
+          {partLayers && partLayers.length > 0 && (
+            <button
+              onClick={() => setShowPart3D(!showPart3D)}
+              className={"p-1 px-2 rounded-lg border text-[10px] font-sans font-bold transition flex items-center gap-1 " + (showPart3D
+                ? "bg-sky-950/60 text-sky-300 border-sky-500/50 shadow-[0_0_8px_rgba(56,189,248,0.2)]"
+                : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300")}
+              title="Mostrar / esconder a peça do STEP em 3D"
+            >
+              <Box className="w-3 h-3" />
+              <span className="hidden sm:inline">Peça</span>
+            </button>
+          )}
+            {/* Peça REAL do STEP (com rasgos) ou só o perfil girado + giro da peça em volta do eixo */}
+            {partSolid && showPart3D && (
+              <div className="flex items-center gap-1 p-0.5 rounded-lg border border-zinc-800 bg-zinc-900 text-[10px] font-sans font-bold">
+                <button
+                  onClick={() => setPartMode3D(partMode3D === "real" ? "perfil" : "real")}
+                  className={"px-1.5 py-0.5 rounded-md transition " + (partMode3D === "real" ? "bg-sky-950/60 text-sky-300" : "text-zinc-500 hover:text-zinc-300")}
+                  title={partMode3D === "real" ? "Mostrando a peça REAL do STEP (com rasgos). Toque para ver só o perfil girado" : "Mostrando só o perfil girado. Toque para ver a peça REAL do STEP (com rasgos)"}
+                >
+                  {partMode3D === "real" ? "Real" : "Perfil"}
+                </button>
+                {partMode3D === "real" && (
+                  <>
+                    <button onClick={() => setPartRotDeg((v) => (((v - 15) % 360) + 360) % 360)} className="px-1 text-zinc-400 hover:text-white" title="Girar a peça -15° em volta do eixo">
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      step={1}
+                      value={partRotDeg}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value);
+                        setPartRotDeg(isNaN(v) ? 0 : v);
+                      }}
+                      className="w-11 bg-black/40 border border-zinc-700 rounded px-1 py-0.5 text-center text-sky-300 outline-none"
+                      title="Giro da peça em volta do eixo (graus). Gira só a peça, o programa não muda"
+                    />
+                    <span className="text-zinc-500">°</span>
+                    <button onClick={() => setPartRotDeg((v) => (v + 15) % 360)} className="px-1 text-zinc-400 hover:text-white" title="Girar a peça +15° em volta do eixo">
+                      +
+                    </button>
+                  </>
+                )}
+                {solidMsg && (
+                  <span className="text-amber-400 px-1 max-w-[180px] truncate" title={solidMsg}>
+                    {solidMsg}
+                  </span>
+                )}
+              </div>
+            )}
+          {/* Travar vista: a peça fica parada, só o traçado de usinagem anda */}
+          <button
+            onClick={() => setViewLocked(!viewLocked)}
+            className={"p-1 px-2 rounded-lg border text-[10px] font-sans font-bold transition flex items-center gap-1 " + (viewLocked
+              ? "bg-rose-950/60 text-rose-300 border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.25)]"
+              : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300")}
+            title={viewLocked ? "Vista TRAVADA — toque para destravar" : "Travar vista (a peça não mexe mais com o mouse/dedo)"}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="11" width="16" height="10" rx="2" />
+              {viewLocked ? <path d="M8 11V7a4 4 0 0 1 8 0v4" /> : <path d="M8 11V7a4 4 0 0 1 7.5-2" />}
+            </svg>
+            <span className="hidden sm:inline">{viewLocked ? "Travada" : "Travar"}</span>
+          </button>
 
           {/* Toggle Mirinha Button */}
           <button
@@ -1102,6 +1392,18 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         onContextMenu={(e) => e.preventDefault()}
         className="flex-1 relative cursor-grab active:cursor-grabbing min-h-0 select-none overflow-hidden"
       >
+          {/* Seletor de vista (tecla Espaço ou botão "Vistas") */}
+          {showViewSel && (
+            <ViewSelector3D
+              getCamDir={getCamDir3D}
+              getCamQuat={() => (cameraRef.current ? cameraRef.current.quaternion : null)}
+              onPick={(d) => {
+                goToViewDir(d);
+                setShowViewSel(false);
+              }}
+              onClose={() => setShowViewSel(false)}
+            />
+          )}
         {/* Mirinha Overlay (Retículo de Alvo no Canvas - Ultra Chamativa Rosa Neon/Amarelo) */}
         {showMirinha && mirinhaScreenPos && mirinhaScreenPos.visible && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
@@ -1140,7 +1442,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
         {/* Painel Esquerdo Fixo: DRO + Caixa de Posição da Mirinha (Foto 2) */}
         {(showPaineis || showMirinha) && (
-        <ResizableBox id="sim3d_painel_dro" anchor="tl" className="absolute top-3 left-3 z-10 flex flex-col gap-2.5 pointer-events-none select-none min-w-[195px] max-w-[230px]">
+        <ResizableBox movable id="sim3d_painel_dro" anchor="tl" className="absolute top-3 left-3 z-10 flex flex-col gap-2.5 pointer-events-none select-none min-w-[195px] max-w-[230px]">
           {/* DRO Overlay (Leitura de Posição dos 4 Eixos + Linha Atual) */}
           {showPaineis && (() => {
             const curPt = currentPoint || { x: 0, y: 0, z: 0, c: 0, line: 0, rawText: "" };
@@ -1399,79 +1701,37 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
         {/* 3D Legend Controls Instruction */}
         {showPaineis && (
-        <div className="absolute bottom-3 left-3 z-10 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-lg text-[9px] text-zinc-400 font-mono border border-zinc-800/60 pointer-events-none">
+        <div className="absolute bottom-3 left-16 z-10 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-lg text-[9px] text-zinc-400 font-mono border border-zinc-800/60 pointer-events-none">
           🖱️ Botão Esquerdo + Arrastar: Rotacionar 3D | Botão Direito / Shift: Mover | Scroll: Zoom
         </div>
         )}
 
-        {/* Ticar e Ocultar Eixos Individuais (X, Y, Z, C) e Grade (Fotos 2 & 3) */}
-        {showPaineis && (
-        <div className="absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-2.5 bg-[#0f0f16]/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-zinc-800/90 shadow-2xl text-[10px] font-mono select-none">
-          <label className="flex items-center gap-1 cursor-pointer text-rose-400 hover:text-rose-300 transition" title="Exibir/Ocultar Eixo X">
-            <input
-              type="checkbox"
-              checked={showAxisX}
-              onChange={(e) => setShowAxisX(e.target.checked)}
-              className="accent-rose-500 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">Eixo X</span>
-          </label>
-
-          <label className="flex items-center gap-1 cursor-pointer text-yellow-400 hover:text-yellow-300 transition" title="Exibir/Ocultar Eixo Y">
-            <input
-              type="checkbox"
-              checked={showAxisY}
-              onChange={(e) => setShowAxisY(e.target.checked)}
-              className="accent-yellow-500 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">Eixo Y</span>
-          </label>
-
-          <label className="flex items-center gap-1 cursor-pointer text-cyan-400 hover:text-cyan-300 transition" title="Exibir/Ocultar Eixo Z">
-            <input
-              type="checkbox"
-              checked={showAxisZ}
-              onChange={(e) => setShowAxisZ(e.target.checked)}
-              className="accent-cyan-400 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">Eixo Z</span>
-          </label>
-
-          <label className="flex items-center gap-1 cursor-pointer text-sky-400 hover:text-sky-300 transition" title="Exibir/Ocultar Eixo C">
-            <input
-              type="checkbox"
-              checked={showAxisC}
-              onChange={(e) => setShowAxisC(e.target.checked)}
-              className="accent-sky-400 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">Eixo C</span>
-          </label>
-
-          <span className="text-zinc-700">|</span>
-
-          <label className="flex items-center gap-1 cursor-pointer text-amber-300 hover:text-amber-200 transition" title="Exibir/Ocultar Grade 3D">
-            <input
-              type="checkbox"
-              checked={showGrid}
-              onChange={(e) => setShowGrid(e.target.checked)}
-              className="accent-amber-400 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">Grade</span>
-          </label>
-
-          <span className="text-zinc-700">|</span>
-
-          <label className="flex items-center gap-1 cursor-pointer text-emerald-400 hover:text-emerald-300 transition" title="Exibir/Ocultar Mira (Retículo de Coordenadas)">
-            <input
-              type="checkbox"
-              checked={showMirinha}
-              onChange={(e) => setShowMirinha(e.target.checked)}
-              className="accent-emerald-400 w-3.5 h-3.5 rounded cursor-pointer"
-            />
-            <span className="font-bold">🎯 Mira</span>
-          </label>
+        {/* Liga / desliga os traços de movimento de usinagem (igual ao botãozinho do 2D) */}
+        <div
+          className="absolute left-3 bottom-3 z-30 p-1 rounded-lg bg-black/70 border border-zinc-700 backdrop-blur-sm"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => setShowToolpath3D((v) => !v)}
+            title={showToolpath3D ? "Traços de usinagem LIGADOS (toque para esconder)" : "Traços de usinagem DESLIGADOS (toque para mostrar)"}
+            className={
+              "w-9 h-9 rounded-md flex items-center justify-center border transition " +
+              (showToolpath3D
+                ? "bg-emerald-900/60 text-emerald-300 border-emerald-500/70 shadow-[0_0_8px_rgba(16,185,129,0.35)]"
+                : "bg-[#1e1e24]/90 text-zinc-500 border-zinc-700 hover:bg-zinc-800 hover:text-zinc-300")
+            }
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 18h5l3-6h4l3-6h3" strokeDasharray={showToolpath3D ? undefined : "3 3"} />
+              {!showToolpath3D && <path d="M4 4l16 16" />}
+            </svg>
+          </button>
         </div>
-        )}
+
+        {/* (Caixinhas de Eixo X/Y/Z/C, Grade e Mira daqui de baixo foram tiradas: os mesmos botões já estão na barra de cima) */}
       </div>
 
       {/* Bottom Control Playback & Tools Bar (Mesmas funções do 2D - Foto 2) */}
@@ -1655,4 +1915,329 @@ class CNCSimulator3DErrorBoundary extends Component<
 
 export const CNCSimulator3D: React.FC<CNCSimulator3DProps> = (props) => {
   return <CNCSimulator3DErrorBoundary {...props} />;
+};
+
+
+/* =====================================================================================
+ * PEÇA REAL DO STEP EM 3D (com rasgos, sextavados, furos fora de centro)
+ * - Lê o STEP com a biblioteca OpenCascade (occt-import-js). Ela é baixada da internet
+ *   só na 1ª vez que precisar (cerca de 7,6 MB) e depois fica no cache do navegador.
+ * - O arquivo STEP fica guardado no aparelho (IndexedDB) para abrir de novo sem anexar.
+ * ===================================================================================== */
+const OCCT_CDN = "https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/";
+const STEP_DB = "tornoMasterSTEP";
+const STEP_STORE = "arquivos";
+
+const openStepDB = (): Promise<IDBDatabase> =>
+  new Promise((res, rej) => {
+    const rq = indexedDB.open(STEP_DB, 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore(STEP_STORE);
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+
+/** Guarda o texto do STEP no aparelho (chave "peca") */
+export async function saveStepText(key: string, text: string): Promise<void> {
+  try {
+    const db = await openStepDB();
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(STEP_STORE, "readwrite");
+      tx.objectStore(STEP_STORE).put(text, key);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  } catch (e) {
+    console.warn("Não consegui guardar o STEP no aparelho", e);
+  }
+}
+
+/** Lê de volta o texto do STEP guardado no aparelho */
+export async function loadStepText(key: string): Promise<string | null> {
+  try {
+    const db = await openStepDB();
+    const v = await new Promise<string | null>((res, rej) => {
+      const rq = db.transaction(STEP_STORE, "readonly").objectStore(STEP_STORE).get(key);
+      rq.onsuccess = () => res(typeof rq.result === "string" ? rq.result : null);
+      rq.onerror = () => rej(rq.error);
+    });
+    db.close();
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+// Carrega o OpenCascade só uma vez
+let occtPromise: Promise<any> | null = null;
+const loadOcct = (): Promise<any> => {
+  if (occtPromise) return occtPromise;
+  const p = new Promise<any>((res, rej) => {
+    const w = window as any;
+    const start = () => w.occtimportjs({ locateFile: (f: string) => OCCT_CDN + f }).then(res, rej);
+    if (w.occtimportjs) {
+      start();
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = OCCT_CDN + "occt-import-js.js";
+    s.async = true;
+    s.onload = start;
+    s.onerror = () => rej(new Error("Não consegui baixar o leitor de STEP (sem internet?)"));
+    document.head.appendChild(s);
+  });
+  occtPromise = p;
+  p.catch(() => {
+    occtPromise = null;
+  });
+  return p;
+};
+
+export interface PartSolidInfo {
+  key: string; // onde o STEP está guardado no aparelho ("peca")
+  name: string;
+  axis?: { o: [number, number, number]; z: [number, number, number] }; // eixo de giro achado no STEP
+  aMin: number;
+  aMax: number;
+  face: "direita" | "esquerda"; // qual face fica no Z0
+  offsetZ: number; // deslocamento extra em Z
+}
+
+/** Monta a peça real já no sistema do torno do 3D: Z = eixo (mesmo zero da peça), X/Y = em volta do eixo */
+async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry }> {
+  if (!pl.axis) throw new Error("Anexe o STEP de novo para ver a peça real");
+  const occt = await loadOcct();
+  const res = occt.ReadStepFile(new TextEncoder().encode(text), {
+    linearUnit: "millimeter",
+    linearDeflectionType: "bounding_box_ratio",
+    linearDeflection: 0.001,
+    angularDeflection: 0.2,
+  });
+  if (!res || !res.success || !res.meshes || !res.meshes.length) throw new Error("O leitor não conseguiu montar a peça deste STEP");
+  const o = pl.axis.o;
+  const zl = Math.hypot(pl.axis.z[0], pl.axis.z[1], pl.axis.z[2]) || 1;
+  const Z = [pl.axis.z[0] / zl, pl.axis.z[1] / zl, pl.axis.z[2] / zl];
+  // U = uma direção qualquer em volta do eixo; W = Z x U (as duas formam o "relógio" da peça)
+  const ref = Math.abs(Z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const dd = ref[0] * Z[0] + ref[1] * Z[1] + ref[2] * Z[2];
+  let U = [ref[0] - dd * Z[0], ref[1] - dd * Z[1], ref[2] - dd * Z[2]];
+  const ul = Math.hypot(U[0], U[1], U[2]) || 1;
+  U = [U[0] / ul, U[1] / ul, U[2] / ul];
+  const W = [Z[1] * U[2] - Z[2] * U[1], Z[2] * U[0] - Z[0] * U[2], Z[0] * U[1] - Z[1] * U[0]];
+  const dir = pl.face === "direita" ? 1 : -1;
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (const m of res.meshes) {
+    const p = m.attributes && m.attributes.position && m.attributes.position.array;
+    const ix = m.index && m.index.array;
+    if (!p || !ix) continue;
+    const base = pos.length / 3;
+    for (let i = 0; i < p.length; i += 3) {
+      const dx = p[i] - o[0], dy = p[i + 1] - o[1], dz = p[i + 2] - o[2];
+      const a = dx * Z[0] + dy * Z[1] + dz * Z[2];
+      const zz = (dir === 1 ? a - pl.aMax : pl.aMin - a) + pl.offsetZ; // mesmo zero do perfil (face escolhida)
+      const xx = dx * U[0] + dy * U[1] + dz * U[2];
+      const yy = (dx * W[0] + dy * W[1] + dz * W[2]) * dir; // peça virada: não fica "ao avesso"
+      pos.push(xx, yy, zz);
+    }
+    for (let i = 0; i < ix.length; i++) idx.push(base + ix[i]);
+  }
+  if (!pos.length) throw new Error("O STEP não tem superfícies para mostrar");
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const edges = new THREE.EdgesGeometry(g, 30); // só as arestas "de verdade" (cantos), não a malha toda
+  return { mesh: g, edges };
+}
+
+
+/* =====================================================================================
+ * SELETOR DE VISTA (igual ao do SolidWorks): tecla ESPAÇO ou botão "Vistas"
+ * Um cubo de 26 partes: 6 faces (vistas retas), 12 arestas e 8 cantos (vistas inclinadas).
+ * Passe o dedo/mouse por cima para ver o nome; toque para a câmera ir suave até lá.
+ * O cubo gira junto com a vista atual, então ele "mostra" onde você está.
+ * ===================================================================================== */
+const viewLabel3D = (i: number, j: number, k: number): string => {
+  const faces: Record<string, string> = {
+    "0,0,1": "Frente (Z+)",
+    "0,0,-1": "Atrás / lado da placa (Z−)",
+    "1,0,0": "Lado X+",
+    "-1,0,0": "Lado X−",
+    "0,1,0": "Cima (Y+)",
+    "0,-1,0": "Baixo (Y−)",
+  };
+  const key = i + "," + j + "," + k;
+  if (faces[key]) return faces[key];
+  const t: string[] = [];
+  if (i) t.push(i > 0 ? "X+" : "X−");
+  if (j) t.push(j > 0 ? "Y+" : "Y−");
+  if (k) t.push(k > 0 ? "Z+" : "Z−");
+  return (t.length === 3 ? "Canto " : "Aresta ") + t.join(" · ");
+};
+
+const ViewSelector3D: React.FC<{
+  getCamDir: () => THREE.Vector3;
+  getCamQuat?: () => THREE.Quaternion | null; // giro da câmera principal (para o cubo ficar igual à tela)
+  onPick: (dir: THREE.Vector3) => void;
+  onClose: () => void;
+}> = ({ getCamDir, getCamQuat, onPick, onClose }) => {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<string>("");
+  const getDirRef = useRef(getCamDir);
+  const getQuatRef = useRef(getCamQuat);
+  getQuatRef.current = getCamQuat;
+  getDirRef.current = getCamDir;
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const S = 230;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(S, S);
+    renderer.domElement.style.cursor = "pointer";
+    host.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    const light = new THREE.DirectionalLight(0xffffff, 0.9);
+    scene.add(light);
+
+    const big = 1.3; // meio da face
+    const small = 0.38; // arestas e cantos
+    const sz = (n: number) => (n === 0 ? big : small);
+    const ps = (n: number) => n * (big / 2 + small / 2);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.6 });
+    const pieces: THREE.Mesh[] = [];
+    const disposables: { dispose: () => void }[] = [lineMat];
+    for (let i = -1; i <= 1; i++)
+      for (let j = -1; j <= 1; j++)
+        for (let k = -1; k <= 1; k++) {
+          if (!i && !j && !k) continue;
+          const nz = (i ? 1 : 0) + (j ? 1 : 0) + (k ? 1 : 0);
+          const base = nz === 1 ? 0x1e4e79 : nz === 2 ? 0x334155 : 0x475569; // face azul, aresta e canto cinza
+          const geo = new THREE.BoxGeometry(sz(i), sz(j), sz(k));
+          const mat = new THREE.MeshStandardMaterial({ color: base, transparent: true, opacity: 0.88, roughness: 0.6, metalness: 0.1 });
+          const m = new THREE.Mesh(geo, mat);
+          m.position.set(ps(i), ps(j), ps(k));
+          m.userData = { dir: new THREE.Vector3(i, j, k).normalize(), label: viewLabel3D(i, j, k), base };
+          const eg = new THREE.EdgesGeometry(geo);
+          m.add(new THREE.LineSegments(eg, lineMat));
+          scene.add(m);
+          pieces.push(m);
+          disposables.push(geo, mat, eg);
+        }
+    // letras dos eixos nas faces
+    const addTag = (txt: string, x: number, y: number, z: number, color: string) => {
+      const c = document.createElement("canvas");
+      c.width = 128;
+      c.height = 64;
+      const g = c.getContext("2d");
+      if (g) {
+        g.font = "bold 40px sans-serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillStyle = color;
+        g.fillText(txt, 64, 34);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      const sm = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+      const sp = new THREE.Sprite(sm);
+      sp.scale.set(0.9, 0.45, 1);
+      sp.position.set(x, y, z);
+      scene.add(sp);
+      disposables.push(tex, sm);
+    };
+    const f = big / 2 + small + 0.35;
+    addTag("Z+", 0, 0, f, "#7dd3fc");
+    addTag("Z−", 0, 0, -f, "#7dd3fc");
+    addTag("X+", f, 0, 0, "#fca5a5");
+    addTag("X−", -f, 0, 0, "#fca5a5");
+    addTag("Y+", 0, f, 0, "#86efac");
+    addTag("Y−", 0, -f, 0, "#86efac");
+
+    const ray = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let hovered: THREE.Mesh | null = null;
+    const pick = (e: PointerEvent): THREE.Mesh | null => {
+      const r = renderer.domElement.getBoundingClientRect();
+      mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(mouse, cam);
+      const hit = ray.intersectObjects(pieces, false)[0];
+      return hit ? (hit.object as THREE.Mesh) : null;
+    };
+    const setHovered = (h: THREE.Mesh | null) => {
+      if (h === hovered) return;
+      if (hovered) (hovered.material as THREE.MeshStandardMaterial).color.setHex(hovered.userData.base);
+      hovered = h;
+      if (h) (h.material as THREE.MeshStandardMaterial).color.setHex(0xf59e0b);
+      setHover(h ? h.userData.label : "");
+    };
+    const onMove = (e: PointerEvent) => setHovered(pick(e));
+    const onLeave = () => setHovered(null);
+    const onDown = (e: PointerEvent) => {
+      const h = pick(e);
+      if (h) onPickRef.current((h.userData.dir as THREE.Vector3).clone());
+    };
+    renderer.domElement.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("pointerleave", onLeave);
+    renderer.domElement.addEventListener("pointerdown", onDown);
+
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const d = getDirRef.current().clone().normalize();
+      cam.position.copy(d.multiplyScalar(7.5));
+
+      const q = getQuatRef.current ? getQuatRef.current() : null;
+      if (q) cam.quaternion.copy(q); // cubo virado exatamente igual à tela principal
+      else cam.lookAt(0, 0, 0);
+      light.position.copy(cam.position);
+      renderer.render(scene, cam);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(raf);
+      renderer.domElement.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointerleave", onLeave);
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      disposables.forEach((x) => x.dispose());
+      renderer.forceContextLoss(); // devolve a "placa de vídeo" na hora (senão a tela 3D principal pode ficar branca)
+      renderer.dispose();
+      if (host.contains(renderer.domElement)) host.removeChild(renderer.domElement);
+    };
+  }, []);
+
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <div
+      className="absolute inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-[1px]"
+      onPointerDown={stop}
+      onPointerMove={stop}
+      onPointerUp={stop}
+      onWheel={stop}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose(); // tocou fora do cubo: fecha
+      }}
+    >
+      <div
+        className="flex flex-col items-center gap-1 p-2 rounded-xl bg-zinc-950/85 border border-zinc-700 shadow-2xl"
+        onClick={stop}
+      >
+        <div className="w-full flex items-center justify-between gap-3 px-1">
+          <span className="text-[11px] font-bold text-amber-400 font-sans">Escolha a vista</span>
+          <button onClick={onClose} className="text-zinc-400 hover:text-white text-xs px-1" title="Fechar (Espaço ou Esc)">
+            ✕
+          </button>
+        </div>
+        <div ref={hostRef} style={{ width: 230, height: 230 }} />
+        <div className="h-4 text-[11px] font-mono text-sky-300">{hover || " "}</div>
+        <div className="text-[9px] text-zinc-500 font-sans">Toque numa face, aresta ou canto · Espaço abre/fecha</div>
+      </div>
+    </div>
+  );
 };

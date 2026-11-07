@@ -38,12 +38,13 @@ import {
   RefreshCw,
   Palette,
   Smartphone,
-  Paperclip
+  Paperclip,
+  FileDown
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CNCEditor } from "./components/CNCEditor";
-import { CNCSimulator } from "./components/CNCSimulator";
-import { CNCSimulator3D } from "./components/CNCSimulator3D";
+import { CNCSimulator, CursorStyle, CURSOR_STYLE_PADRAO } from "./components/CNCSimulator";
+import { CNCSimulator3D, saveStepText, loadStepText } from "./components/CNCSimulator3D";
 import { MachiningAssistant } from "./components/MachiningAssistant";
 import FloatingCalculator from "./components/FloatingCalculator";
 import { AdminPanel } from "./components/AdminPanel";
@@ -184,6 +185,11 @@ export default function App() {
   const [showAppearance, setShowAppearance] = useState<boolean>(false);
   useEffect(() => { localStorage.setItem("cnc_editorBg", editorBg); }, [editorBg]);
   useEffect(() => { localStorage.setItem("cnc_graphBg", graphBg); }, [graphBg]);
+  // Aparência da MIRA e do QUADRADINHO do desenho (cor na linha, cor no canto/emenda e tamanho %)
+  const [cursorStyle, setCursorStyle] = useState<CursorStyle>(() => {
+    try { return { ...CURSOR_STYLE_PADRAO, ...JSON.parse(localStorage.getItem("cnc_cursorStyle") || "{}") }; } catch { return CURSOR_STYLE_PADRAO; }
+  });
+  useEffect(() => { try { localStorage.setItem("cnc_cursorStyle", JSON.stringify(cursorStyle)); } catch {} }, [cursorStyle]);
   // Layout Mobile (tablet / celular): botão 📱 liga/desliga. Na 1ª vez liga sozinho em telas pequenas.
   const [isMobileLayout, setIsMobileLayout] = useState<boolean>(() => {
     const v = localStorage.getItem("cnc_mobileLayout");
@@ -237,6 +243,11 @@ export default function App() {
     if (partProfile && showPart) L.push({ id: "peca", label: "PEÇA", color: layerColors.peca, dashed: false, curves: profileToLathe(partProfile, partZero) });
     return L.length ? L : undefined;
   }, [partProfile, stockProfile, partZero, stockZero, showPart, showStock, layerColors]);
+  // Peça REAL no 3D (com rasgos): eixo achado no STEP + zero da peça, para montar o sólido no simulador 3D
+  const partSolid = useMemo(() => {
+    if (!partProfile || !showPart) return null;
+    return { key: "peca", name: partProfile.name, axis: partProfile.axis, aMin: partProfile.aMin, aMax: partProfile.aMax, face: partZero.face, offsetZ: partZero.offsetZ };
+  }, [partProfile, showPart, partZero]);
   // Lê o arquivo STEP escolhido e monta o perfil (vai para a PEÇA ou para o BRUTO, conforme a caixinha marcada)
   const handleStepFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
@@ -250,6 +261,7 @@ export default function App() {
         prof.name = file.name;
         if (target === "peca") {
           setPartProfile(prof);
+          saveStepText("peca", String(reader.result || "")); // guarda o arquivo no aparelho para a peça REAL no 3D
           setShowPart(true);
         } else {
           setStockProfile(prof);
@@ -295,6 +307,7 @@ export default function App() {
     }
   };
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
+  const [projVer, setProjVer] = useState<number>(0); // muda ao carregar um projeto (simuladores recarregam)
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
     const saved = localStorage.getItem("cnc_autoSaveTexts");
     if (saved) {
@@ -913,19 +926,122 @@ export default function App() {
     }
   };
 
-  const handleSaveLocal = () => {
-    const code = editorTexts[activePaneIdx];
-    if (code === undefined) return;
-
-    // Classic Fallback
-    const blob = new Blob([code], { type: "text/plain" });
+  // ===================== PROJETO DA PEÇA =====================
+  // SALVAR grava TUDO num arquivo só (.torno): programas dos 3 canais, nº de telas, STEP (peça e bruto),
+  // desenhos, zero da peça, giro do STEP no 3D, cores, Sincro Z, posição/tamanho das caixas, etc.
+  // CARREGAR abre o projeto e deixa tudo exatamente igual (também continua abrindo .nc / .txt antigos).
+  const PROJ_KEYS_FORA = [
+    "cnc_token", "cnc_clientName", "cnc_isAuthenticated", "cnc_daysLeft", "cnc_subscriptionType", "cnc_isAdmin",
+    "cnc_supportPhone", "cnc_device_id", "cnc_autoSaveTexts", "cnc_autoSaveActive", "cnc_calc_history_v2",
+    "cnc_mobileLayout", "cnc_mobileView",
+  ]; // login / licença / histórico deste tablet: NÃO vão para o projeto
+  const baixarArquivo = (conteudo: string, nome: string, tipo = "text/plain") => {
+    const blob = new Blob([conteudo], { type: tipo });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    const name = fileNames[activePaneIdx] || `PROG_CNC_ED${activePaneIdx + 1}.nc`;
-    link.download = name;
+    link.download = nome;
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const handleSaveLocal = async () => {
+    const storage: Record<string, string> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !/^cnc/.test(k) || PROJ_KEYS_FORA.includes(k)) continue;
+        const v = localStorage.getItem(k);
+        if (v !== null) storage[k] = v;
+      }
+    } catch { /* sem armazenamento */ }
+    const stepPeca = await loadStepText("peca"); // arquivo STEP inteiro (para a peça REAL no 3D)
+    const proj = {
+      tipo: "TORNO_MASTER_PROJETO",
+      versao: 1,
+      salvoEm: new Date().toISOString(),
+      app: {
+        layoutCount, editorTexts, fileNames, activePaneIdx, simMode, simInvertZ, show3DSimulator,
+        showPart, showStock, editorBg, graphBg, cursorStyle, partProfile, stockProfile, partZero, stockZero,
+        layerColors, syncIncludeNoP, syncIncludeWithP, syncIncludeM2000, ignoredSyncCodes, fixedSimWidth,
+      },
+      storage,
+      stepPeca,
+    };
+    const base = (fileNames.find((n) => n && n.trim()) || (partProfile && partProfile.name) || "PECA").replace(/\.[^.]+$/, "");
+    baixarArquivo(JSON.stringify(proj), base + ".torno", "application/json");
+  };
+
+  // Exporta só os programas (.nc), um arquivo por canal que tem texto
+  const handleExportNc = () => {
+    const n = Math.max(1, Math.min(3, layoutCount || 1));
+    let atraso = 0;
+    for (let i = 0; i < n; i++) {
+      const code = editorTexts[i];
+      if (!code || !code.trim()) continue;
+      const nome = fileNames[i] || `PROG_CNC_ED${i + 1}.nc`;
+      setTimeout(() => baixarArquivo(code, /\.\w+$/.test(nome) ? nome : nome + ".nc"), atraso);
+      atraso += 500;
+    }
+  };
+
+  // Abre um projeto .torno e deixa tudo como estava quando foi salvo
+  const aplicarProjeto = async (texto: string) => {
+    let p: any;
+    try {
+      p = JSON.parse(texto);
+    } catch {
+      alert("Não consegui ler este arquivo de projeto.");
+      return;
+    }
+    if (!p || p.tipo !== "TORNO_MASTER_PROJETO") {
+      alert("Este arquivo não é um projeto do Torno Master.");
+      return;
+    }
+    try {
+      const apagar: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && /^cnc/.test(k) && !PROJ_KEYS_FORA.includes(k)) apagar.push(k);
+      }
+      apagar.forEach((k) => localStorage.removeItem(k)); // tira o que era da peça anterior
+      Object.entries(p.storage || {}).forEach(([k, v]) => {
+        if (/^cnc/.test(k) && !PROJ_KEYS_FORA.includes(k) && typeof v === "string") localStorage.setItem(k, v);
+      });
+    } catch { /* sem armazenamento */ }
+    if (typeof p.stepPeca === "string" && p.stepPeca) await saveStepText("peca", p.stepPeca);
+    const a = p.app || {};
+    const tem = (k: string) => Object.prototype.hasOwnProperty.call(a, k);
+    const tres = (arr: any) => {
+      const t = Array.isArray(arr) ? arr.map((x: any) => (typeof x === "string" ? x : "")) : [];
+      while (t.length < 3) t.push("");
+      return t;
+    };
+    if (tem("layoutCount")) setLayoutCount(a.layoutCount);
+    if (tem("editorTexts")) setEditorTexts(tres(a.editorTexts));
+    if (tem("fileNames")) setFileNames(tres(a.fileNames));
+    if (tem("activePaneIdx")) setActivePaneIdx(a.activePaneIdx);
+    if (tem("simMode")) setSimMode(a.simMode);
+    if (tem("simInvertZ")) setSimInvertZ(a.simInvertZ);
+    if (tem("show3DSimulator")) setShow3DSimulator(a.show3DSimulator);
+    if (tem("showPart")) setShowPart(a.showPart);
+    if (tem("showStock")) setShowStock(a.showStock);
+    if (tem("editorBg")) setEditorBg(a.editorBg);
+    if (tem("graphBg")) setGraphBg(a.graphBg);
+    if (tem("cursorStyle")) setCursorStyle({ ...CURSOR_STYLE_PADRAO, ...(a.cursorStyle || {}) });
+    if (tem("partProfile")) setPartProfile(a.partProfile);
+    if (tem("stockProfile")) setStockProfile(a.stockProfile);
+    if (tem("partZero")) setPartZero(a.partZero);
+    if (tem("stockZero")) setStockZero(a.stockZero);
+    if (tem("layerColors")) setLayerColors(a.layerColors);
+    if (tem("syncIncludeNoP")) setSyncIncludeNoP(a.syncIncludeNoP);
+    if (tem("syncIncludeWithP")) setSyncIncludeWithP(a.syncIncludeWithP);
+    if (tem("syncIncludeM2000")) setSyncIncludeM2000(a.syncIncludeM2000);
+    if (tem("ignoredSyncCodes")) setIgnoredSyncCodes(a.ignoredSyncCodes || []);
+    if (tem("fixedSimWidth")) setFixedSimWidth(a.fixedSimWidth);
+    setProjVer((v) => v + 1); // recarrega os simuladores 2D/3D com o desenho, caixas e opções do projeto
   };
 
   const handleLoadLocal = () => {
@@ -939,6 +1055,10 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
+      if (text && text.trimStart().startsWith("{") && text.includes("TORNO_MASTER_PROJETO")) {
+        aplicarProjeto(text); // arquivo de PROJETO (.torno): carrega tudo
+        return;
+      }
       if (text) {
         updateEditorText(text, activePaneIdx);
         setFileNames((prev) => {
@@ -1395,9 +1515,11 @@ export default function App() {
                   <span className="text-zinc-600">Deslocar o zero em Z (mm)</span>
                   <input
                     key={stepTarget + prof.name + zero.face}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     defaultValue={zero.offsetZ}
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value.replace(",", "."));
                       setZero((z) => ({ ...z, offsetZ: isNaN(v) ? 0 : v }));
@@ -1484,6 +1606,40 @@ export default function App() {
               Outra
             </label>
           </div>
+          {/* Mira e quadradinho do desenho: cor em cima da linha, cor no canto/emenda e tamanho */}
+          <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5 mt-1">Mira e quadradinho do desenho (simulador 2D)</div>
+          {([
+            ["mira", "Mira", "miraLinha", "miraCanto", "miraTam"],
+            ["quad", "Quadradinho do desenho", "quadLinha", "quadCanto", "quadTam"],
+          ] as const).map(([k, nome, cLinha, cCanto, tam]) => (
+            <div key={k} className="mb-2 rounded-lg border border-zinc-200 p-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold">{nome}</span>
+                <button
+                  onClick={() => setCursorStyle((s) => ({ ...s, [cLinha]: CURSOR_STYLE_PADRAO[cLinha], [cCanto]: CURSOR_STYLE_PADRAO[cCanto], [tam]: CURSOR_STYLE_PADRAO[tam] }))}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-800 underline"
+                  title="Voltar às cores e tamanho originais"
+                >
+                  padrão
+                </button>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] font-semibold flex-wrap">
+                <label className="flex items-center gap-1 cursor-pointer" title="Cor quando está em cima de uma linha">
+                  <input type="color" value={cursorStyle[cLinha]} onChange={(e) => setCursorStyle((s) => ({ ...s, [cLinha]: e.target.value }))} className="w-7 h-7 rounded cursor-pointer border border-zinc-300 bg-transparent p-0" />
+                  Na linha
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer" title="Cor quando acha um canto / emenda do perfil">
+                  <input type="color" value={cursorStyle[cCanto]} onChange={(e) => setCursorStyle((s) => ({ ...s, [cCanto]: e.target.value }))} className="w-7 h-7 rounded cursor-pointer border border-zinc-300 bg-transparent p-0" />
+                  Canto / emenda
+                </label>
+                <label className="flex items-center gap-1.5 flex-1 min-w-[150px]" title="Tamanho (100% = original)">
+                  Tamanho
+                  <input type="range" min={50} max={300} step={10} value={cursorStyle[tam]} onChange={(e) => setCursorStyle((s) => ({ ...s, [tam]: Number(e.target.value) }))} className="flex-1" />
+                  <span className="w-10 text-right">{cursorStyle[tam]}%</span>
+                </label>
+              </div>
+            </div>
+          ))}
           <p className="text-[10px] text-zinc-500 leading-snug">As escolhas ficam salvas neste tablet. Linhas e textos do gráfico se ajustam sozinhos para continuar legíveis.</p>
         </div>
       )}
@@ -1532,6 +1688,15 @@ export default function App() {
                   <Save className="w-3 h-3" />
                   <span className="hidden lg:inline">Salvar</span>
                 </button>
+          {/* Exportar .nc: um arquivo por canal, só os programas (para mandar para a máquina) */}
+          <button
+            onClick={handleExportNc}
+            className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-semibold py-1 px-2 rounded transition flex items-center gap-1"
+            title="Exportar só os programas (.nc), um arquivo por canal"
+          >
+            <FileDown className="w-3 h-3" />
+            <span className="hidden lg:inline">.nc</span>
+          </button>
 
             {/* Carregar quick button */}
             <button
@@ -1542,7 +1707,7 @@ export default function App() {
               <FolderOpen className="w-3 h-3" />
               <span className="hidden lg:inline">Carregar</span>
             </button>
-            <input ref={fileInputRef} type="file" accept=".txt,.pgm,.nc,.gcode" onChange={handleFileChange} className="hidden" />
+            <input ref={fileInputRef} type="file" accept=".torno,.txt,.pgm,.nc,.gcode" onChange={handleFileChange} className="hidden" />
 
                 {/* 1 / 2 / 3 Telas compact */}
                 <div className="bg-[#101014] p-0.5 rounded border border-zinc-800 flex items-center">
@@ -1763,6 +1928,14 @@ export default function App() {
                   <Save className="w-3.5 h-3.5" />
                   Salvar
                 </button>
+                  <button
+                    onClick={handleExportNc}
+                    className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
+                    title="Exportar só os programas (.nc), um arquivo por canal"
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    Exportar .nc
+                  </button>
 
                 <button
                   onClick={handleLoadLocal}
@@ -1775,7 +1948,7 @@ export default function App() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".txt,.pgm,.nc,.gcode"
+                  accept=".torno,.txt,.pgm,.nc,.gcode"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -2324,6 +2497,9 @@ export default function App() {
                 <div className="flex-1 min-h-0">
                   {show3DSimulator ? (
                     <CNCSimulator3D
+                      key={"proj" + projVer}
+                      partLayers={partLayers}
+                      partSolid={partSolid}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2333,6 +2509,7 @@ export default function App() {
                     />
                   ) : (
                     <CNCSimulator
+                      key={"proj" + projVer}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2343,6 +2520,7 @@ export default function App() {
                       isHighContrast={isHighContrast}
                       onError={setDiagnosticError}
                 bgColor={graphBg || undefined}
+                cursorStyle={cursorStyle}
                 partLayers={partLayers}
                 onInsertPoint={handleInsertProgramPoint}
                     />
@@ -2379,6 +2557,9 @@ export default function App() {
                 <div className="flex-1 min-w-0 h-full">
                   {show3DSimulator ? (
                     <CNCSimulator3D
+                      key={"proj" + projVer}
+                      partLayers={partLayers}
+                      partSolid={partSolid}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2388,6 +2569,7 @@ export default function App() {
                     />
                   ) : (
                     <CNCSimulator
+                      key={"proj" + projVer}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2397,6 +2579,7 @@ export default function App() {
                       setIsDriverActive={setIsDriverActive}
                       onError={setDiagnosticError}
                 bgColor={graphBg || undefined}
+                cursorStyle={cursorStyle}
                 partLayers={partLayers}
                 onInsertPoint={handleInsertProgramPoint}
                     />

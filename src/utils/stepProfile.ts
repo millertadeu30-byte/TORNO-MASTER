@@ -29,6 +29,7 @@ export interface PartProfile {
   rMinBore: number | null; // menor raio de furo interno (se tiver)
   facesTotal: number;
   facesUsed: number;
+  axis?: { o: [number, number, number]; z: [number, number, number] }; // eixo de giro achado no STEP (para montar a peça REAL no 3D)
 }
 
 type Arg = string | number | null | Arg[];
@@ -365,6 +366,7 @@ export function extractLatheProfile(text: string, fileName = "peca.stp"): PartPr
     rMinBore,
     facesTotal: faces.length,
     facesUsed: used,
+    axis: { o: AX.o, z: AX.z },
   };
 }
 
