@@ -899,7 +899,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       if (gMatches) {
         gMatches.forEach((gStr) => {
           const num = parseInt(gStr.replace("G", "").trim(), 10);
-          if ([0, 1, 2, 3, 70, 71, 74, 75, 76, 96, 97].includes(num)) {
+          if ([0, 1, 2, 3, 70, 71, 74, 75, 76, 80, 83, 84, 96, 97].includes(num)) {
             currentGMode = num;
           }
         });
@@ -1032,6 +1032,13 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             type: "arc", x1: cx, z1: cz, x2: tx, z2: tz, radius: cmd.r || 5, isG3: simInvertZ ? (cmd.mode === 2) : (cmd.mode === 3),
             color: forceColor || "#00f3ff", linhaId: cmd.linhaOriginal + idOffset,
           });
+        } else if (cmd.mode === 0 && Math.abs(tx - cx) > 1e-6 && Math.abs(tz - cz) > 1e-6) {
+          // G00 NÃO-LINEAR (padrão Fanuc): os dois eixos andam juntos a 45° até um terminar, depois o outro segue reto
+          const d = Math.min(Math.abs(tx - cx), Math.abs(tz - cz));
+          const mx = cx + Math.sign(tx - cx) * d;
+          const mz = cz + Math.sign(tz - cz) * d;
+          plotList.push({ type: "line", x1: cx, z1: cz, x2: mx, z2: mz, color: moveColor, linhaId: cmd.linhaOriginal + idOffset });
+          plotList.push({ type: "line", x1: mx, z1: mz, x2: tx, z2: tz, color: moveColor, linhaId: cmd.linhaOriginal + idOffset + 0.0001 });
         } else {
           plotList.push({
             type: "line", x1: cx, z1: cz, x2: tx, z2: tz,
@@ -1228,86 +1235,67 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               return null;
             };
 
-            while ((!isInternal && passX >= limitX) || (isInternal && passX <= limitX)) {
-              if (absDepth <= 0.0001) break; // SAFETY
-              if (passCount > 1000) break; // SAFETY
-
-              // Clamp to limitX for the final pass if we would jump over it
-              let isLastPass = false;
-              if (!isInternal && passX - absDepth < limitX) {
-                passX = limitX;
-                isLastPass = true;
-              } else if (isInternal && passX + absDepth > limitX) {
-                passX = limitX;
-                isLastPass = true;
+              // ===== G71 COMO NA MÁQUINA (Fanuc) =====
+              // Cada passe: G00 em X até a profundidade -> G01 em Z até o perfil (+ sobremetal) -> recuo 45° (R)
+              // -> G00 de volta ao Z inicial. No fim: passe seguindo o perfil (+U/2, +W) e volta ao ponto inicial.
+              // Tipo II (1º bloco do perfil com X e Z): desbasta também os rebaixos.
+              const tipo2 = commands[pIdx].x !== null && commands[pIdx].z !== null;
+              const sgn = isInternal ? -1 : 1;
+              const RAP = "#ff2a2a";
+              const CUT = "#00f3ff";
+              let seq = 0;
+              const push = (x1: number, z1: number, x2: number, z2: number, color: string) => {
+                if (Math.abs(x1 - x2) < 1e-7 && Math.abs(z1 - z2) < 1e-7) return;
+                seq++;
+                plotList.push({ type: "line", x1, z1, x2, z2, color, linhaId: cmd.linhaOriginal + seq * 0.0001 });
+              };
+              const offPts = profilePoints.map((pt) => ({ x: pt.x + sgn * radAllowance, y: pt.y + allowanceW }));
+              const trechos = (xp: number): [number, number][] => {
+                const dentro = (px: number) => (isInternal ? px > xp + 1e-6 : px < xp - 1e-6);
+                const res: [number, number][] = [];
+                let ini: number | null = dentro(offPts[0].x) ? startZ : null;
+                for (let k = 0; k < offPts.length - 1; k++) {
+                  const a = offPts[k];
+                  const b = offPts[k + 1];
+                  const da = dentro(a.x);
+                  const db = dentro(b.x);
+                  if (da !== db) {
+                    const zc = Math.abs(b.x - a.x) < 1e-9 ? a.y : a.y + ((xp - a.x) / (b.x - a.x)) * (b.y - a.y);
+                    if (!da && db) ini = zc;
+                    else if (ini !== null) { res.push([ini, zc]); ini = null; }
+                  }
+                }
+                if (ini !== null) res.push([ini, offPts[offPts.length - 1].y]);
+                return tipo2 ? res : res.slice(0, 1);
+              };
+              const limiteX = isInternal ? Math.max(...offPts.map((p) => p.x)) : Math.min(...offPts.map((p) => p.x));
+              let xp = startX;
+              let curX = startX;
+              let curZ = startZ;
+              let guard = 0;
+              while (guard++ < 1000 && absDepth > 0.0001) {
+                xp = isInternal ? xp + absDepth : xp - absDepth;
+                if (isInternal ? xp >= limiteX - 1e-6 : xp <= limiteX + 1e-6) break;
+                const ts = trechos(xp);
+                ts.forEach(([za, zb], idx) => {
+                  if (Math.abs(curZ - za) > 1e-6) { push(curX, curZ, curX, za, RAP); curZ = za; }
+                  push(curX, curZ, xp, za, idx === 0 && Math.abs(za - startZ) < 1e-6 ? RAP : CUT);
+                  push(xp, za, xp, zb, CUT);
+                  const rx = xp + sgn * retractR;
+                  const rz = zb + retractR;
+                  push(xp, zb, rx, rz, RAP);
+                  curX = rx;
+                  curZ = rz;
+                });
+                if (ts.length) { push(curX, curZ, curX, startZ, RAP); curZ = startZ; }
               }
-
-              const lookupX = isInternal ? passX + radAllowance : passX - radAllowance;
-              const intersectionZ = getProfileIntersectionZ(lookupX);
-              const zLimit = intersectionZ !== null ? intersectionZ + allowanceW : endZ;
-
-              // Step ID
-              const stepId = cmd.linhaOriginal + passCount * 0.001;
-
-              // Draw cut pass (cyan)
-              plotList.push({
-                type: "line",
-                x1: isInternal ? passX - absDepth : passX + absDepth,
-                z1: startZ,
-                x2: passX,
-                z2: startZ,
-                color: "#00f3ff",
-                linhaId: stepId,
-              });
-
-              plotList.push({
-                type: "line",
-                x1: passX,
-                z1: startZ,
-                x2: passX,
-                z2: zLimit,
-                color: "#00f3ff",
-                linhaId: stepId + 0.0002,
-              });
-
-              // Draw diagonal retract
-              plotList.push({
-                type: "line",
-                x1: passX,
-                z1: zLimit,
-                x2: isInternal ? passX - retractR : passX + retractR,
-                z2: zLimit + retractR,
-                color: "#00f3ff",
-                linhaId: stepId + 0.0004,
-              });
-
-              lastToolX = isInternal ? passX - retractR : passX + retractR;
-              lastToolZ = zLimit + retractR;
-
-              if (!activeLineIndexes.includes(cmd.linhaOriginal)) {
-                activeLineIndexes.push(cmd.linhaOriginal);
-              }
-
-              if (isLastPass) {
-                break;
-              }
-
-              passX = isInternal ? passX + absDepth : passX - absDepth;
-              passCount++;
-            }
-
-            // Return to starting (approach) position at the end of the G71 cycle (G00 rapid move)
-            if (lastToolX !== startX || lastToolZ !== startZ) {
-              plotList.push({
-                type: "line",
-                x1: lastToolX,
-                z1: lastToolZ,
-                x2: startX,
-                z2: startZ,
-                color: "#ff2a2a", // Rapid movement color (red)
-                linhaId: cmd.linhaOriginal + 0.99,
-              });
-            }
+              push(curX, curZ, offPts[0].x, startZ, RAP);
+              let lx = offPts[0].x;
+              let lz = startZ;
+              offPts.forEach((pt) => { push(lx, lz, pt.x, pt.y, CUT); lx = pt.x; lz = pt.y; });
+              push(lx, lz, startX, lz, RAP);
+              push(startX, lz, startX, startZ, RAP);
+              if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
             
             // Skip the profile blocks in main execution
             skipUntil_N = qBlock;
@@ -1745,6 +1733,37 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       }
 
       // STANDARD G00/G01/G02/G03 LINEAR & CIRCULAR ACTIONS
+      // ===== G83 (furação com pica-pau) / G84 (macho) — como a máquina: volta ao ponto inicial a cada bicada =====
+      if ((cmd.mode === 83 || cmd.mode === 84) && cmd.z !== null) {
+        const x0 = cmd.x !== null ? cmd.x / 2 : cx;
+        const z0 = cz;
+        const zf = cmd.z;
+        let k = 0;
+        const seg = (x1: number, z1: number, x2: number, z2: number, color: string) => {
+          k++;
+          plotList.push({ type: "line", x1, z1, x2, z2, color, linhaId: cmd.linhaOriginal + k * 0.0001 });
+        };
+        if (Math.abs(x0 - cx) > 1e-6) seg(cx, cz, x0, cz, "#ff2a2a");
+        const qmm = cmd.q !== null ? cmd.q / 1000 : 0;
+        if (cmd.mode === 84 || qmm <= 0) {
+          seg(x0, z0, x0, zf, "#39ff14");
+          seg(x0, zf, x0, z0, cmd.mode === 84 ? "#39ff14" : "#ff2a2a");
+        } else {
+          let z = z0;
+          let guardD = 0;
+          while (z > zf + 1e-6 && guardD++ < 500) {
+            const alvo = Math.max(zf, z - qmm);
+            if (z < z0 - 1e-6) seg(x0, z0, x0, z + 0.3, "#ff2a2a");
+            seg(x0, z < z0 - 1e-6 ? z + 0.3 : z0, x0, alvo, "#39ff14");
+            seg(x0, alvo, x0, z0, "#ff2a2a");
+            z = alvo;
+          }
+        }
+        cx = x0;
+        cz = z0;
+        if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+        continue;
+      }
       renderStandardMove(cmd, undefined, 0, i);
     }
 

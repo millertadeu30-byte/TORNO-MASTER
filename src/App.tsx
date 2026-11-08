@@ -2456,13 +2456,15 @@ export default function App() {
                 pick={regiaoPick}
                 onRegioes={setPainelRegioes}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
-                onGerar={(r) => {
-                  setLayoutCount((n) => Math.max(n, 2));
-                  setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
-                  setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
+                onGerar={(r, vivo) => {
+                  // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
+                  setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
+                  setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
                   setActivePaneIdx(0);
-                  setRegiaoSel(null);
-                  setShowIniciar(false);
+                  if (!vivo) {
+                    setRegiaoSel(null);
+                    setShowIniciar(false);
+                  }
                 }}
                 onClose={() => { setRegiaoSel(null); setShowIniciar(false); }}
               />
@@ -2960,9 +2962,9 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
   face: { nome: "Faceamento", grupo: "EXTERNO", regiao: false, ciclo: "", ferr: "T0101", params: [
     { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.15, step: 0.01 }, { k: "sobre", rot: "Sobremetal face mm", def: 0.5, step: 0.1 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 } ] },
   desbExt: { nome: "Desbaste externo", grupo: "EXTERNO", regiao: true, ciclo: "G71", ferr: "T0101", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 } ] },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 } ] },
   acabExt: { nome: "Acabamento externo", grupo: "EXTERNO", regiao: true, ciclo: "G70", ferr: "T0202", params: [
-    { k: "vc", rot: "Vc m/min", def: 220, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 } ] },
+    { k: "vc", rot: "Vc m/min", def: 220, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 } ] },
   canal: { nome: "Canal", grupo: "EXTERNO", regiao: true, ciclo: "G75", ferr: "T0303", params: [
     { k: "vc", rot: "Vc m/min", def: 120, step: 5 }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau X mm", def: 1, step: 0.1 } ] },
   roscaExt: { nome: "Rosca externa", grupo: "EXTERNO", regiao: true, ciclo: "G76", ferr: "T0404", params: [
@@ -3033,14 +3035,14 @@ function tmEnvelopes(curves: TMPt[][]) {
 
 // Monta o perfil para o ciclo: externo = diâmetro só cresce indo para trás; interno = só diminui.
 // Onde a peça "afunda" (externo) vira CANAL.
-function tmPerfil(iv: TMIntervalo[], interno: boolean) {
+function tmPerfil(iv: TMIntervalo[], interno: boolean, real = false) {
   let cur = interno ? Infinity : 0;
   const mono: TMIntervalo[] = [];
   const canais: { zStart: number; zEnd: number; fundo: number; topo: number }[] = [];
   let ab: { zStart: number; zEnd: number; fundo: number; topo: number } | null = null;
   iv.forEach((s) => {
-    const na = interno ? Math.min(s.xa, cur) : Math.max(s.xa, cur);
-    const nb = interno ? Math.min(s.xb, na) : Math.max(s.xb, na);
+    const na = real ? s.xa : interno ? Math.min(s.xa, cur) : Math.max(s.xa, cur);
+    const nb = real ? s.xb : interno ? Math.min(s.xb, na) : Math.max(s.xb, na);
     cur = nb;
     mono.push({ zA: s.zA, zB: s.zB, xa: na, xb: nb });
     if (!interno) {
@@ -3170,7 +3172,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   const nm = cfg.nome || "PECA";
   const bD = cfg.bD;
   const zF = geo.zFront;
-  const rec = "G00 X" + f(bD + 20) + " Z50.0; (RECUO - CONFERIR)";
+  const recuar = () => { W("G00 X" + f(bD + 20) + ";"); W("G00 Z50.0; (RECUO - CONFERIR)"); };
   const ativos = ops.filter((o) => o.ativo);
   const corteOp = ativos.find((o) => o.tipo === "corte");
   const largCorte = corteOp ? corteOp.p.larg : 3;
@@ -3181,15 +3183,15 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   const sub = (iv: TMIntervalo[], faixas: TMFaixa[]) => iv.filter((s) => tmNaFaixa((s.zA + s.zB) / 2, faixas));
 
   W("O0001 (" + nm + " - LADO 1 - HEAD1);");
-  W("(MAQUINA: ERGOMAT TBSY 60 - CANAL 1 / HEAD1 - TORRE INFERIOR);");
+  W("(MAQUINA: ERGOMAT TBSY 60 - PROGRAMA UNICO - H1/H2 MARCADO EM CADA FERRAMENTA);");
   W("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
   W("(PECA L" + f(geo.L) + " - D MAX " + f(geo.dMax) + " - BRUTO D" + f(bD) + " - " + cfg.material.toUpperCase() + ");");
   W("");
   W("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
   W("G92 S" + cfg.rpmMax + "; (ROTACAO MAXIMA)");
 
-  const contorno = (pts: TMPt[], fAcab: number, xSaida: number, n1: number | null, n2: number | null, passaCorte: boolean) => {
-    W((n1 ? "N" + n1 + " " : "") + "G00 X" + f(pts[0].x) + ";");
+  const contorno = (pts: TMPt[], fAcab: number, xSaida: number, n1: number | null, n2: number | null, passaCorte: boolean, tipo2 = false) => {
+    W((n1 ? "N" + n1 + " " : "") + "G00 X" + f(pts[0].x) + (tipo2 ? " Z" + f(pts[0].z + 1) : "") + ";" + (tipo2 ? " (G71 TIPO II - COM REBAIXOS)" : ""));
     W("G01 Z" + f(pts[0].z) + " F" + fAcab + ";");
     for (let i = 1; i < pts.length; i++) W("G01 X" + f(pts[i].x) + " Z" + f(pts[i].z) + ";");
     if (passaCorte) W("G01 Z" + f(geo.zBack - largCorte - 0.5) + "; (PASSA DO CORTE)");
@@ -3200,7 +3202,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     const T = TM_TIPOS[op.tipo];
     const p = op.p;
     const chave = JSON.stringify(op.faixas);
-    alvo = op.cab === "H2" ? h2 : out;
+    alvo = out; // programa único: H1/H2 fica marcado na ferramenta
     W("");
     W("(OP " + (i + 1) + " - " + T.nome.toUpperCase() + (T.ciclo && op.ciclo ? " " + T.ciclo : T.ciclo ? " SEM CICLO" : "") + ");");
     if (T.regiao && !op.faixas.length) { W("(SEM REGIAO MARCADA NA PECA - OPERACAO PULADA);"); return; }
@@ -3214,13 +3216,14 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       while (z - p.ap > zF + 1e-6) { z -= p.ap; passos.push(z); }
       passos.push(zF);
       passos.forEach((zp) => { W("G00 Z" + f(zp) + ";"); W("G01 X-1.6 F" + p.f + ";"); W("G00 Z" + f(zp + 1) + ";"); W("G00 X" + f(bD + 2) + ";"); });
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "desbExt" || op.tipo === "acabExt") {
       const s = sub(geo.ext, op.faixas);
       if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); return; }
-      const pts = tmPerfil(s, false).pts;
+      const real = p.real === 1;
+      const pts = tmPerfil(s, false, real).pts;
       const zS = s[0].zA;
       const zE = s[s.length - 1].zB;
       const passa = Math.abs(zE - geo.zBack) < 1e-3;
@@ -3231,10 +3234,10 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       if (op.tipo === "desbExt") {
         if (op.ciclo) {
           const n1 = nIdx * 100; const n2 = n1 + 50; nIdx++;
-          ciclos["E" + chave] = { p: n1, q: n2 };
+          ciclos["E" + chave + (real ? "R" : "")] = { p: n1, q: n2 };
           W("G71 U" + f(p.ap) + " R0.5;");
           W("G71 P" + n1 + " Q" + n2 + " U" + f(p.u) + " W" + f(p.w) + " F" + p.f + ";");
-          contorno(pts, fAc, xSai, n1, n2, passa);
+          contorno(pts, fAc, xSai, n1, n2, passa, real);
         } else {
           const xMin = Math.min(...pts.map((q) => q.x)) + p.u;
           let xp = bD;
@@ -3249,11 +3252,11 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
           }
         }
       } else {
-        const c = ciclos["E" + chave];
+        const c = ciclos["E" + chave + (real ? "R" : "")];
         if (op.ciclo && c) W("G70 P" + c.p + " Q" + c.q + ";");
         else contorno(pts, p.f, xSai, null, null, passa);
       }
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "canal") {
@@ -3268,7 +3271,8 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         W("(CANAL Z" + f(c.zStart) + " A Z" + f(c.zEnd) + " - FUNDO D" + f(c.fundo) + ");");
         if (larg < p.larg - 0.01) W("(ATENCAO: CANAL MAIS ESTREITO QUE O BEDAME - CONFERIR);");
         const zFim = larg < p.larg ? c.zStart : c.zEnd + p.larg;
-        W("G00 X" + f(c.topo + 2) + " Z" + f(c.zStart) + " M08;");
+        W("G00 X" + f(bD + 2) + " Z" + f(c.zStart) + " M08; (CHEGA POR FORA)");
+        W("G00 X" + f(c.topo + 2) + ";");
         if (op.ciclo) {
           W("G75 R0.5;");
           W("G75 X" + f(c.fundo) + " Z" + f(zFim) + " P" + Math.round(p.pk * 1000) + " Q" + Math.round(p.larg * 0.8 * 1000) + " F" + p.f + ";");
@@ -3284,7 +3288,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         }
         W("G00 X" + f(c.topo + 2) + ";");
       });
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "roscaExt") {
@@ -3296,10 +3300,11 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       const zE = s[s.length - 1].zB;
       W("(ROSCA EXTERNA D" + f(maior) + " X PASSO " + f(p.passo) + " - Z" + f(zS) + " A Z" + f(zE) + ");");
       W("G97 S" + p.rpm + " M03;");
-      W("G00 X" + f(maior + 2) + " Z" + f(zS + 3 * p.passo) + " M08;");
+      W("G00 X" + f(bD + 2) + " Z" + f(zS + 3 * p.passo) + " M08; (CHEGA POR FORA)");
+      W("G00 X" + f(maior + 2) + ";");
       W("G76 P010060 Q50 R0.05;");
       W("G76 X" + f(maior - 2 * h) + " Z" + f(zE) + " P" + Math.round(h * 1000) + " Q" + Math.round(p.q * 1000) + " F" + p.passo + ";");
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "centro") {
@@ -3307,7 +3312,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G00 X0.0 Z" + f(zF + 2) + " M08;");
       W("G01 Z" + f(zF - p.prof) + " F" + p.f + ";");
       W("G00 Z" + f(zF + 2) + ";");
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "furo" || op.tipo === "macho") {
@@ -3335,7 +3340,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         W("G84 Z" + f(zFim) + " F" + p.passo + ";");
         W("G80;");
       }
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "desbInt" || op.tipo === "acabInt") {
@@ -3373,7 +3378,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         else contorno(pts, p.f, d0 - 1, null, null, false);
       }
       W("G00 Z" + f(zF + 2) + "; (SAI DO FURO)");
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "roscaInt") {
@@ -3389,7 +3394,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G76 P010060 Q50 R0.05;");
       W("G76 X" + f(menor + 2 * h) + " Z" + f(zE) + " P" + Math.round(h * 1000) + " Q" + Math.round(p.q * 1000) + " F" + p.passo + ";");
       W("G00 Z" + f(zF + 2) + "; (SAI DO FURO)");
-      W(rec);
+      recuar();
       return;
     }
     if (op.tipo === "corte") {
@@ -3401,12 +3406,13 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G00 X" + f(bD + 2) + ";");
       W("M401; (SINC: CORTE TERMINADO - CONTRAFUSO PODE RECUAR)");
       W("(AVANCO DA BARRA PARA A PROXIMA PECA - COMPLETAR CONFORME A MAQUINA);");
-      W(rec);
+      recuar();
     }
   });
   alvo = out;
   W("");
-  W(rec.replace(";", " M09;"));
+  W("G00 X" + f(bD + 20) + " M09;");
+  W("G00 Z50.0;");
   W("M30;");
 
   const g: string[] = [];
@@ -3449,7 +3455,7 @@ export const PainelPrograma: React.FC<{
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
   onRegioes: (r: TMRegiao[]) => void;
   onFix: (z: TMFixZone[]) => void;
-  onGerar: (r: { textos: [string, string]; nomes: [string, string] }) => void;
+  onGerar: (r: { textos: [string, string]; nomes: [string, string] }, vivo?: boolean) => void;
   onClose: () => void;
 }> = ({ partProfile, partZero, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onRegioes, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
@@ -3461,6 +3467,8 @@ export const PainelPrograma: React.FC<{
   });
   const [aberta, setAberta] = useState<string | null>(null);
   const [addTipo, setAddTipo] = useState<string>("");
+  const [aoVivo, setAoVivo] = useState<boolean>(true); // programa e gráfico atualizam sozinhos a cada mudança
+  const [arrastando, setArrastando] = useState<string | null>(null);
   const primeiroRef = useRef<number | null>(null);
   useEffect(() => { try { localStorage.setItem("cnc_painel_cfg", JSON.stringify(cfg)); } catch {} }, [cfg]);
   useEffect(() => { try { localStorage.setItem("cnc_ops_painel", JSON.stringify(ops)); } catch {} }, [ops]);
@@ -3540,6 +3548,26 @@ export const PainelPrograma: React.FC<{
   const gerar = () => {
     if (!geo) return;
     onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material }));
+  };
+  // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
+  useEffect(() => {
+    if (!aoVivo || !geo) return;
+    const t = setTimeout(() => onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material }), true), 400);
+    return () => clearTimeout(t);
+  }, [ops, cfg, bD, geo, aoVivo]);
+  // arrastar operação para cima / para baixo na árvore
+  const soltarEm = (alvoId: string) => {
+    if (!arrastando || arrastando === alvoId) return;
+    setOps((arr) => {
+      const de = arr.findIndex((x) => x.id === arrastando);
+      const para = arr.findIndex((x) => x.id === alvoId);
+      if (de < 0 || para < 0) return arr;
+      const c = [...arr];
+      const [m] = c.splice(de, 1);
+      c.splice(para, 0, m);
+      return c;
+    });
+    setArrastando(null);
   };
 
   const inp = "bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white";
@@ -3633,7 +3661,16 @@ export const PainelPrograma: React.FC<{
               const aberto = aberta === o.id;
               const escolhendo = regiaoSel && regiaoSel.opId === o.id;
               return (
-                <div key={o.id} className={"rounded-lg border " + (aberto || escolhendo ? "border-zinc-500 bg-zinc-900" : "border-zinc-800 bg-zinc-900/50") + (o.ativo ? "" : " opacity-50")}>
+                <div
+                  key={o.id}
+                  draggable
+                  onDragStart={() => setArrastando(o.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => soltarEm(o.id)}
+                  onDragEnd={() => setArrastando(null)}
+                  className={"rounded-lg border " + (arrastando && arrastando !== o.id ? "border-dashed " : "") + (aberto || escolhendo ? "border-zinc-500 bg-zinc-900" : "border-zinc-800 bg-zinc-900/50") + (o.ativo ? "" : " opacity-50") + (arrastando === o.id ? " opacity-40" : "")}
+                  title="Arraste para mudar a ordem"
+                >
                   <div className="flex items-center gap-2 px-2 py-1.5">
                     <input type="checkbox" checked={o.ativo} onChange={(e) => setOp(o.id, { ativo: e.target.checked })} title="Usar esta operação" />
                     <span className="w-3 h-3 rounded-full shrink-0" style={{ background: o.cor }} />
@@ -3676,6 +3713,19 @@ export const PainelPrograma: React.FC<{
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
                           <button onClick={() => setOp(o.id, { faixas: toda(o) })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
                           <button onClick={() => setOp(o.id, { faixas: [] })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                        </div>
+                      )}
+                      {T.regiao && o.faixas.length > 0 && (
+                        <div className="space-y-1 pb-1.5">
+                          {o.faixas.map((fx, k) => (
+                            <div key={k} className="flex items-center gap-1.5 text-[11px]">
+                              <span className="text-zinc-400">Começa em Z</span>
+                              {num(Math.max(fx[0], fx[1]), (n) => setOp(o.id, { faixas: o.faixas.map((g, j) => (j === k ? ([Math.min(g[0], g[1]), n] as TMFaixa) : g)) }), 0.1, "w-20")}
+                              <span className="text-zinc-400">termina em Z</span>
+                              {num(Math.min(fx[0], fx[1]), (n) => setOp(o.id, { faixas: o.faixas.map((g, j) => (j === k ? ([n, Math.max(g[0], g[1])] as TMFaixa) : g)) }), 0.1, "w-20")}
+                              <button onClick={() => setOp(o.id, { faixas: o.faixas.filter((_, j) => j !== k) })} className="text-zinc-500 hover:text-red-400" title="Tirar este trecho">✕</button>
+                            </div>
+                          ))}
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -3721,9 +3771,13 @@ export const PainelPrograma: React.FC<{
       </div>
 
       <div className="px-3 py-2 border-t border-zinc-800 flex items-center justify-between gap-2 bg-[#0d0d14]">
-        <span className="text-[10px] text-amber-400">⚠ Conferir o programa antes de rodar</span>
+        <label className="flex items-center gap-1.5 text-[11px] text-zinc-300" title="Cada mudança já refaz o programa no CANAL 1 e o simulador mostra na hora">
+          <input type="checkbox" checked={aoVivo} onChange={(e) => setAoVivo(e.target.checked)} />
+          Ao vivo
+        </label>
+        <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>
         <button disabled={!geo} onClick={gerar} className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (geo ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-zinc-800 text-zinc-500")}>
-          ✔ Gerar programa nos canais
+          ✔ Gerar e ver o programa
         </button>
       </div>
     </div>
