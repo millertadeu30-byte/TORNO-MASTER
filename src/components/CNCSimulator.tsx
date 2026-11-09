@@ -20,7 +20,7 @@ interface CNCSimulatorProps {
   // Painel ▶ Programa da peça: escolher a REGIÃO de cada operação clicando na peça e mostrar as regiões
   regiaoModo?: "cf" | "linha" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
-  regioes?: { cor: string; faixas: [number, number][]; ativa: boolean }[];
+  regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string }[];
   fixComando?: { seq: number; zones: { lado: 1 | 2; za: number; zb: number; d: number }[] } | null; // painel liga/desliga fixações
   partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
@@ -1278,8 +1278,36 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                 if (isInternal ? xp >= limiteX - 1e-6 : xp <= limiteX + 1e-6) break;
                 const ts = trechos(xp);
                 ts.forEach(([za, zb], idx) => {
-                  if (Math.abs(curZ - za) > 1e-6) { push(curX, curZ, curX, za, RAP); curZ = za; }
-                  push(curX, curZ, xp, za, idx === 0 && Math.abs(za - startZ) < 1e-6 ? RAP : CUT);
+                  if (tipo2 && (idx > 0 || Math.abs(za - startZ) > 1e-6)) { // rebaixo (inclusive o 1º trecho quando a frente da peça é mais alta)
+                    // TIPO II como na máquina: entra no rebaixo SEGUINDO o perfil (nunca mergulha reto nem passa por dentro da peça)
+                    const nivelAnt = xp - sgn * absDepth;
+                    let jj = -1;
+                    for (let k = 0; k < offPts.length - 1; k++) { if (za <= offPts[k].y + 1e-6 && za >= offPts[k + 1].y - 1e-6) { jj = k; break; } }
+                    const acima = (px: number) => (isInternal ? px <= nivelAnt + 1e-6 : px >= nivelAnt - 1e-6);
+                    const cam: { x: number; z: number }[] = [{ x: xp, z: za }];
+                    let achou = false;
+                    for (let k = jj; k >= 0; k--) {
+                      const pt = offPts[k];
+                      const pv = cam[cam.length - 1];
+                      if (acima(pt.x)) { const zc = Math.abs(pt.x - pv.x) < 1e-9 ? pt.y : pv.z + ((nivelAnt - pv.x) / (pt.x - pv.x)) * (pt.y - pv.z); cam.push({ x: nivelAnt, z: zc }); achou = true; break; }
+                      cam.push({ x: pt.x, z: pt.y });
+                    }
+                    if (!achou) cam.push({ x: nivelAnt, z: cam[cam.length - 1].z });
+                    cam.reverse();
+                    const ent = cam[0];
+                    // viagem segura: sobe acima do perfil entre onde está e a entrada, anda em Z e desce até a entrada
+                    let alto = curX;
+                    offPts.forEach((pt) => { if (pt.y <= Math.max(curZ, ent.z) + 1e-6 && pt.y >= Math.min(curZ, ent.z) - 1e-6) alto = isInternal ? Math.min(alto, pt.x - retractR) : Math.max(alto, pt.x + retractR); });
+                    push(curX, curZ, alto, curZ, RAP);
+                    push(alto, curZ, alto, ent.z, RAP);
+                    push(alto, ent.z, ent.x, ent.z, RAP);
+                    for (let k = 1; k < cam.length; k++) push(cam[k - 1].x, cam[k - 1].z, cam[k].x, cam[k].z, CUT);
+                    curX = xp;
+                    curZ = za;
+                  } else {
+                    if (Math.abs(curZ - za) > 1e-6) { push(curX, curZ, curX, za, RAP); curZ = za; }
+                    push(curX, curZ, xp, za, idx === 0 && Math.abs(za - startZ) < 1e-6 ? RAP : CUT);
+                  }
                   push(xp, za, xp, zb, CUT);
                   const rx = xp + sgn * retractR;
                   const rz = zb + retractR;
@@ -1287,7 +1315,15 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                   curX = rx;
                   curZ = rz;
                 });
-                if (ts.length) { push(curX, curZ, curX, startZ, RAP); curZ = startZ; }
+                if (ts.length) {
+                  // volta ao Z inicial SEMPRE por cima da peça: sobe acima do perfil (+R) antes de andar em Z (nunca atravessa a frente mais alta)
+                  let alto = curX;
+                  offPts.forEach((pt) => { if (pt.y <= Math.max(curZ, startZ) + 1e-6 && pt.y >= Math.min(curZ, startZ) - 1e-6) alto = isInternal ? Math.min(alto, pt.x - retractR) : Math.max(alto, pt.x + retractR); });
+                  push(curX, curZ, alto, curZ, RAP);
+                  push(alto, curZ, alto, startZ, RAP);
+                  curX = alto;
+                  curZ = startZ;
+                }
               }
               push(curX, curZ, offPts[0].x, startZ, RAP);
               let lx = offPts[0].x;
@@ -1407,7 +1443,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
             // When it finishes at targetZ, it retracts at 45 degrees according to R
             const reliefZ = targetZ + (plungeZDir < 0 ? retractR : -retractR);
-            const reliefX = stepX > 0 ? currentX - shiftXDir * retractR : currentX;
+            const dD74 = lastG74_Line1 && cmd.r !== null ? Math.abs(cmd.r) : null; // R do 2º bloco = alívio no fundo (em X)
+            const reliefX = dD74 !== null ? currentX - shiftXDir * dD74 : stepX > 0 ? currentX - shiftXDir * retractR : currentX;
 
             // Retract at 45 degrees
             plotList.push({
@@ -1612,15 +1649,16 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                   linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.010,
                 });
             } else {
-                plotList.push({
-                  type: "line",
-                  x1: targetX,
-                  z1: currentZ,
-                  x2: originalX,
-                  z2: currentZ,
-                  color: "#ff2a2a",
-                  linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.009,
-                });
+              // R do 2º bloco = ALÍVIO NO FUNDO (Δd): no faceamento a ferramenta anda em Z no fundo antes de sair
+              const dD = cmd.r !== null ? Math.abs(cmd.r) : 0;
+              const zRel = currentZ + (targetZ < originalZ ? dD : -dD);
+              if (dD > 0) {
+                plotList.push({ type: "line", x1: targetX, z1: currentZ, x2: targetX, z2: zRel, color: "#ff2a2a", linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.0085 });
+              }
+              plotList.push({ type: "line", x1: targetX, z1: zRel, x2: originalX, z2: zRel, color: "#ff2a2a", linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.009 });
+              if (dD > 0) {
+                plotList.push({ type: "line", x1: originalX, z1: zRel, x2: originalX, z2: currentZ, color: "#ff2a2a", linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.0095 });
+              }
             }
 
             if (stepZ === 0 || currentZ === targetZ) break;
@@ -1790,6 +1828,55 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     });
     return hits;
   }, [plotList, fixZones, fixLado, fixFolga]);
+  // ALARME DE COLISÃO COM A PEÇA: G00 nunca pode tocar a peça; G01 não pode entrar além do raio da ponta (tolerância)
+  const pecaHits = useMemo(() => {
+    const hits: { idx: number; linha: number; z: number; d: number; rapido: boolean }[] = [];
+    const pl = partLayers ? partLayers.find((Lr) => Lr.id === "peca") : null;
+    if (!pl) return hits;
+    const sg: { a: { x: number; z: number }; b: { x: number; z: number } }[] = [];
+    pl.curves.forEach((c) => { for (let i = 0; i < c.length - 1; i++) sg.push({ a: c[i], b: c[i + 1] }); });
+    const env = (z: number) => {
+      const xs: number[] = [];
+      sg.forEach((s) => {
+        const lo = Math.min(s.a.z, s.b.z);
+        const hi = Math.max(s.a.z, s.b.z);
+        if (hi - lo < 1e-6 || z < lo || z > hi) return;
+        xs.push((s.a.x + ((z - s.a.z) / (s.b.z - s.a.z)) * (s.b.x - s.a.x)) / 2);
+      });
+      if (!xs.length) return null;
+      return { ext: Math.max(...xs), int: xs.length >= 2 ? Math.min(...xs) : null };
+    };
+    plotList.forEach((it, idx) => {
+      const rapido = it.color === "#ff2a2a";
+      const tol = rapido ? 0.05 : 0.6; // G01: a ponta teórica de ferramenta com raio passa um pouco "dentro" nas quinas (compensação) - não é colisão
+      const len = Math.hypot(it.x2 - it.x1, it.z2 - it.z1);
+      const n = Math.min(400, Math.max(1, Math.ceil(len / 0.1)));
+      for (let k = 0; k <= n; k++) {
+        const t = k / n;
+        const z = it.z1 + (it.z2 - it.z1) * t;
+        const r = it.x1 + (it.x2 - it.x1) * t;
+        // olha um pouquinho antes e depois em Z: encostar numa face em pé (ferramenta rente à parede) NÃO é colisão
+        const e1 = env(z - 0.002);
+        const e2 = env(z + 0.002);
+        if (!e1 || !e2) continue;
+        const e = { ext: Math.min(e1.ext, e2.ext), int: e1.int === null || e2.int === null ? null : Math.max(e1.int, e2.int) };
+        if (r < e.ext - tol && (e.int === null || r > e.int + tol)) { hits.push({ idx, linha: it.linhaId, z, d: r * 2, rapido }); break; }
+      }
+    });
+    return hits;
+  }, [plotList, partLayers]);
+  const [alvoCol, setAlvoCol] = useState<number>(-1); // qual colisão está selecionada (clique no alarme)
+  const [alarmeMin, setAlarmeMin] = useState<boolean>(false); // alarme minimizado (só a bolinha)
+  const irParaColisao = () => {
+    if (!pecaHits.length) return;
+    const k = (alvoCol + 1) % pecaHits.length;
+    setAlvoCol(k);
+    const h = pecaHits[k];
+    const zz = Math.max(zoom, 20);
+    setZoom(zz);
+    setPanX(-50 - h.z * zz * (simInvertZ ? -1 : 1));
+    setPanY(-50 + (h.d / 2) * zz);
+  };
 
   const toggleFrozen = () => {
     setIsFrozen(!isFrozen);
@@ -2099,31 +2186,89 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.restore();
     }
     // ===== REGIÕES das operações (painel ▶ Programa da peça): linhas da peça pintadas na cor da operação =====
+    // Só a operação ABERTA (ou escolhendo região) é pintada: assim a peça fica nítida e na cor escolhida (Cinza/Azul/Laranja).
+    // E só o perfil daquela operação: EXTERNO pinta só as linhas de fora, INTERNO só as de dentro (furo).
     if (regioes && regioes.length && partLayers && partLayers.length) {
       const pecaL = partLayers.find((Lr) => Lr.id === "peca") || partLayers[0];
+      const segs: { a: { x: number; z: number }; b: { x: number; z: number } }[] = [];
+      pecaL.curves.forEach((c) => { for (let i = 0; i < c.length - 1; i++) segs.push({ a: c[i], b: c[i + 1] }); });
+      // diâmetro de fora (maior) e de dentro (menor, se tiver furo) num Z
+      const envEm = (z: number) => {
+        const xs: number[] = [];
+        segs.forEach((s) => {
+          const lo = Math.min(s.a.z, s.b.z);
+          const hi = Math.max(s.a.z, s.b.z);
+          if (hi - lo < 1e-6 || z < lo || z > hi) return;
+          xs.push(s.a.x + ((z - s.a.z) / (s.b.z - s.a.z)) * (s.b.x - s.a.x));
+        });
+        if (!xs.length) return null;
+        return { ext: Math.max(...xs), int: xs.length >= 2 ? Math.min(...xs) : null };
+      };
+      const ladoDoSeg = (s: { a: { x: number; z: number }; b: { x: number; z: number } }): "EXT" | "INT" | "?" => {
+        if (Math.abs(s.a.z - s.b.z) > 1e-6) {
+          const zm = (s.a.z + s.b.z) / 2;
+          const e = envEm(zm);
+          if (!e) return "?";
+          const xm = (s.a.x + s.b.x) / 2;
+          if (Math.abs(xm - e.ext) < 1e-3) return "EXT";
+          if (e.int !== null && Math.abs(xm - e.int) < 1e-3) return "INT";
+          return "?";
+        }
+        // face (linha em pé): compara com a parede da peça logo antes e logo depois
+        const xm = (s.a.x + s.b.x) / 2;
+        let intMax = 0;
+        [s.a.z + 0.01, s.a.z - 0.01].forEach((z) => { const e = envEm(z); if (e && e.int !== null) intMax = Math.max(intMax, e.int); });
+        return xm > intMax + 1e-3 ? "EXT" : "INT";
+      };
+      const lados = segs.map(ladoDoSeg);
       regioes.forEach((rg) => {
-        if (!rg.faixas.length) return;
+        if (!rg.faixas.length || !rg.ativa) return;
+        const quer = rg.grupo === "INTERNO" ? "INT" : rg.grupo ? "EXT" : null;
         ctx.save();
         ctx.strokeStyle = rg.cor;
-        ctx.lineWidth = rg.ativa ? 5 : 3;
-        ctx.globalAlpha = rg.ativa ? 0.95 : 0.5;
+        ctx.lineWidth = 5;
+        ctx.globalAlpha = 0.95;
         ctx.lineCap = "round";
-        pecaL.curves.forEach((c) => {
-          for (let i = 0; i < c.length - 1; i++) {
-            const a = c[i];
-            const b = c[i + 1];
-            const zm = (a.z + b.z) / 2;
-            if (!rg.faixas.some(([za, zb]) => zm >= Math.min(za, zb) - 1e-6 && zm <= Math.max(za, zb) + 1e-6)) continue;
-            for (const sgn of [1, -1]) {
-              ctx.beginPath();
-              ctx.moveTo(originX + a.z * zoom * zDirSign, originY - sgn * (a.x / 2) * zoom);
-              ctx.lineTo(originX + b.z * zoom * zDirSign, originY - sgn * (b.x / 2) * zoom);
-              ctx.stroke();
-            }
+        segs.forEach((s, k) => {
+          if (quer && lados[k] !== quer && lados[k] !== "?") return;
+          const zm = (s.a.z + s.b.z) / 2;
+          // cada linha é individual: linha em pé (face) só pinta se a região for exatamente ela (Z igual nas duas pontas);
+          // linha deitada/inclinada só pinta se estiver DENTRO da região, sem pegar as faces das pontas
+          const ehFace = Math.abs(s.a.z - s.b.z) < 1e-6;
+          if (!rg.faixas.some(([za, zb]) => {
+            const lo = Math.min(za, zb);
+            const hi = Math.max(za, zb);
+            if (ehFace) return (hi - lo < 1e-4 && Math.abs(zm - lo) < 1e-4) || (zm > lo + 1e-4 && zm < hi - 1e-4); // a própria face, ou face DENTRO do Começo/Fim
+            return hi - lo >= 1e-4 && zm > lo + 1e-6 && zm < hi - 1e-6;
+          })) return;
+          for (const sgn of [1, -1]) {
+            ctx.beginPath();
+            ctx.moveTo(originX + s.a.z * zoom * zDirSign, originY - sgn * (s.a.x / 2) * zoom);
+            ctx.lineTo(originX + s.b.z * zoom * zDirSign, originY - sgn * (s.b.x / 2) * zoom);
+            ctx.stroke();
           }
         });
         ctx.restore();
       });
+    }
+    // marca os pontos de COLISÃO com a peça (o selecionado fica maior)
+    if (pecaHits.length) {
+      ctx.save();
+      pecaHits.forEach((h, k) => {
+        const px = originX + h.z * zoom * zDirSign;
+        const py = originY - (h.d / 2) * zoom;
+        const sel = k === alvoCol;
+        ctx.strokeStyle = "#ff0000";
+        ctx.lineWidth = sel ? 3 : 2;
+        ctx.beginPath();
+        ctx.arc(px, py, sel ? 14 : 8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(px - 18, py); ctx.lineTo(px + 18, py);
+        ctx.moveTo(px, py - 18); ctx.lineTo(px, py + 18);
+        ctx.stroke();
+      });
+      ctx.restore();
     }
     if (fixMode && fixDraft) {
       const px = originX + fixDraft.z * zoom * zDirSign;
@@ -3248,6 +3393,16 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           style={{ touchAction: 'none', ...(bgColor ? { background: bgColor } : {}) }}
         />
 
+        {/* ALARME DE COLISÃO com a peça */}
+        {pecaHits.length > 0 && alarmeMin && (
+          <button className="absolute bottom-14 right-3 z-40 bg-red-700 text-white text-[11px] font-bold px-2 py-1 rounded-full shadow-lg" onClick={(e) => { e.stopPropagation(); setAlarmeMin(false); }} onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} title="Mostrar o alarme de colisão">⚠ {pecaHits.length}</button>
+        )}
+        {pecaHits.length > 0 && !alarmeMin && (
+          <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-40 bg-red-700/95 border border-red-300 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg shadow-lg cursor-pointer hover:bg-red-600 max-w-[90%] text-center" onClick={(e) => { e.stopPropagation(); irParaColisao(); }} onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} title="Clique para ir ao ponto da colisão (clique de novo para a próxima)">
+            ⚠ ALARME DE COLISÃO: {pecaHits.length} movimento(s) entram na peça — 1º perto da linha {Math.floor(pecaHits[0].linha) + 1} (Z{pecaHits[0].z.toFixed(3)} Ø{pecaHits[0].d.toFixed(3)}){pecaHits[0].rapido ? " em G00 (rápido)" : " em G01"} — clique para ir ao ponto{alvoCol >= 0 ? " (" + (alvoCol + 1) + "/" + pecaHits.length + ")" : ""}
+            <button className="ml-2 px-1.5 rounded bg-black/40 hover:bg-black/70" onClick={(e) => { e.stopPropagation(); setAlarmeMin(true); }} title="Minimizar o alarme">—</button>
+          </div>
+        )}
         {/* Aviso do PG (ponto levado para o programa) */}
         {pgMode && (
           <div className={`absolute top-12 left-1/2 -translate-x-1/2 z-40 text-xs font-bold px-3 py-1.5 rounded-lg shadow-lg pointer-events-none ${pgMsg ? "bg-emerald-600 text-white" : "bg-black/70 text-emerald-300"}`}>
