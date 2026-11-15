@@ -5,6 +5,50 @@ import { calculateCycleTimeDetailed, formatCycleTime, loadMachineParams, saveMac
 import { ResizableBox } from "./ResizableBox";
 import { CycleTimePanel } from "./CycleTimePanel";
 
+export type FixZone = {
+  lado: 1 | 2;
+  za: number;
+  zb: number;
+  d: number;
+  tipo?: "bucha" | "castanha" | "contrafuso";
+  label?: string;
+  cota?: string;
+  infinito?: boolean;
+};
+
+export type PartLayer = {
+  id: string;
+  label: string;
+  color: string;
+  dashed: boolean;
+  curves: { x: number; z: number }[][];
+};
+
+export interface SimFixHit {
+  idx: number;
+  linha: number;
+  lado: 1 | 2;
+  motivo: string;
+}
+
+export interface SimPecaHit {
+  idx: number;
+  linha: number;
+  z: number;
+  d: number;
+  rapido: boolean;
+  diagonal: boolean;
+  motivo: string;
+}
+
+export interface SimColisaoRelatorio {
+  plotList: SimulationPlotItem[];
+  activeLineIndexes: number[];
+  fixHits: SimFixHit[];
+  pecaHits: SimPecaHit[];
+  error?: string;
+}
+
 interface CNCSimulatorProps {
   gcodeText: string;
   activeLine: number;
@@ -22,843 +66,16 @@ interface CNCSimulatorProps {
   regiaoLimparSeq?: number; // incrementa quando o usuário limpa a seleção para apagar as marquinhas
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
   regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string }[];
-  fixComando?: { seq: number; zones: { lado: 1 | 2; za: number; zb: number; d: number }[] } | null; // painel liga/desliga fixações
-  partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça e bruto do STEP
+  fixComando?: { seq: number; zones: FixZone[] } | null; // painel liga/desliga fixações
+  partLayers?: PartLayer[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
 }
 
-export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
-  gcodeText,
-  activeLine,
-  onLineChange,
-  simInvertZ,
-  onToggleZInvert,
-  isDriverActive,
-  setIsDriverActive,
-  isHighContrast,
-  onError,
-  bgColor,
-  cursorStyle,
-  regiaoModo,
-  regiaoLimparSeq,
-  onRegiaoPick,
-  regioes,
-  fixComando,
-  partLayers,
-  onInsertPoint,
-}) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  
-  // Touch references for zooming/panning on mobile and tablet
-  const touchStartDistRef = useRef<number | null>(null);
-  const touchStartZoomRef = useRef<number>(8);
-  const touchStartPanRef = useRef<Point2D>({ x: 0, y: 0 });
-  const touchDragStartRef = useRef<Point2D>({ x: 0, y: 0 });
-  const isTouchPanningRef = useRef<boolean>(false);
-  const touchHasMovedRef = useRef<boolean>(false);
-  const touchStartPosRef = useRef<Point2D>({ x: 0, y: 0 });
-  
-  // Transform / Camera State
-  const [zoom, setZoom] = useState<number>(8);
-  const [panX, setPanX] = useState<number>(0);
-  const [panY, setPanY] = useState<number>(0);
-  const [isPanning, setIsPanning] = useState<boolean>(false);
-  const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
-  const panStartClientRef = useRef<Point2D | null>(null);
-  const mouseHasMovedRef = useRef<boolean>(false);
-  const [regiaoClicks, setRegiaoClicks] = useState<{ z: number; r: number }[]>([]);
-  useEffect(() => {
-    setRegiaoClicks([]);
-  }, [regiaoModo, regiaoLimparSeq]);
-  const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
-  // Se uma cor de fundo foi escolhida em "Aparência", ajusta linhas/textos do gráfico para manter contraste
-  useEffect(() => {
-    if (!bgColor) return;
-    const h = bgColor.replace("#", "");
-    if (h.length !== 6) return;
-    const lum = 0.299 * parseInt(h.slice(0, 2), 16) + 0.587 * parseInt(h.slice(2, 4), 16) + 0.114 * parseInt(h.slice(4, 6), 16);
-    setIsThemeDark(lum < 140);
-  }, [bgColor]);
-  // cores e tamanho da mira / quadradinho do desenho (vem da janela "Aparência")
-  const cur: CursorStyle = { ...CURSOR_STYLE_PADRAO, ...(cursorStyle || {}) };
-
-  // Measuring overlay states
-  const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
-  const [isMeasuringAngle, setIsMeasuringAngle] = useState<boolean>(false);
-  const [angleStartLine, setAngleStartLine] = useState<SimulationPlotItem | null>(null);
-  const [angleEndLine, setAngleEndLine] = useState<SimulationPlotItem | null>(null);
-  
-  const [measureStartPoint, setMeasureStartPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
-  const [measureEndPoint, setMeasureEndPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
-  const [mousePos, setMousePos] = useState<Point2D | null>(null);
-  const [measurePanelPos, setMeasurePanelPos] = useState<Point2D>({ x: 12, y: 100 });
-  const [isDraggingMeasurePanel, setIsDraggingMeasurePanel] = useState<boolean>(false);
-  const [dragOffset, setDragOffset] = useState<Point2D>({ x: 0, y: 0 });
-
-  // High precision mouse hover / snap coordinate tracking ("Mirinha")
-  interface HoveredPointInfo {
-    canvasX: number;
-    canvasY: number;
-    latheX: number;
-    latheZ: number;
-    gcodeLine: number;
-    gcodeText: string;
-    isVertex?: boolean;
-    plotItem?: SimulationPlotItem;
-    partLayer?: string; // "PEÇA" ou "BRUTO" quando a mira está numa linha do STEP
-  }
-  const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
-  // PG: tocar em pontos da peça e levar para o programa
-  const [pgMode, setPgMode] = useState<boolean>(false);
-  // Traços de movimento de usinagem do programa: ligado/desligado (fica gravado no aparelho)
-  const [showToolpath, setShowToolpath] = useState<boolean>(() => {
-    try { return localStorage.getItem("cnc_showToolpath") !== "0"; } catch { return true; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("cnc_showToolpath", showToolpath ? "1" : "0"); } catch {}
-  }, [showToolpath]);
-  const [pgMsg, setPgMsg] = useState<string | null>(null);
-  // ===== FIXAÇÃO (zona proibida): onde a peça é presa no lado 1 e no lado 2 =====
-  type FixZone = { lado: 1 | 2; za: number; zb: number; d: number };
-  const [fixMode, setFixMode] = useState<boolean>(false);
-  const [fixZones, setFixZones] = useState<FixZone[]>(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]");
-      return Array.isArray(v) ? v : [];
-    } catch {
-      return [];
-    }
-  });
-  const [fixLado, setFixLado] = useState<1 | 2>(() => {
-    try { return localStorage.getItem("cnc_fixLado2D") === "2" ? 2 : 1; } catch { return 1; }
-  });
-  const [fixFolga, setFixFolga] = useState<number>(() => {
-    try { const v = parseFloat(localStorage.getItem("cnc_fixFolga2D") || "1"); return isNaN(v) ? 1 : v; } catch { return 1; }
-  });
-  const [fixDraft, setFixDraft] = useState<{ z: number; d: number } | null>(null); // 1º toque (começo da pega)
-  const [fixMsg, setFixMsg] = useState<string | null>(null);
-  // painel ▶ Programa da peça manda ligar/desligar as fixações
-  useEffect(() => {
-    if (fixComando) setFixZones(fixComando.zones);
-  }, [fixComando ? fixComando.seq : -1]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("cnc_fixacoes2D", JSON.stringify(fixZones));
-      localStorage.setItem("cnc_fixLado2D", String(fixLado));
-      localStorage.setItem("cnc_fixFolga2D", String(fixFolga));
-    } catch { /* sem armazenamento */ }
-  }, [fixZones, fixLado, fixFolga]);
-  const [showMirinha, setShowMirinha] = useState<boolean>(() => {
-    return localStorage.getItem("cnc_showMirinha2D") !== "false";
-  });
-
-  useEffect(() => {
-    localStorage.setItem("cnc_showMirinha2D", String(showMirinha));
-  }, [showMirinha]);
-
-  // MIRA FIXA: 1º clique no botão Mira = painel fica FIXO na tela e pode ser arrastado; 2º clique = desliga
-  const [miraFixa, setMiraFixa] = useState<boolean>(() => localStorage.getItem("cnc_miraFixa2D") === "true");
-  const [miraPos, setMiraPos] = useState<{ x: number; y: number } | null>(() => {
-    try {
-      const v = localStorage.getItem("cnc_miraPos2D");
-      return v ? JSON.parse(v) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [miraUltimoPonto, setMiraUltimoPonto] = useState<HoveredPointInfo | null>(null);
-  const miraDragRef = useRef<{ dx: number; dy: number } | null>(null);
-  useEffect(() => { localStorage.setItem("cnc_miraFixa2D", String(miraFixa)); }, [miraFixa]);
-  useEffect(() => { if (miraPos) localStorage.setItem("cnc_miraPos2D", JSON.stringify(miraPos)); }, [miraPos]);
-  // Guarda o último ponto mirado, para o painel fixo continuar mostrando quando o dedo/mouse sai do gráfico
-  useEffect(() => { if (hoveredPoint) setMiraUltimoPonto(hoveredPoint); }, [hoveredPoint]);
-
-  // Arrastar o painel fixo da Mira para qualquer lugar do gráfico
-  const handleMiraPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const box = e.currentTarget;
-    const parent = box.offsetParent as HTMLElement | null;
-    if (!parent) return;
-    const pr = parent.getBoundingClientRect();
-    const br = box.getBoundingClientRect();
-    miraDragRef.current = { dx: e.clientX - br.left, dy: e.clientY - br.top };
-    if (!miraPos) setMiraPos({ x: br.left - pr.left, y: br.top - pr.top });
-    try { box.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    e.stopPropagation();
-  };
-  const handleMiraPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!miraDragRef.current) return;
-    const parent = e.currentTarget.offsetParent as HTMLElement | null;
-    if (!parent) return;
-    const pr = parent.getBoundingClientRect();
-    const x = Math.max(0, Math.min(pr.width - 40, e.clientX - pr.left - miraDragRef.current.dx));
-    const y = Math.max(0, Math.min(pr.height - 30, e.clientY - pr.top - miraDragRef.current.dy));
-    setMiraPos({ x, y });
-    e.stopPropagation();
-  };
-  const handleMiraPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    miraDragRef.current = null;
-    e.stopPropagation();
-  };
-
-  // Playback Driver State
-  const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
-  const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
-  const [linesWithDrawing, setLinesWithDrawing] = useState<number[]>([]);
-  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 500, height: 450 });
-
-  // Freeze Graphic State ("Congelar Gráfico")
-  const [isFrozen, setIsFrozen] = useState<boolean>(false);
-
-  // ===== DESENHO NO GRÁFICO (Linha, Círculo, Arco, Ponto e Cota inteligente — igual SolidWorks) =====
-  const [sketchOpen, setSketchOpen] = useState<boolean>(false);
-  const [sketchTool, setSketchTool] = useState<SketchTool>("none");
-  const [sketchEnts, setSketchEnts] = useState<SketchEnt[]>(() => {
-    try { return JSON.parse(localStorage.getItem("cnc_sketch2D") || "[]"); } catch { return []; }
-  });
-  const [sketchDraft, setSketchDraft] = useState<SkPt[]>([]);
-  const [sketchHover, setSketchHover] = useState<{ p: SkPt; tag?: string; snapped?: boolean; vertex?: boolean } | null>(null);
-  const [sketchDim, setSketchDim] = useState<{ id: string; left: number; top: number; a: string; b: string; labelA: string; labelB?: string } | null>(null);
-  const sketchHistRef = useRef<SketchEnt[][]>([]);
-  useEffect(() => {
-    try { localStorage.setItem("cnc_sketch2D", JSON.stringify(sketchEnts)); } catch {}
-  }, [sketchEnts]);
-  const sketchPush = () => {
-    sketchHistRef.current.push(sketchEnts);
-    if (sketchHistRef.current.length > 60) sketchHistRef.current.shift();
-  };
-  const sketchView = (cnv: HTMLCanvasElement): SketchView => ({
-    oX: cnv.width / 2 + 50 + panX,
-    oY: cnv.height / 2 + 50 + panY,
-    zoom,
-    s: simInvertZ ? -1 : 1,
-  });
-  // Ponto do desenho: gruda nas pontas/centros, nas linhas da peça (STEP) e trava H / V / paralela
-  const sketchPick = (mx: number, my: number, cnv: HTMLCanvasElement): { p: SkPt; tag?: string; snapped?: boolean; vertex?: boolean } => {
-    const T = sketchView(cnv);
-    const draftAsPts: SketchEnt[] = sketchDraft.map((p, i) => ({ id: "d" + i, type: "point", p: [p] }));
-    const k = skSnapKey(sketchEnts.concat(draftAsPts), mx, my, T, 10);
-    if (k) return { p: k, snapped: true, vertex: true }; // ponta / centro do desenho = canto
-    const ps = findPartSnap(mx, my, cnv, 10);
-    if (ps) return { p: skToWorld(ps.canvasX, ps.canvasY, T), snapped: true, vertex: !!ps.isVertex }; // gruda na linha da peça (em cima ou no espelho de baixo)
-    const raw = skToWorld(mx, my, T);
-    if (sketchTool === "line" && sketchDraft.length) return skInferLine(sketchDraft[sketchDraft.length - 1], raw, sketchEnts);
-    return { p: raw };
-  };
-  const sketchCanvasXY = (e: { clientX: number; clientY: number }) => {
-    const cnv = canvasRef.current;
-    if (!cnv) return null;
-    const rc = cnv.getBoundingClientRect();
-    return {
-      cnv,
-      mx: rc.width > 0 ? ((e.clientX - rc.left) / rc.width) * cnv.width : 0,
-      my: rc.height > 0 ? ((e.clientY - rc.top) / rc.height) * cnv.height : 0,
-      cssX: e.clientX - rc.left,
-      cssY: e.clientY - rc.top,
-      cssW: rc.width,
-    };
-  };
-  const sketchSetTool = (t: SketchTool) => {
-    setSketchTool(t);
-    setSketchDraft([]);
-    setSketchDim(null);
-    setSketchHover(null);
-    if (t !== "none") { setPgMode(false); setIsMeasuring(false); setIsMeasuringAngle(false); }
-  };
-  const sketchToggleMenu = () => {
-    const v = !sketchOpen;
-    setSketchOpen(v);
-    if (!v) sketchSetTool("none");
-  };
-  const handleSketchClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const c = sketchCanvasXY(e);
-    if (!c) return;
-    const { cnv, mx, my } = c;
-    if (sketchTool === "dim" || sketchTool === "erase") {
-      const hit = skHit(sketchEnts, mx, my, sketchView(cnv), 12);
-      if (!hit) { setSketchDim(null); return; }
-      if (sketchTool === "erase") {
-        sketchPush();
-        setSketchEnts((arr) => arr.filter((x) => x.id !== hit.id));
-        return;
-      }
-      const m = skMeasure(hit);
-      const fmt = (v: number) => String(parseFloat(v.toFixed(3)));
-      setSketchDim({
-        id: hit.id,
-        left: Math.max(4, Math.min(c.cssX + 12, c.cssW - 200)),
-        top: Math.max(4, c.cssY - 10),
-        a: fmt(m.a),
-        b: m.b !== undefined ? fmt(m.b) : "",
-        labelA: m.labelA,
-        labelB: m.labelB,
-      });
-      return;
-    }
-    const sp = sketchPick(mx, my, cnv).p;
-    const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const add = (ent: Omit<SketchEnt, "id">) => { sketchPush(); setSketchEnts((arr) => [...arr, { ...ent, id: newId() }]); };
-    if (sketchTool === "point") { add({ type: "point", p: [sp] }); return; }
-    const d = [...sketchDraft, sp];
-    if (sketchTool === "line") {
-      if (d.length >= 2) {
-        const a = d[d.length - 2];
-        if (Math.hypot(sp.z - a.z, sp.r - a.r) < 1e-6) { setSketchDraft([]); return; } // tocou 2x no mesmo ponto: para
-        add({ type: "line", p: [a, sp] });
-        setSketchDraft([sp]); // continua emendando a próxima linha (igual SolidWorks)
-      } else setSketchDraft(d);
-      return;
-    }
-    if (sketchTool === "circle") {
-      if (d.length >= 2) {
-        if (Math.hypot(d[1].z - d[0].z, d[1].r - d[0].r) > 1e-6) add({ type: "circle", p: [d[0], d[1]] });
-        setSketchDraft([]);
-      } else setSketchDraft(d);
-      return;
-    }
-    if (sketchTool === "arc") {
-      if (d.length >= 3) { add({ type: "arc", p: [d[0], d[1], d[2]] }); setSketchDraft([]); }
-      else setSketchDraft(d);
-    }
-  };
-  const applySketchDim = () => {
-    if (!sketchDim) return;
-    const a = skParse(sketchDim.a);
-    const b = sketchDim.b !== "" ? skParse(sketchDim.b) : undefined;
-    if (!isFinite(a)) return;
-    sketchPush();
-    setSketchEnts((arr) => skApplyDim(arr, sketchDim.id, a, b));
-    setSketchDim(null);
-  };
-  const sketchUndo = () => {
-    const prev = sketchHistRef.current.pop();
-    if (prev) setSketchEnts(prev);
-    setSketchDraft([]);
-    setSketchDim(null);
-  };
-  // Esc: 1º para a linha que está desenhando, 2º solta a ferramenta
-  useEffect(() => {
-    if (sketchTool === "none") return;
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape") return;
-      if (sketchDraft.length) setSketchDraft([]);
-      else { setSketchTool("none"); setSketchHover(null); }
-      setSketchDim(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sketchTool, sketchDraft.length]);
-
-  // Cycle Time Calibration Factor (Potentiometer percentage: 20% to 180%, default 100%)
-  const [cycleTimeFactor, setCycleTimeFactor] = useState<number>(() => {
-    const saved = localStorage.getItem("cnc_cycleTimeFactor");
-    return saved ? parseInt(saved, 10) : 100;
-  });
-
-  const [isCycleTimeLocked, setIsCycleTimeLocked] = useState<boolean>(() => {
-    return localStorage.getItem("cnc_cycleTimeLocked") === "true";
-  });
-
-  useEffect(() => {
-    localStorage.setItem("cnc_cycleTimeFactor", String(cycleTimeFactor));
-  }, [cycleTimeFactor]);
-
-  useEffect(() => {
-    localStorage.setItem("cnc_cycleTimeLocked", String(isCycleTimeLocked));
-  }, [isCycleTimeLocked]);
-
-  // Compute Base Physical Cycle Time and Calibrated Adjusted Cycle Time
-  // Parâmetros da máquina (rápidos, trocas, troca de peça...) - salvos no tablet
-  const [machineParams, setMachineParams] = useState<MachineParams>(() => loadMachineParams());
-  const [showCyclePanel, setShowCyclePanel] = useState<boolean>(false);
-  const handleChangeMachineParams = (p: MachineParams) => {
-    setMachineParams(p);
-    saveMachineParams(p);
-  };
-
-  const cycleTimeDetails = useMemo(() => {
-    return calculateCycleTimeDetailed(gcodeText, undefined, undefined, machineParams);
-  }, [gcodeText, machineParams]);
-
-  const adjustedCycleTimeSec = useMemo(() => {
-    return cycleTimeDetails.totalSeconds * (cycleTimeFactor / 100);
-  }, [cycleTimeDetails, cycleTimeFactor]);
-
-  const formattedCycleTime = useMemo(() => {
-    return formatCycleTime(adjustedCycleTimeSec, false);
-  }, [adjustedCycleTimeSec]);
-
-  const formattedCycleTimeTenths = useMemo(() => {
-    return formatCycleTime(adjustedCycleTimeSec, true);
-  }, [adjustedCycleTimeSec]);
-
-  // Zoom no scroll do mouse — suave (estilo SolidWorks): junta os "cliques" da rodinha
-  // e aplica uma vez por quadro de tela, com zoom proporcional ao giro (touchpad fica fino)
-  const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
-  const wheelAccRef = useRef<{ dy: number; x: number; y: number; raf: number }>({ dy: 0, x: 0, y: 0, raf: 0 });
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const onWheelNative = (e: WheelEvent) => {
-      e.preventDefault(); // não deixa a página rolar junto com o zoom
-      let dy = e.deltaY;
-      if (e.deltaMode === 1) dy *= 33; // rolagem por linhas
-      else if (e.deltaMode === 2) dy *= 400; // rolagem por página
-      if (!dy) return;
-      const acc = wheelAccRef.current;
-      const rect = canvas.getBoundingClientRect();
-      acc.dy += dy;
-      acc.x = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
-      acc.y = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
-      if (acc.raf) return;
-      acc.raf = requestAnimationFrame(() => {
-        const a = wheelAccRef.current;
-        a.raf = 0;
-        const d = Math.max(-500, Math.min(500, a.dy));
-        a.dy = 0;
-        if (!d) return;
-        const prevZoom = zoomRef.current;
-        // 1 clique normal da rodinha (100) = cerca de 15% de zoom, igual antes
-        const newZoom = Math.min(Math.max(prevZoom * Math.exp(-d * 0.0014), 0.2), 5000); // zoom máximo bem maior (para ver chanfros e raios pequenos de perto)
-        if (newZoom === prevZoom) return;
-        zoomRef.current = newZoom;
-        const cX = canvas.width / 2 + 50;
-        const cY = canvas.height / 2 + 50;
-        const k = 1 - newZoom / prevZoom; // mantém parado o ponto que está embaixo do mouse
-        setPanX((p) => p + (a.x - cX - p) * k);
-        setPanY((p) => p + (a.y - cY - p) * k);
-        setZoom(newZoom);
-      });
-    };
-    canvas.addEventListener("wheel", onWheelNative, { passive: false });
-    return () => canvas.removeEventListener("wheel", onWheelNative);
-  });
-
-  // Drag to pan
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (sketchTool !== "none" && e.button === 0) return; // desenhando: botão esquerdo desenha, botão do meio move
-    // Check if middle click or standard click
-    if (e.button === 0 || e.button === 1) {
-      panStartClientRef.current = { x: e.clientX, y: e.clientY };
-      mouseHasMovedRef.current = false;
-      setIsPanning(true);
-      setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
-    }
-  };
-
-  // Touch handlers for mobile and tablet zooming/panning
-  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    touchHasMovedRef.current = false;
-
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      isTouchPanningRef.current = true;
-      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
-      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
-      touchStartDistRef.current = null;
-    } else if (e.touches.length === 2) {
-      isTouchPanningRef.current = false;
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      touchStartDistRef.current = dist;
-      touchStartZoomRef.current = zoom;
-      touchStartPanRef.current = { x: panX, y: panY };
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    if (e.touches.length === 1 && isTouchPanningRef.current) {
-      const touch = e.touches[0];
-      const dx = touch.clientX - touchStartPosRef.current.x;
-      const dy = touch.clientY - touchStartPosRef.current.y;
-      
-      if (Math.hypot(dx, dy) > 5) {
-        touchHasMovedRef.current = true;
-      }
-
-      if (touchHasMovedRef.current) {
-        if (e.cancelable) {
-          e.preventDefault();
-        }
-        setPanX(touch.clientX - touchDragStartRef.current.x);
-        setPanY(touch.clientY - touchDragStartRef.current.y);
-        setHoveredPoint(null);
-      }
-    } else if (e.touches.length === 2 && touchStartDistRef.current !== null) {
-      touchHasMovedRef.current = true;
-      if (e.cancelable) {
-        e.preventDefault();
-      }
-
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      if (currentDist === 0) return;
-
-      const zoomFactor = currentDist / touchStartDistRef.current;
-      
-      setZoom((prevZoom) => {
-        const newZoom = Math.min(Math.max(touchStartZoomRef.current * zoomFactor, 0.2), 5000);
-        if (newZoom === prevZoom) return prevZoom;
-
-        const rect = canvas.getBoundingClientRect();
-        const midX = (t1.clientX + t2.clientX) / 2;
-        const midY = (t1.clientY + t2.clientY) / 2;
-        
-        const canvasX = midX - rect.left;
-        const canvasY = midY - rect.top;
-
-        const cX = canvas.width / 2 + 50;
-        const cY = canvas.height / 2 + 50;
-
-        const initPanX = touchStartPanRef.current.x;
-        const initPanY = touchStartPanRef.current.y;
-        const initZoom = touchStartZoomRef.current;
-
-        setPanX(initPanX + (canvasX - cX - initPanX) * (1 - newZoom / initZoom));
-        setPanY(initPanY + (canvasY - cY - initPanY) * (1 - newZoom / initZoom));
-
-        return newZoom;
-      });
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    if (touchHasMovedRef.current && e.cancelable) {
-      e.preventDefault();
-    }
-
-    if (e.touches.length === 0) {
-      isTouchPanningRef.current = false;
-      touchStartDistRef.current = null;
-    } else if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      isTouchPanningRef.current = true;
-      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
-      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
-      touchStartDistRef.current = null;
-    } else if (e.touches.length === 2) {
-      isTouchPanningRef.current = false;
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      touchStartDistRef.current = dist;
-      touchStartZoomRef.current = zoom;
-      touchStartPanRef.current = { x: panX, y: panY };
-    }
-  };
-
-  const getDistanceToSegment = (mx: number, my: number, x1: number, y1: number, x2: number, y2: number) => {
-    const A = mx - x1;
-    const B = my - y1;
-    const C = x2 - x1;
-    const D = y2 - y1;
-
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    let param = -1;
-    if (lenSq !== 0) {
-      param = dot / lenSq;
-    }
-
-    let xx, yy;
-    if (param < 0) {
-      xx = x1;
-      yy = y1;
-    } else if (param > 1) {
-      xx = x2;
-      yy = y2;
-    } else {
-      xx = x1 + param * C;
-      yy = y1 + param * D;
-    }
-
-    const dx = mx - xx;
-    const dy = my - yy;
-    return {
-      distance: Math.sqrt(dx * dx + dy * dy),
-      x: xx,
-      y: yy
-    };
-  };
-
-  // Mira nas linhas da PEÇA / BRUTO (STEP): acha o ponto mais perto e diz o que é (diâmetro, face, chanfro/cone, raio)
-  const findPartSnap = (mouseX: number, mouseY: number, canvas: HTMLCanvasElement, maxDist: number) => {
-    if (!partLayers || !partLayers.length) return null;
-    const zDirSign = simInvertZ ? -1 : 1;
-    const originX = canvas.width / 2 + 50 + panX;
-    const originY = canvas.height / 2 + 50 + panY;
-    let bestD = maxDist;
-    let best: { cx: number; cy: number; layer: string; curve: { x: number; z: number }[]; sgn: number } | null = null;
-    for (const L of partLayers) {
-      for (const c of L.curves) {
-        for (const sgn of [1, -1]) {
-          for (let i = 0; i < c.length - 1; i++) {
-            const x1 = originX + c[i].z * zoom * zDirSign;
-            const y1 = originY - sgn * (c[i].x / 2) * zoom;
-            const x2 = originX + c[i + 1].z * zoom * zDirSign;
-            const y2 = originY - sgn * (c[i + 1].x / 2) * zoom;
-            const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
-            if (res.distance < bestD) {
-              bestD = res.distance;
-              best = { cx: res.x, cy: res.y, layer: L.label, curve: c, sgn };
-            }
-          }
-        }
-      }
-    }
-    if (!best) return null;
-    const c = best.curve;
-    let cx = best.cx;
-    let cy = best.cy;
-    let isVertex = false;
-    // encaixa nas pontas da linha (cantos da peça)
-    for (const p of [c[0], c[c.length - 1]]) {
-      const px = originX + p.z * zoom * zDirSign;
-      const py = originY - best.sgn * (p.x / 2) * zoom;
-      if (Math.hypot(px - cx, py - cy) < 8) {
-        cx = px;
-        cy = py;
-        isVertex = true;
-      }
-    }
-    const latheZ = (cx - originX) / (zoom * zDirSign);
-    const latheX = Math.abs((cy - originY) / zoom) * 2;
-    const f3 = (n: number) => n.toFixed(3);
-    let desc = "";
-    if (c.length > 2) {
-      // arco: raio pela circunferência que passa pelo início, meio e fim
-      const a = c[0];
-      const m = c[Math.floor(c.length / 2)];
-      const b = c[c.length - 1];
-      const ax = a.z, ay = a.x / 2, bx = m.z, by = m.x / 2, qx = b.z, qy = b.x / 2;
-      const dd = 2 * (ax * (by - qy) + bx * (qy - ay) + qx * (ay - by));
-      let R = 0;
-      if (Math.abs(dd) > 1e-9) {
-        const ux = ((ax * ax + ay * ay) * (by - qy) + (bx * bx + by * by) * (qy - ay) + (qx * qx + qy * qy) * (ay - by)) / dd;
-        const uy = ((ax * ax + ay * ay) * (qx - bx) + (bx * bx + by * by) * (ax - qx) + (qx * qx + qy * qy) * (bx - ax)) / dd;
-        R = Math.hypot(ax - ux, ay - uy);
-      }
-      desc = `RAIO R${f3(R)}`;
-    } else {
-      const p = c[0];
-      const q = c[1];
-      const dz = Math.abs(q.z - p.z);
-      const dr = Math.abs(q.x - p.x) / 2;
-      if (dz < 1e-4) desc = `FACE Z${f3(p.z)} (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
-      else if (dr < 1e-4) desc = `DIÂMETRO Ø${f3(p.x)} (comprimento ${f3(dz)})`;
-      else desc = `CHANFRO/CONE ${((Math.atan2(dr, dz) * 180) / Math.PI).toFixed(2)}° (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
-    }
-    return { canvasX: cx, canvasY: cy, latheX, latheZ, isVertex, layer: best.layer, desc, dist: bestD };
-  };
-  // MIRA / PG: junta as linhas da PEÇA (STEP) e as linhas/pontas do DESENHO; cantos e pontas têm prioridade
-  type PickSnap = { canvasX: number; canvasY: number; latheX: number; latheZ: number; isVertex: boolean; desc: string; layer: string; dist: number; score: number };
-  const findPickSnap = (mx: number, my: number, cnv: HTMLCanvasElement, maxDist: number): PickSnap | null => {
-    let best: PickSnap | null = null;
-    const take = (r: PickSnap) => {
-      if (!best || r.score < best.score) best = r;
-    };
-    const ps = findPartSnap(mx, my, cnv, maxDist);
-    if (ps) take({ canvasX: ps.canvasX, canvasY: ps.canvasY, latheX: ps.latheX, latheZ: ps.latheZ, isVertex: ps.isVertex, desc: ps.desc, layer: ps.layer, dist: ps.dist, score: ps.isVertex ? -100 + ps.dist : ps.dist });
-    if (sketchEnts && sketchEnts.length) {
-      const T = sketchView(cnv);
-      const kp = skSnapKey(sketchEnts, mx, my, T, 14);
-      if (kp) {
-        const s = skToScreen(kp, T);
-        const d = Math.hypot(s.x - mx, s.y - my);
-        take({ canvasX: s.x, canvasY: s.y, latheX: Math.abs(kp.r) * 2, latheZ: kp.z, isVertex: true, desc: "DESENHO: ponta / canto", layer: "DESENHO", dist: d, score: -100 + d });
-      }
-      sketchEnts.forEach((en) => {
-        if (en.type !== "line" || en.p.length < 2) return;
-        const a = skToScreen(en.p[0], T);
-        const b = skToScreen(en.p[1], T);
-        const res = getDistanceToSegment(mx, my, a.x, a.y, b.x, b.y);
-        if (res.distance < maxDist) {
-          const w = skToWorld(res.x, res.y, T);
-          take({ canvasX: res.x, canvasY: res.y, latheX: Math.abs(w.r) * 2, latheZ: w.z, isVertex: false, desc: "DESENHO: linha", layer: "DESENHO", dist: res.distance, score: res.distance });
-        }
-      });
-    }
-    return best as PickSnap | null;
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPanning) {
-      if (panStartClientRef.current && Math.hypot(e.clientX - panStartClientRef.current.x, e.clientY - panStartClientRef.current.y) > 4) {
-        mouseHasMovedRef.current = true;
-      }
-      setPanX(e.clientX - dragStart.x);
-      setPanY(e.clientY - dragStart.y);
-      setHoveredPoint(null);
-      return;
-    }
-
-    // Desenho ligado: só acompanha o ponto do mouse (com imã)
-    if (sketchTool !== "none") {
-      const c = sketchCanvasXY(e);
-      if (c) setSketchHover(sketchPick(c.mx, c.my, c.cnv));
-      return;
-    }
-
-    if (!showMirinha && !pgMode && !fixMode && !regiaoModo) {
-      if (hoveredPoint) setHoveredPoint(null);
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
-    const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
-
-    if (isMeasuring || isMeasuringAngle) {
-      setMousePos({ x: mouseX, y: mouseY });
-    }
-
-    const zDirSign = simInvertZ ? -1 : 1;
-    const originX = canvas.width / 2 + 50 + panX;
-    const originY = canvas.height / 2 + 50 + panY;
-
-    let closestItem: any = null;
-    let minDistance = 35; // Snapping radius of 35px
-    let closestPoint = { x: 0, y: 0 };
-
-    plotList.forEach((item) => {
-      // Future simulation items should not be snapable if we are paused/stopped in the middle of playback
-      if (driverTick !== -2 && driverTick !== -1 && item.linhaId > driverTick) {
-        return;
-      }
-
-      const x1 = originX + item.z1 * zoom * zDirSign;
-      const y1 = originY - item.x1 * zoom;
-      const x2 = originX + item.z2 * zoom * zDirSign;
-      const y2 = originY - item.x2 * zoom;
-
-      const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
-      if (res.distance < minDistance) {
-        minDistance = res.distance;
-        closestItem = item;
-        closestPoint = { x: res.x, y: res.y };
-      }
-    });
-
-    // Linhas da peça/bruto (STEP) também entram na mira; vale a que estiver mais perto (no PG, sempre a peça)
-    const partSnap = findPickSnap(mouseX, mouseY, canvas, pgMode ? 45 : 35); // peça (STEP) + desenho
-    if (partSnap && (pgMode || fixMode || !!regiaoModo || !closestItem || partSnap.dist < minDistance)) {
-      setHoveredPoint({
-        canvasX: partSnap.canvasX,
-        canvasY: partSnap.canvasY,
-        latheX: partSnap.latheX,
-        latheZ: partSnap.latheZ,
-        gcodeLine: -1,
-        gcodeText: partSnap.desc,
-        isVertex: partSnap.isVertex,
-        partLayer: partSnap.layer,
-      });
-      return;
-    }
-
-    if (closestItem) {
-      const x1 = originX + closestItem.z1 * zoom * zDirSign;
-      const y1 = originY - closestItem.x1 * zoom;
-      const x2 = originX + closestItem.z2 * zoom * zDirSign;
-      const y2 = originY - closestItem.x2 * zoom;
-
-      const distToP1 = Math.hypot(closestPoint.x - x1, closestPoint.y - y1);
-      const distToP2 = Math.hypot(closestPoint.x - x2, closestPoint.y - y2);
-
-      let isVertex = false;
-      let snapX = closestPoint.x;
-      let snapY = closestPoint.y;
-
-      if (distToP1 < 8) {
-        snapX = x1;
-        snapY = y1;
-        isVertex = true;
-      } else if (distToP2 < 8) {
-        snapX = x2;
-        snapY = y2;
-        isVertex = true;
-      }
-
-      // Calculate lathe coordinate of the exact snapped point
-      const latheZ = (snapX - originX) / (zoom * zDirSign);
-      const latheRadius = -(snapY - originY) / zoom;
-      const latheX = latheRadius * 2; // Diameter
-
-      // Find original line text
-      const lines = gcodeText.split("\n");
-      const lineIdx = Math.floor(closestItem.linhaId);
-      const rawText = lines[lineIdx] || "";
-
-      setHoveredPoint({
-        canvasX: snapX,
-        canvasY: snapY,
-        latheX,
-        latheZ,
-        gcodeLine: lineIdx,
-        gcodeText: rawText.trim(),
-        isVertex,
-        plotItem: closestItem
-      });
-    } else {
-      setHoveredPoint(null);
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsPanning(false);
-  };
-
-  const handleResetView = () => {
-    const pList = parseGCode().plotList;
-    if (pList.length === 0) {
-      setZoom(8);
-      setPanX(0);
-      setPanY(0);
-      return;
-    }
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    pList.forEach((p: any) => {
-      minX = Math.min(minX, p.x1, p.x2);
-      maxX = Math.max(maxX, p.x1, p.x2);
-      minZ = Math.min(minZ, p.z1, p.z2);
-      maxZ = Math.max(maxZ, p.z1, p.z2);
-    });
-    if (minX === Infinity) return;
-    
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const cw = canvas.width;
-    const ch = canvas.height;
-    
-    const dx = Math.abs(maxZ - minZ) || 1;
-    const dy = Math.abs(maxX - minX) || 1;
-    
-    const zoomX = (cw - 40) / dx;
-    const zoomY = (ch - 40) / dy;
-    const newZoom = Math.max(0.5, Math.min(zoomX, zoomY, 30));
-    setZoom(newZoom);
-    
-    const zCenter = (minZ + maxZ) / 2;
-    const xCenter = (minX + maxX) / 2;
-    
-    const newPanX = -zCenter * newZoom * (simInvertZ ? -1 : 1) - 50;
-    const newPanY = xCenter * newZoom - 50;
-    
-    setPanX(newPanX);
-    setPanY(newPanY);
-  };
-
-  // Dynamic G-Code parsing & Rendering
-  function parseGCode(): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } {
+export function parseGCodeSim(
+  gcodeText: string,
+  simInvertZ: boolean,
+  partLayers?: PartLayer[]
+): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } {
     try {
     const evalArith = (exprRaw: string, vars: Record<number, number>): number | null => {
       let expr = exprRaw.trim().replace(/\[/g, "(").replace(/\]/g, ")");
@@ -1101,8 +318,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         return;
       }
 
-      const isG53 = /\bG\s*53(?![0-9])/i.test(clean);
-      const isMachineRef = isG53 || /\bG\s*28(?![0-9])/i.test(clean);
+      const isG53 = /(?<![A-Z])G\s*53(?![0-9])/i.test(clean);
+      const isMachineRef = isG53 || /(?<![A-Z])G\s*28(?![0-9])/i.test(clean);
       const isG92Limit = /\bG\s*92\s*S/i.test(clean) || (/\bG\s*92(?![0-9])/i.test(clean) && !/[XZ]/i.test(clean));
 
       const gMatches = clean.match(/G\s*(\d+)/gi);
@@ -1291,21 +508,25 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         if (cmd.isG53) {
           const hasX = cmd.x !== null || cmd.u !== null;
           const hasZ = cmd.z !== null || cmd.w !== null;
-          const tx = hasX || !hasZ ? Math.max(safeR, cx) : cx;
-          const tz = hasZ || !hasX ? (looksSwiss ? Math.min(safeZ, cz) : Math.max(safeZ, cz)) : cz;
-          if (Math.abs(tx - cx) > 1e-6 && Math.abs(tz - cz) > 1e-6) {
-            const d = Math.min(Math.abs(tx - cx), Math.abs(tz - cz));
-            const mx = cx + Math.sign(tx - cx) * d;
-            const mz = cz + Math.sign(tz - cz) * d;
-            plotList.push({ type: "line", x1: cx, z1: cz, x2: mx, z2: mz, color: "#ff2a2a", linhaId: cmd.linhaOriginal });
-            plotList.push({ type: "line", x1: mx, z1: mz, x2: tx, z2: tz, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.0001 });
-            if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
-          } else if (Math.abs(tx - cx) > 1e-6 || Math.abs(tz - cz) > 1e-6) {
-            plotList.push({ type: "line", x1: cx, z1: cz, x2: tx, z2: tz, color: "#ff2a2a", linhaId: cmd.linhaOriginal });
-            if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+          if (!hasX && !hasZ) {
+            continue;
           }
-          cx = tx;
-          cz = tz;
+          if (hasX) {
+            const tx = Math.max(safeR, cx);
+            if (Math.abs(tx - cx) > 1e-6) {
+              plotList.push({ type: "line", x1: cx, z1: cz, x2: tx, z2: cz, color: "#ff2a2a", linhaId: cmd.linhaOriginal });
+              if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+            }
+            cx = tx;
+          }
+          if (hasZ) {
+            const tz = looksSwiss ? Math.min(safeZ, cz) : Math.max(safeZ, cz);
+            if (Math.abs(tz - cz) > 1e-6) {
+              plotList.push({ type: "line", x1: cx, z1: cz, x2: cx, z2: tz, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.0001 });
+              if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+            }
+            cz = tz;
+          }
           continue;
         }
         if (cmd.x !== null || cmd.u !== null) cx = safeR;
@@ -2148,29 +1369,59 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       console.warn("GCode Parser Error: ", err);
       return { plotList: [], activeLineIndexes: [], error: "Erro ao compilar o ciclo atual. Continue digitando." };
     }
-  };
+}
 
-  // Lê o programa só quando o texto muda (antes relia a cada movimento do mouse/zoom = travava)
-  const { plotList, activeLineIndexes, error: parseError } = useMemo(() => parseGCode(), [gcodeText, simInvertZ, partLayers]);
-  // COLISÃO: movimentos do programa (inclusive G00) que entram na fixação do lado ativo (+ folga)
-  const fixHits = useMemo(() => {
-    const zone = fixZones.find((f) => f.lado === fixLado);
-    const hits: { idx: number; linha: number }[] = [];
-    if (!zone) return hits;
-    const a = zone.za - fixFolga;
-    const b = zone.zb + fixFolga;
-    plotList.forEach((it, idx) => {
-      const lo = Math.min(it.z1, it.z2);
-      const hi = Math.max(it.z1, it.z2);
-      if (hi >= a && lo <= b) hits.push({ idx, linha: it.linhaId });
-    });
-    return hits;
-  }, [plotList, fixZones, fixLado, fixFolga]);
-  // ALARME DE COLISÃO COM A PEÇA: G00 nunca pode tocar a peça; G01 não pode entrar além do raio da ponta (tolerância)
-  const pecaHits = useMemo(() => {
-    const hits: { idx: number; linha: number; z: number; d: number; rapido: boolean }[] = [];
-    const pl = partLayers ? partLayers.find((Lr) => Lr.id === "peca") : null;
-    if (!pl) return hits;
+export function simularGCodeEColisoes(
+  gcodeText: string,
+  simInvertZ: boolean,
+  partLayers: PartLayer[] | undefined,
+  fixZones: FixZone[],
+  fixLado: 1 | 2 | "all" = 1,
+  fixFolga = 1
+): SimColisaoRelatorio {
+  const { plotList, activeLineIndexes, error } = parseGCodeSim(gcodeText, simInvertZ, partLayers);
+  const fixHits: SimFixHit[] = [];
+  const zonasCheck = fixLado === "all" ? fixZones : fixZones.filter((f) => f.lado === fixLado);
+  zonasCheck.forEach((zone) => {
+    const isBucha = zone.tipo === "bucha" || !!zone.infinito;
+    if (isBucha) {
+      const zMin = Math.min(zone.za, zone.zb);
+      const zMax = Math.max(zone.za, zone.zb);
+      const buchaDireita = zone.zb >= zone.za;
+      plotList.forEach((it, idx) => {
+        const lo = Math.min(it.z1, it.z2);
+        const hi = Math.max(it.z1, it.z2);
+        const bate = buchaDireita ? hi > zMin + 0.05 : lo < zMax - 0.05;
+        if (bate) {
+          fixHits.push({
+            idx,
+            linha: it.linhaId,
+            lado: zone.lado,
+            motivo: "Passe entra na fixação Lado 1 (bucha guia / barra após o corte)",
+          });
+        }
+      });
+    } else {
+      const a = Math.min(zone.za, zone.zb) - fixFolga;
+      const b = Math.max(zone.za, zone.zb) + fixFolga;
+      plotList.forEach((it, idx) => {
+        const lo = Math.min(it.z1, it.z2);
+        const hi = Math.max(it.z1, it.z2);
+        if (hi >= a && lo <= b) {
+          fixHits.push({
+            idx,
+            linha: it.linhaId,
+            lado: zone.lado,
+            motivo: `Passe dentro da fixação Lado ${zone.lado}`,
+          });
+        }
+      });
+    }
+  });
+
+  const pecaHits: SimPecaHit[] = [];
+  const pl = partLayers ? partLayers.find((Lr) => Lr.id === "peca") : null;
+  if (pl) {
     const sg: { a: { x: number; z: number }; b: { x: number; z: number } }[] = [];
     pl.curves.forEach((c) => { for (let i = 0; i < c.length - 1; i++) sg.push({ a: c[i], b: c[i + 1] }); });
     const env = (z: number) => {
@@ -2187,7 +1438,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     const zDir = simInvertZ ? -1 : 1;
     plotList.forEach((it, idx) => {
       const rapido = it.color === "#ff2a2a";
-      const tol = rapido ? 0.05 : 0.6; // G01: a ponta teórica de ferramenta com raio passa um pouco "dentro" nas quinas (compensação) - não é colisão
+      const diagonal = rapido && Math.abs(it.x2 - it.x1) > 1e-4 && Math.abs(it.z2 - it.z1) > 1e-4;
+      const tol = rapido ? 0.05 : 0.6;
       const pts: { z: number; r: number }[] = [];
       if (it.type === "arc" && it.radius && it.radius > 0) {
         const px1 = it.z1 * zDir;
@@ -2234,16 +1486,866 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         }
       }
       for (const pt of pts) {
-        // olha um pouquinho antes e depois em Z: encostar numa face em pé (ferramenta rente à parede) NÃO é colisão
         const e1 = env(pt.z - 0.002);
         const e2 = env(pt.z + 0.002);
         if (!e1 || !e2) continue;
         const e = { ext: Math.min(e1.ext, e2.ext), int: e1.int === null || e2.int === null ? null : Math.max(e1.int, e2.int) };
-        if (pt.r < e.ext - tol && (e.int === null || pt.r > e.int + tol)) { hits.push({ idx, linha: it.linhaId, z: pt.z, d: pt.r * 2, rapido }); break; }
+        if (pt.r < e.ext - tol && (e.int === null || pt.r > e.int + tol)) {
+          const motivo = rapido
+            ? diagonal
+              ? "G0 diagonal cruzando material"
+              : "G0 entrando na peça"
+            : "G1 invadindo o perfil da peça";
+          pecaHits.push({ idx, linha: it.linhaId, z: pt.z, d: pt.r * 2, rapido, diagonal, motivo });
+          break;
+        }
       }
     });
-    return hits;
-  }, [plotList, partLayers, simInvertZ]);
+  }
+
+  return { plotList, activeLineIndexes, fixHits, pecaHits, error };
+}
+
+export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
+  gcodeText,
+  activeLine,
+  onLineChange,
+  simInvertZ,
+  onToggleZInvert,
+  isDriverActive,
+  setIsDriverActive,
+  isHighContrast,
+  onError,
+  bgColor,
+  cursorStyle,
+  regiaoModo,
+  regiaoLimparSeq,
+  onRegiaoPick,
+  regioes,
+  fixComando,
+  partLayers,
+  onInsertPoint,
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Touch references for zooming/panning on mobile and tablet
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(8);
+  const touchStartPanRef = useRef<Point2D>({ x: 0, y: 0 });
+  const touchDragStartRef = useRef<Point2D>({ x: 0, y: 0 });
+  const isTouchPanningRef = useRef<boolean>(false);
+  const touchHasMovedRef = useRef<boolean>(false);
+  const touchStartPosRef = useRef<Point2D>({ x: 0, y: 0 });
+  
+  // Transform / Camera State
+  const [zoom, setZoom] = useState<number>(8);
+  const [panX, setPanX] = useState<number>(0);
+  const [panY, setPanY] = useState<number>(0);
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
+  const panStartClientRef = useRef<Point2D | null>(null);
+  const mouseHasMovedRef = useRef<boolean>(false);
+  const [regiaoClicks, setRegiaoClicks] = useState<{ z: number; r: number }[]>([]);
+  useEffect(() => {
+    setRegiaoClicks([]);
+  }, [regiaoModo, regiaoLimparSeq]);
+  const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
+  // Se uma cor de fundo foi escolhida em "Aparência", ajusta linhas/textos do gráfico para manter contraste
+  useEffect(() => {
+    if (!bgColor) return;
+    const h = bgColor.replace("#", "");
+    if (h.length !== 6) return;
+    const lum = 0.299 * parseInt(h.slice(0, 2), 16) + 0.587 * parseInt(h.slice(2, 4), 16) + 0.114 * parseInt(h.slice(4, 6), 16);
+    setIsThemeDark(lum < 140);
+  }, [bgColor]);
+  // cores e tamanho da mira / quadradinho do desenho (vem da janela "Aparência")
+  const cur: CursorStyle = { ...CURSOR_STYLE_PADRAO, ...(cursorStyle || {}) };
+
+  // Measuring overlay states
+  const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
+  const [isMeasuringAngle, setIsMeasuringAngle] = useState<boolean>(false);
+  const [angleStartLine, setAngleStartLine] = useState<SimulationPlotItem | null>(null);
+  const [angleEndLine, setAngleEndLine] = useState<SimulationPlotItem | null>(null);
+  
+  const [measureStartPoint, setMeasureStartPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
+  const [measureEndPoint, setMeasureEndPoint] = useState<{ latheX: number; latheZ: number; canvasX: number; canvasY: number } | null>(null);
+  const [mousePos, setMousePos] = useState<Point2D | null>(null);
+  const [measurePanelPos, setMeasurePanelPos] = useState<Point2D>({ x: 12, y: 100 });
+  const [isDraggingMeasurePanel, setIsDraggingMeasurePanel] = useState<boolean>(false);
+  const [dragOffset, setDragOffset] = useState<Point2D>({ x: 0, y: 0 });
+
+  // High precision mouse hover / snap coordinate tracking ("Mirinha")
+  interface HoveredPointInfo {
+    canvasX: number;
+    canvasY: number;
+    latheX: number;
+    latheZ: number;
+    gcodeLine: number;
+    gcodeText: string;
+    isVertex?: boolean;
+    plotItem?: SimulationPlotItem;
+    partLayer?: string; // "PEÇA" ou "BRUTO" quando a mira está numa linha do STEP
+  }
+  const [hoveredPoint, setHoveredPoint] = useState<HoveredPointInfo | null>(null);
+  // PG: tocar em pontos da peça e levar para o programa
+  const [pgMode, setPgMode] = useState<boolean>(false);
+  // Traços de movimento de usinagem do programa: ligado/desligado (fica gravado no aparelho)
+  const [showToolpath, setShowToolpath] = useState<boolean>(() => {
+    try { return localStorage.getItem("cnc_showToolpath") !== "0"; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("cnc_showToolpath", showToolpath ? "1" : "0"); } catch {}
+  }, [showToolpath]);
+  const [pgMsg, setPgMsg] = useState<string | null>(null);
+  // ===== FIXAÇÃO (zona proibida): onde a peça é presa no lado 1 e no lado 2 =====
+  const [fixMode, setFixMode] = useState<boolean>(false);
+  const [fixZones, setFixZones] = useState<FixZone[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]");
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  });
+  const [fixLado, setFixLado] = useState<1 | 2>(() => {
+    try { return localStorage.getItem("cnc_fixLado2D") === "2" ? 2 : 1; } catch { return 1; }
+  });
+  const [fixFolga, setFixFolga] = useState<number>(() => {
+    try { const v = parseFloat(localStorage.getItem("cnc_fixFolga2D") || "1"); return isNaN(v) ? 1 : v; } catch { return 1; }
+  });
+  const [fixDraft, setFixDraft] = useState<{ z: number; d: number } | null>(null); // 1º toque (começo da pega)
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+  // painel ▶ Programa da peça manda ligar/desligar as fixações
+  useEffect(() => {
+    if (fixComando) setFixZones(fixComando.zones);
+  }, [fixComando ? fixComando.seq : -1]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cnc_fixacoes2D", JSON.stringify(fixZones));
+      localStorage.setItem("cnc_fixLado2D", String(fixLado));
+      localStorage.setItem("cnc_fixFolga2D", String(fixFolga));
+    } catch { /* sem armazenamento */ }
+  }, [fixZones, fixLado, fixFolga]);
+  const [showMirinha, setShowMirinha] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_showMirinha2D") !== "false";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_showMirinha2D", String(showMirinha));
+  }, [showMirinha]);
+
+  // MIRA FIXA: 1º clique no botão Mira = painel fica FIXO na tela e pode ser arrastado; 2º clique = desliga
+  const [miraFixa, setMiraFixa] = useState<boolean>(() => localStorage.getItem("cnc_miraFixa2D") === "true");
+  const [miraPos, setMiraPos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const v = localStorage.getItem("cnc_miraPos2D");
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [miraUltimoPonto, setMiraUltimoPonto] = useState<HoveredPointInfo | null>(null);
+  const miraDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => { localStorage.setItem("cnc_miraFixa2D", String(miraFixa)); }, [miraFixa]);
+  useEffect(() => { if (miraPos) localStorage.setItem("cnc_miraPos2D", JSON.stringify(miraPos)); }, [miraPos]);
+  // Guarda o último ponto mirado, para o painel fixo continuar mostrando quando o dedo/mouse sai do gráfico
+  useEffect(() => { if (hoveredPoint) setMiraUltimoPonto(hoveredPoint); }, [hoveredPoint]);
+
+  // Arrastar o painel fixo da Mira para qualquer lugar do gráfico
+  const handleMiraPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const box = e.currentTarget;
+    const parent = box.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const br = box.getBoundingClientRect();
+    miraDragRef.current = { dx: e.clientX - br.left, dy: e.clientY - br.top };
+    if (!miraPos) setMiraPos({ x: br.left - pr.left, y: br.top - pr.top });
+    try { box.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.stopPropagation();
+  };
+  const handleMiraPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!miraDragRef.current) return;
+    const parent = e.currentTarget.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const x = Math.max(0, Math.min(pr.width - 40, e.clientX - pr.left - miraDragRef.current.dx));
+    const y = Math.max(0, Math.min(pr.height - 30, e.clientY - pr.top - miraDragRef.current.dy));
+    setMiraPos({ x, y });
+    e.stopPropagation();
+  };
+  const handleMiraPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    miraDragRef.current = null;
+    e.stopPropagation();
+  };
+
+  // Playback Driver State
+  const [driverSpeed, setDriverSpeed] = useState<number>(70); // 0 to 100
+  const [driverTick, setDriverTick] = useState<number>(-1); // Represents active simulated line ID
+  const [linesWithDrawing, setLinesWithDrawing] = useState<number[]>([]);
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 500, height: 450 });
+
+  // Freeze Graphic State ("Congelar Gráfico")
+  const [isFrozen, setIsFrozen] = useState<boolean>(false);
+
+  // ===== DESENHO NO GRÁFICO (Linha, Círculo, Arco, Ponto e Cota inteligente — igual SolidWorks) =====
+  const [sketchOpen, setSketchOpen] = useState<boolean>(false);
+  const [sketchTool, setSketchTool] = useState<SketchTool>("none");
+  const [sketchEnts, setSketchEnts] = useState<SketchEnt[]>(() => {
+    try { return JSON.parse(localStorage.getItem("cnc_sketch2D") || "[]"); } catch { return []; }
+  });
+  const [sketchDraft, setSketchDraft] = useState<SkPt[]>([]);
+  const [sketchHover, setSketchHover] = useState<{ p: SkPt; tag?: string; snapped?: boolean; vertex?: boolean } | null>(null);
+  const [sketchDim, setSketchDim] = useState<{ id: string; left: number; top: number; a: string; b: string; labelA: string; labelB?: string } | null>(null);
+  const sketchHistRef = useRef<SketchEnt[][]>([]);
+  useEffect(() => {
+    try { localStorage.setItem("cnc_sketch2D", JSON.stringify(sketchEnts)); } catch {}
+  }, [sketchEnts]);
+  const sketchPush = () => {
+    sketchHistRef.current.push(sketchEnts);
+    if (sketchHistRef.current.length > 60) sketchHistRef.current.shift();
+  };
+  const sketchView = (cnv: HTMLCanvasElement): SketchView => ({
+    oX: cnv.width / 2 + 50 + panX,
+    oY: cnv.height / 2 + 50 + panY,
+    zoom,
+    s: simInvertZ ? -1 : 1,
+  });
+  // Ponto do desenho: gruda nas pontas/centros, nas linhas da peça (STEP) e trava H / V / paralela
+  const sketchPick = (mx: number, my: number, cnv: HTMLCanvasElement): { p: SkPt; tag?: string; snapped?: boolean; vertex?: boolean } => {
+    const T = sketchView(cnv);
+    const draftAsPts: SketchEnt[] = sketchDraft.map((p, i) => ({ id: "d" + i, type: "point", p: [p] }));
+    const k = skSnapKey(sketchEnts.concat(draftAsPts), mx, my, T, 10);
+    if (k) return { p: k, snapped: true, vertex: true }; // ponta / centro do desenho = canto
+    const ps = findPartSnap(mx, my, cnv, 10);
+    if (ps) return { p: skToWorld(ps.canvasX, ps.canvasY, T), snapped: true, vertex: !!ps.isVertex }; // gruda na linha da peça (em cima ou no espelho de baixo)
+    const raw = skToWorld(mx, my, T);
+    if (sketchTool === "line" && sketchDraft.length) return skInferLine(sketchDraft[sketchDraft.length - 1], raw, sketchEnts);
+    return { p: raw };
+  };
+  const sketchCanvasXY = (e: { clientX: number; clientY: number }) => {
+    const cnv = canvasRef.current;
+    if (!cnv) return null;
+    const rc = cnv.getBoundingClientRect();
+    return {
+      cnv,
+      mx: rc.width > 0 ? ((e.clientX - rc.left) / rc.width) * cnv.width : 0,
+      my: rc.height > 0 ? ((e.clientY - rc.top) / rc.height) * cnv.height : 0,
+      cssX: e.clientX - rc.left,
+      cssY: e.clientY - rc.top,
+      cssW: rc.width,
+    };
+  };
+  const sketchSetTool = (t: SketchTool) => {
+    setSketchTool(t);
+    setSketchDraft([]);
+    setSketchDim(null);
+    setSketchHover(null);
+    if (t !== "none") { setPgMode(false); setIsMeasuring(false); setIsMeasuringAngle(false); }
+  };
+  const sketchToggleMenu = () => {
+    const v = !sketchOpen;
+    setSketchOpen(v);
+    if (!v) sketchSetTool("none");
+  };
+  const handleSketchClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const c = sketchCanvasXY(e);
+    if (!c) return;
+    const { cnv, mx, my } = c;
+    if (sketchTool === "dim" || sketchTool === "erase") {
+      const hit = skHit(sketchEnts, mx, my, sketchView(cnv), 12);
+      if (!hit) { setSketchDim(null); return; }
+      if (sketchTool === "erase") {
+        sketchPush();
+        setSketchEnts((arr) => arr.filter((x) => x.id !== hit.id));
+        return;
+      }
+      const m = skMeasure(hit);
+      const fmt = (v: number) => String(parseFloat(v.toFixed(3)));
+      setSketchDim({
+        id: hit.id,
+        left: Math.max(4, Math.min(c.cssX + 12, c.cssW - 200)),
+        top: Math.max(4, c.cssY - 10),
+        a: fmt(m.a),
+        b: m.b !== undefined ? fmt(m.b) : "",
+        labelA: m.labelA,
+        labelB: m.labelB,
+      });
+      return;
+    }
+    const sp = sketchPick(mx, my, cnv).p;
+    const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const add = (ent: Omit<SketchEnt, "id">) => { sketchPush(); setSketchEnts((arr) => [...arr, { ...ent, id: newId() }]); };
+    if (sketchTool === "point") { add({ type: "point", p: [sp] }); return; }
+    const d = [...sketchDraft, sp];
+    if (sketchTool === "line") {
+      if (d.length >= 2) {
+        const a = d[d.length - 2];
+        if (Math.hypot(sp.z - a.z, sp.r - a.r) < 1e-6) { setSketchDraft([]); return; } // tocou 2x no mesmo ponto: para
+        add({ type: "line", p: [a, sp] });
+        setSketchDraft([sp]); // continua emendando a próxima linha (igual SolidWorks)
+      } else setSketchDraft(d);
+      return;
+    }
+    if (sketchTool === "circle") {
+      if (d.length >= 2) {
+        if (Math.hypot(d[1].z - d[0].z, d[1].r - d[0].r) > 1e-6) add({ type: "circle", p: [d[0], d[1]] });
+        setSketchDraft([]);
+      } else setSketchDraft(d);
+      return;
+    }
+    if (sketchTool === "arc") {
+      if (d.length >= 3) { add({ type: "arc", p: [d[0], d[1], d[2]] }); setSketchDraft([]); }
+      else setSketchDraft(d);
+    }
+  };
+  const applySketchDim = () => {
+    if (!sketchDim) return;
+    const a = skParse(sketchDim.a);
+    const b = sketchDim.b !== "" ? skParse(sketchDim.b) : undefined;
+    if (!isFinite(a)) return;
+    sketchPush();
+    setSketchEnts((arr) => skApplyDim(arr, sketchDim.id, a, b));
+    setSketchDim(null);
+  };
+  const sketchUndo = () => {
+    const prev = sketchHistRef.current.pop();
+    if (prev) setSketchEnts(prev);
+    setSketchDraft([]);
+    setSketchDim(null);
+  };
+  // Esc: 1º para a linha que está desenhando, 2º solta a ferramenta
+  useEffect(() => {
+    if (sketchTool === "none") return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      if (sketchDraft.length) setSketchDraft([]);
+      else { setSketchTool("none"); setSketchHover(null); }
+      setSketchDim(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sketchTool, sketchDraft.length]);
+
+  // Cycle Time Calibration Factor (Potentiometer percentage: 20% to 180%, default 100%)
+  const [cycleTimeFactor, setCycleTimeFactor] = useState<number>(() => {
+    const saved = localStorage.getItem("cnc_cycleTimeFactor");
+    return saved ? parseInt(saved, 10) : 100;
+  });
+
+  const [isCycleTimeLocked, setIsCycleTimeLocked] = useState<boolean>(() => {
+    return localStorage.getItem("cnc_cycleTimeLocked") === "true";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("cnc_cycleTimeFactor", String(cycleTimeFactor));
+  }, [cycleTimeFactor]);
+
+  useEffect(() => {
+    localStorage.setItem("cnc_cycleTimeLocked", String(isCycleTimeLocked));
+  }, [isCycleTimeLocked]);
+
+  // Compute Base Physical Cycle Time and Calibrated Adjusted Cycle Time
+  // Parâmetros da máquina (rápidos, trocas, troca de peça...) - salvos no tablet
+  const [machineParams, setMachineParams] = useState<MachineParams>(() => loadMachineParams());
+  const [showCyclePanel, setShowCyclePanel] = useState<boolean>(false);
+  const handleChangeMachineParams = (p: MachineParams) => {
+    setMachineParams(p);
+    saveMachineParams(p);
+  };
+
+  const cycleTimeDetails = useMemo(() => {
+    return calculateCycleTimeDetailed(gcodeText, undefined, undefined, machineParams);
+  }, [gcodeText, machineParams]);
+
+  const adjustedCycleTimeSec = useMemo(() => {
+    return cycleTimeDetails.totalSeconds * (cycleTimeFactor / 100);
+  }, [cycleTimeDetails, cycleTimeFactor]);
+
+  const formattedCycleTime = useMemo(() => {
+    return formatCycleTime(adjustedCycleTimeSec, false);
+  }, [adjustedCycleTimeSec]);
+
+  const formattedCycleTimeTenths = useMemo(() => {
+    return formatCycleTime(adjustedCycleTimeSec, true);
+  }, [adjustedCycleTimeSec]);
+
+  // Zoom no scroll do mouse — suave (estilo SolidWorks): junta os "cliques" da rodinha
+  // e aplica uma vez por quadro de tela, com zoom proporcional ao giro (touchpad fica fino)
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const wheelAccRef = useRef<{ dy: number; x: number; y: number; raf: number }>({ dy: 0, x: 0, y: 0, raf: 0 });
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault(); // não deixa a página rolar junto com o zoom
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 33; // rolagem por linhas
+      else if (e.deltaMode === 2) dy *= 400; // rolagem por página
+      if (!dy) return;
+      const acc = wheelAccRef.current;
+      const rect = canvas.getBoundingClientRect();
+      acc.dy += dy;
+      acc.x = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
+      acc.y = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
+      if (acc.raf) return;
+      acc.raf = requestAnimationFrame(() => {
+        const a = wheelAccRef.current;
+        a.raf = 0;
+        const d = Math.max(-500, Math.min(500, a.dy));
+        a.dy = 0;
+        if (!d) return;
+        const prevZoom = zoomRef.current;
+        // 1 clique normal da rodinha (100) = cerca de 15% de zoom, igual antes
+        const newZoom = Math.min(Math.max(prevZoom * Math.exp(-d * 0.0014), 0.2), 5000); // zoom máximo bem maior (para ver chanfros e raios pequenos de perto)
+        if (newZoom === prevZoom) return;
+        zoomRef.current = newZoom;
+        const cX = canvas.width / 2 + 50;
+        const cY = canvas.height / 2 + 50;
+        const k = 1 - newZoom / prevZoom; // mantém parado o ponto que está embaixo do mouse
+        setPanX((p) => p + (a.x - cX - p) * k);
+        setPanY((p) => p + (a.y - cY - p) * k);
+        setZoom(newZoom);
+      });
+    };
+    canvas.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheelNative);
+  });
+
+  // Drag to pan
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (sketchTool !== "none" && e.button === 0) return; // desenhando: botão esquerdo desenha, botão do meio move
+    // Check if middle click or standard click
+    if (e.button === 0 || e.button === 1) {
+      panStartClientRef.current = { x: e.clientX, y: e.clientY };
+      mouseHasMovedRef.current = false;
+      setIsPanning(true);
+      setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+    }
+  };
+
+  // Touch handlers for mobile and tablet zooming/panning
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    touchHasMovedRef.current = false;
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      isTouchPanningRef.current = true;
+      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 2) {
+      isTouchPanningRef.current = false;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoom;
+      touchStartPanRef.current = { x: panX, y: panY };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (e.touches.length === 1 && isTouchPanningRef.current) {
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchStartPosRef.current.x;
+      const dy = touch.clientY - touchStartPosRef.current.y;
+      
+      if (Math.hypot(dx, dy) > 5) {
+        touchHasMovedRef.current = true;
+      }
+
+      if (touchHasMovedRef.current) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        setPanX(touch.clientX - touchDragStartRef.current.x);
+        setPanY(touch.clientY - touchDragStartRef.current.y);
+        setHoveredPoint(null);
+      }
+    } else if (e.touches.length === 2 && touchStartDistRef.current !== null) {
+      touchHasMovedRef.current = true;
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      if (currentDist === 0) return;
+
+      const zoomFactor = currentDist / touchStartDistRef.current;
+      
+      setZoom((prevZoom) => {
+        const newZoom = Math.min(Math.max(touchStartZoomRef.current * zoomFactor, 0.2), 5000);
+        if (newZoom === prevZoom) return prevZoom;
+
+        const rect = canvas.getBoundingClientRect();
+        const midX = (t1.clientX + t2.clientX) / 2;
+        const midY = (t1.clientY + t2.clientY) / 2;
+        
+        const canvasX = midX - rect.left;
+        const canvasY = midY - rect.top;
+
+        const cX = canvas.width / 2 + 50;
+        const cY = canvas.height / 2 + 50;
+
+        const initPanX = touchStartPanRef.current.x;
+        const initPanY = touchStartPanRef.current.y;
+        const initZoom = touchStartZoomRef.current;
+
+        setPanX(initPanX + (canvasX - cX - initPanX) * (1 - newZoom / initZoom));
+        setPanY(initPanY + (canvasY - cY - initPanY) * (1 - newZoom / initZoom));
+
+        return newZoom;
+      });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (touchHasMovedRef.current && e.cancelable) {
+      e.preventDefault();
+    }
+
+    if (e.touches.length === 0) {
+      isTouchPanningRef.current = false;
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      isTouchPanningRef.current = true;
+      touchDragStartRef.current = { x: touch.clientX - panX, y: touch.clientY - panY };
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      touchStartDistRef.current = null;
+    } else if (e.touches.length === 2) {
+      isTouchPanningRef.current = false;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoom;
+      touchStartPanRef.current = { x: panX, y: panY };
+    }
+  };
+
+  const getDistanceToSegment = (mx: number, my: number, x1: number, y1: number, x2: number, y2: number) => {
+    const A = mx - x1;
+    const B = my - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+    if (lenSq !== 0) {
+      param = dot / lenSq;
+    }
+
+    let xx, yy;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = mx - xx;
+    const dy = my - yy;
+    return {
+      distance: Math.sqrt(dx * dx + dy * dy),
+      x: xx,
+      y: yy
+    };
+  };
+
+  // Mira nas linhas da PEÇA / BRUTO (STEP): acha o ponto mais perto e diz o que é (diâmetro, face, chanfro/cone, raio)
+  const findPartSnap = (mouseX: number, mouseY: number, canvas: HTMLCanvasElement, maxDist: number) => {
+    if (!partLayers || !partLayers.length) return null;
+    const zDirSign = simInvertZ ? -1 : 1;
+    const originX = canvas.width / 2 + 50 + panX;
+    const originY = canvas.height / 2 + 50 + panY;
+    let bestD = maxDist;
+    let best: { cx: number; cy: number; layer: string; curve: { x: number; z: number }[]; sgn: number } | null = null;
+    for (const L of partLayers) {
+      for (const c of L.curves) {
+        for (const sgn of [1, -1]) {
+          for (let i = 0; i < c.length - 1; i++) {
+            const x1 = originX + c[i].z * zoom * zDirSign;
+            const y1 = originY - sgn * (c[i].x / 2) * zoom;
+            const x2 = originX + c[i + 1].z * zoom * zDirSign;
+            const y2 = originY - sgn * (c[i + 1].x / 2) * zoom;
+            const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
+            if (res.distance < bestD) {
+              bestD = res.distance;
+              best = { cx: res.x, cy: res.y, layer: L.label, curve: c, sgn };
+            }
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    const c = best.curve;
+    let cx = best.cx;
+    let cy = best.cy;
+    let isVertex = false;
+    // encaixa nas pontas da linha (cantos da peça)
+    for (const p of [c[0], c[c.length - 1]]) {
+      const px = originX + p.z * zoom * zDirSign;
+      const py = originY - best.sgn * (p.x / 2) * zoom;
+      if (Math.hypot(px - cx, py - cy) < 8) {
+        cx = px;
+        cy = py;
+        isVertex = true;
+      }
+    }
+    const latheZ = (cx - originX) / (zoom * zDirSign);
+    const latheX = Math.abs((cy - originY) / zoom) * 2;
+    const f3 = (n: number) => n.toFixed(3);
+    let desc = "";
+    if (c.length > 2) {
+      // arco: raio pela circunferência que passa pelo início, meio e fim
+      const a = c[0];
+      const m = c[Math.floor(c.length / 2)];
+      const b = c[c.length - 1];
+      const ax = a.z, ay = a.x / 2, bx = m.z, by = m.x / 2, qx = b.z, qy = b.x / 2;
+      const dd = 2 * (ax * (by - qy) + bx * (qy - ay) + qx * (ay - by));
+      let R = 0;
+      if (Math.abs(dd) > 1e-9) {
+        const ux = ((ax * ax + ay * ay) * (by - qy) + (bx * bx + by * by) * (qy - ay) + (qx * qx + qy * qy) * (ay - by)) / dd;
+        const uy = ((ax * ax + ay * ay) * (qx - bx) + (bx * bx + by * by) * (ax - qx) + (qx * qx + qy * qy) * (bx - ax)) / dd;
+        R = Math.hypot(ax - ux, ay - uy);
+      }
+      desc = `RAIO R${f3(R)}`;
+    } else {
+      const p = c[0];
+      const q = c[1];
+      const dz = Math.abs(q.z - p.z);
+      const dr = Math.abs(q.x - p.x) / 2;
+      if (dz < 1e-4) desc = `FACE Z${f3(p.z)} (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
+      else if (dr < 1e-4) desc = `DIÂMETRO Ø${f3(p.x)} (comprimento ${f3(dz)})`;
+      else desc = `CHANFRO/CONE ${((Math.atan2(dr, dz) * 180) / Math.PI).toFixed(2)}° (Ø${f3(Math.min(p.x, q.x))} a Ø${f3(Math.max(p.x, q.x))})`;
+    }
+    return { canvasX: cx, canvasY: cy, latheX, latheZ, isVertex, layer: best.layer, desc, dist: bestD };
+  };
+  // MIRA / PG: junta as linhas da PEÇA (STEP) e as linhas/pontas do DESENHO; cantos e pontas têm prioridade
+  type PickSnap = { canvasX: number; canvasY: number; latheX: number; latheZ: number; isVertex: boolean; desc: string; layer: string; dist: number; score: number };
+  const findPickSnap = (mx: number, my: number, cnv: HTMLCanvasElement, maxDist: number): PickSnap | null => {
+    let best: PickSnap | null = null;
+    const take = (r: PickSnap) => {
+      if (!best || r.score < best.score) best = r;
+    };
+    const ps = findPartSnap(mx, my, cnv, maxDist);
+    if (ps) take({ canvasX: ps.canvasX, canvasY: ps.canvasY, latheX: ps.latheX, latheZ: ps.latheZ, isVertex: ps.isVertex, desc: ps.desc, layer: ps.layer, dist: ps.dist, score: ps.isVertex ? -100 + ps.dist : ps.dist });
+    if (sketchEnts && sketchEnts.length) {
+      const T = sketchView(cnv);
+      const kp = skSnapKey(sketchEnts, mx, my, T, 14);
+      if (kp) {
+        const s = skToScreen(kp, T);
+        const d = Math.hypot(s.x - mx, s.y - my);
+        take({ canvasX: s.x, canvasY: s.y, latheX: Math.abs(kp.r) * 2, latheZ: kp.z, isVertex: true, desc: "DESENHO: ponta / canto", layer: "DESENHO", dist: d, score: -100 + d });
+      }
+      sketchEnts.forEach((en) => {
+        if (en.type !== "line" || en.p.length < 2) return;
+        const a = skToScreen(en.p[0], T);
+        const b = skToScreen(en.p[1], T);
+        const res = getDistanceToSegment(mx, my, a.x, a.y, b.x, b.y);
+        if (res.distance < maxDist) {
+          const w = skToWorld(res.x, res.y, T);
+          take({ canvasX: res.x, canvasY: res.y, latheX: Math.abs(w.r) * 2, latheZ: w.z, isVertex: false, desc: "DESENHO: linha", layer: "DESENHO", dist: res.distance, score: res.distance });
+        }
+      });
+    }
+    return best as PickSnap | null;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      if (panStartClientRef.current && Math.hypot(e.clientX - panStartClientRef.current.x, e.clientY - panStartClientRef.current.y) > 4) {
+        mouseHasMovedRef.current = true;
+      }
+      setPanX(e.clientX - dragStart.x);
+      setPanY(e.clientY - dragStart.y);
+      setHoveredPoint(null);
+      return;
+    }
+
+    // Desenho ligado: só acompanha o ponto do mouse (com imã)
+    if (sketchTool !== "none") {
+      const c = sketchCanvasXY(e);
+      if (c) setSketchHover(sketchPick(c.mx, c.my, c.cnv));
+      return;
+    }
+
+    if (!showMirinha && !pgMode && !fixMode && !regiaoModo) {
+      if (hoveredPoint) setHoveredPoint(null);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * canvas.width : 0;
+    const mouseY = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * canvas.height : 0;
+
+    if (isMeasuring || isMeasuringAngle) {
+      setMousePos({ x: mouseX, y: mouseY });
+    }
+
+    const zDirSign = simInvertZ ? -1 : 1;
+    const originX = canvas.width / 2 + 50 + panX;
+    const originY = canvas.height / 2 + 50 + panY;
+
+    let closestItem: any = null;
+    let minDistance = 35; // Snapping radius of 35px
+    let closestPoint = { x: 0, y: 0 };
+
+    plotList.forEach((item) => {
+      // Future simulation items should not be snapable if we are paused/stopped in the middle of playback
+      if (driverTick !== -2 && driverTick !== -1 && item.linhaId > driverTick) {
+        return;
+      }
+
+      const x1 = originX + item.z1 * zoom * zDirSign;
+      const y1 = originY - item.x1 * zoom;
+      const x2 = originX + item.z2 * zoom * zDirSign;
+      const y2 = originY - item.x2 * zoom;
+
+      const res = getDistanceToSegment(mouseX, mouseY, x1, y1, x2, y2);
+      if (res.distance < minDistance) {
+        minDistance = res.distance;
+        closestItem = item;
+        closestPoint = { x: res.x, y: res.y };
+      }
+    });
+
+    // Linhas da peça/bruto (STEP) também entram na mira; vale a que estiver mais perto (no PG, sempre a peça)
+    const partSnap = findPickSnap(mouseX, mouseY, canvas, pgMode ? 45 : 35); // peça (STEP) + desenho
+    if (partSnap && (pgMode || fixMode || !!regiaoModo || !closestItem || partSnap.dist < minDistance)) {
+      setHoveredPoint({
+        canvasX: partSnap.canvasX,
+        canvasY: partSnap.canvasY,
+        latheX: partSnap.latheX,
+        latheZ: partSnap.latheZ,
+        gcodeLine: -1,
+        gcodeText: partSnap.desc,
+        isVertex: partSnap.isVertex,
+        partLayer: partSnap.layer,
+      });
+      return;
+    }
+
+    if (closestItem) {
+      const x1 = originX + closestItem.z1 * zoom * zDirSign;
+      const y1 = originY - closestItem.x1 * zoom;
+      const x2 = originX + closestItem.z2 * zoom * zDirSign;
+      const y2 = originY - closestItem.x2 * zoom;
+
+      const distToP1 = Math.hypot(closestPoint.x - x1, closestPoint.y - y1);
+      const distToP2 = Math.hypot(closestPoint.x - x2, closestPoint.y - y2);
+
+      let isVertex = false;
+      let snapX = closestPoint.x;
+      let snapY = closestPoint.y;
+
+      if (distToP1 < 8) {
+        snapX = x1;
+        snapY = y1;
+        isVertex = true;
+      } else if (distToP2 < 8) {
+        snapX = x2;
+        snapY = y2;
+        isVertex = true;
+      }
+
+      // Calculate lathe coordinate of the exact snapped point
+      const latheZ = (snapX - originX) / (zoom * zDirSign);
+      const latheRadius = -(snapY - originY) / zoom;
+      const latheX = latheRadius * 2; // Diameter
+
+      // Find original line text
+      const lines = gcodeText.split("\n");
+      const lineIdx = Math.floor(closestItem.linhaId);
+      const rawText = lines[lineIdx] || "";
+
+      setHoveredPoint({
+        canvasX: snapX,
+        canvasY: snapY,
+        latheX,
+        latheZ,
+        gcodeLine: lineIdx,
+        gcodeText: rawText.trim(),
+        isVertex,
+        plotItem: closestItem
+      });
+    } else {
+      setHoveredPoint(null);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  const handleResetView = () => {
+    const pList = parseGCode().plotList;
+    if (pList.length === 0) {
+      setZoom(8);
+      setPanX(0);
+      setPanY(0);
+      return;
+    }
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    pList.forEach((p: any) => {
+      minX = Math.min(minX, p.x1, p.x2);
+      maxX = Math.max(maxX, p.x1, p.x2);
+      minZ = Math.min(minZ, p.z1, p.z2);
+      maxZ = Math.max(maxZ, p.z1, p.z2);
+    });
+    if (minX === Infinity) return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    
+    const dx = Math.abs(maxZ - minZ) || 1;
+    const dy = Math.abs(maxX - minX) || 1;
+    
+    const zoomX = (cw - 40) / dx;
+    const zoomY = (ch - 40) / dy;
+    const newZoom = Math.max(0.5, Math.min(zoomX, zoomY, 30));
+    setZoom(newZoom);
+    
+    const zCenter = (minZ + maxZ) / 2;
+    const xCenter = (minX + maxX) / 2;
+    
+    const newPanX = -zCenter * newZoom * (simInvertZ ? -1 : 1) - 50;
+    const newPanY = xCenter * newZoom - 50;
+    
+    setPanX(newPanX);
+    setPanY(newPanY);
+  };
+
+  // Dynamic G-Code parsing & Rendering (usa motor compartilhado com o painel de verificação)
+  const parseGCode = (): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } =>
+    parseGCodeSim(gcodeText, simInvertZ, partLayers);
+
+
+
+  // Lê o programa só quando o texto muda (antes relia a cada movimento do mouse/zoom = travava)
+  const { plotList, activeLineIndexes, fixHits, pecaHits, error: parseError } = useMemo(
+    () => simularGCodeEColisoes(gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga),
+    [gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga]
+  );
   const [alvoCol, setAlvoCol] = useState<number>(-1); // qual colisão está selecionada (clique no alarme)
   const [alarmeMin, setAlarmeMin] = useState<boolean>(false); // alarme minimizado (só a bolinha)
   const irParaColisao = () => {
@@ -2319,27 +2421,116 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     ctx.fillText("X+ (Diâmetro)", originX + 10, 15);
     ctx.fillText(simInvertZ ? "Z- (Cabeçote)" : "Z+ (Eixo)", canvas.width - 85, originY - 8);
 
-    // Draw Workpiece Stock Outline Representation (Simple raw metal silhouette block)
-    ctx.fillStyle = isThemeDark ? "rgba(40, 40, 50, 0.25)" : "rgba(220, 220, 230, 0.5)";
-    ctx.beginPath();
-    // Assuming standard stock: length 120, outer diameter 100 (radius 50)
-    const stockLength = 100 * zoom;
-    const stockRadius = 50 * zoom;
-    ctx.rect(originX - stockLength * (simInvertZ ? -1 : 1), originY - stockRadius, stockLength * (simInvertZ ? -1 : 1), stockRadius * 2);
-    ctx.fill();
+    const temPecaOuFix = (partLayers && partLayers.length > 0) || fixZones.length > 0;
+    if (!temPecaOuFix) {
+      // Draw Workpiece Stock Outline Representation (Simple raw metal silhouette block)
+      ctx.fillStyle = isThemeDark ? "rgba(40, 40, 50, 0.25)" : "rgba(220, 220, 230, 0.5)";
+      ctx.beginPath();
+      const stockLength = 100 * zoom;
+      const stockRadius = 50 * zoom;
+      ctx.rect(originX - stockLength * (simInvertZ ? -1 : 1), originY - stockRadius, stockLength * (simInvertZ ? -1 : 1), stockRadius * 2);
+      ctx.fill();
 
-    // Workpiece Chuck Jaws (Castanha do Torno)
-    ctx.fillStyle = isThemeDark ? "#202026" : "#ccd";
-    ctx.strokeStyle = isThemeDark ? "#3f3f4f" : "#99a";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    const chuckX = originX - stockLength * (simInvertZ ? -1 : 1);
-    ctx.rect(chuckX - 20 * (simInvertZ ? -1 : 1), originY - stockRadius - 15, 20 * (simInvertZ ? -1 : 1), 15);
-    ctx.rect(chuckX - 20 * (simInvertZ ? -1 : 1), originY + stockRadius, 20 * (simInvertZ ? -1 : 1), 15);
-    ctx.fill();
-    ctx.stroke();
+      // Workpiece Chuck Jaws (Castanha do Torno)
+      ctx.fillStyle = isThemeDark ? "#202026" : "#ccd";
+      ctx.strokeStyle = isThemeDark ? "#3f3f4f" : "#99a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const chuckX = originX - stockLength * (simInvertZ ? -1 : 1);
+      ctx.rect(chuckX - 20 * (simInvertZ ? -1 : 1), originY - stockRadius - 15, 20 * (simInvertZ ? -1 : 1), 15);
+      ctx.rect(chuckX - 20 * (simInvertZ ? -1 : 1), originY + stockRadius, 20 * (simInvertZ ? -1 : 1), 15);
+      ctx.fill();
+      ctx.stroke();
+    }
 
-    // Linhas da PEÇA (cheia) e do BRUTO (tracejada) importados do STEP, por baixo do caminho da ferramenta
+    // ===== FIXAÇÃO (atrás da peça): blocos CINZAS (pinça / bucha / castanha) + cota + apenas contorno fino tracejado vermelho =====
+    fixZones.forEach((f) => {
+      const ativa = f.lado === fixLado;
+      const isBucha = f.tipo === "bucha" || !!f.infinito;
+      const fol = ativa && !isBucha ? fixFolga : 0;
+      const xa = originX + (f.za - fol) * zoom * zDirSign;
+      const xb = originX + (f.zb + fol) * zoom * zDirSign;
+      const xz1 = originX + f.za * zoom * zDirSign;
+      const xz2 = originX + f.zb * zoom * zDirSign;
+      const jl = Math.min(xz1, xz2);
+      const jr = Math.max(xz1, xz2);
+      const jw = Math.max(4, jr - jl);
+      const r = Math.max(4, (f.d / 2) * zoom);
+      const jaw = Math.max(12, Math.min(36, r * 0.65));
+
+      ctx.save();
+      // Blocos cinzas da pinça/castanha atrás da peça
+      ctx.fillStyle = ativa
+        ? (isThemeDark ? "rgba(100, 116, 139, 0.38)" : "rgba(100, 116, 139, 0.28)")
+        : (isThemeDark ? "rgba(100, 116, 139, 0.16)" : "rgba(100, 116, 139, 0.14)");
+      ctx.strokeStyle = ativa ? (isThemeDark ? "#94a3b8" : "#64748b") : (isThemeDark ? "#475569" : "#94a3b8");
+      ctx.lineWidth = 1.4;
+
+      if (isBucha) {
+        // Bucha guia: bloco da barra + chanfro cônico da pinça encostado na linha de corte
+        const dirBar = xz2 >= xz1 ? 1 : -1;
+        const barEnd = dirBar > 0 ? Math.max(jr, canvas.width - 6) : Math.min(jl, 6);
+        const bw = Math.abs(barEnd - xz1);
+        const bl = Math.min(xz1, barEnd);
+        ctx.fillRect(bl, originY - r - jaw, bw, jaw);
+        ctx.fillRect(bl, originY + r, bw, jaw);
+        ctx.strokeRect(bl, originY - r - jaw, bw, jaw);
+        ctx.strokeRect(bl, originY + r, bw, jaw);
+        // Contorno sutil da barra restante dentro da bucha
+        ctx.fillStyle = isThemeDark ? "rgba(71, 85, 105, 0.16)" : "rgba(148, 163, 184, 0.16)";
+        ctx.fillRect(bl, originY - r, bw, r * 2);
+      } else {
+        ctx.fillRect(jl, originY - r - jaw, jw, jaw);
+        ctx.fillRect(jl, originY + r, jw, jaw);
+        ctx.strokeRect(jl, originY - r - jaw, jw, jaw);
+        ctx.strokeRect(jl, originY + r, jw, jaw);
+      }
+
+      // Zona proibida: APENAS contorno fino tracejado vermelho (nunca bloco vermelho tampando a peça)
+      const zLeft = isBucha
+        ? (xz2 >= xz1 ? xz1 : 4)
+        : Math.min(xa, xb);
+      const zRight = isBucha
+        ? (xz2 >= xz1 ? canvas.width - 4 : xz1)
+        : Math.max(xa, xb);
+      const zW = Math.max(2, zRight - zLeft);
+      ctx.strokeStyle = ativa ? "#ef4444" : "#64748b";
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = ativa ? 1.2 : 0.9;
+      ctx.strokeRect(zLeft, originY - r - jaw - 10, zW, (r + jaw + 10) * 2);
+      ctx.setLineDash([]);
+
+      // Rótulo e cota em mm
+      const txtLabel = f.label || `FIXAÇÃO L${f.lado}`;
+      const mmSpan = Math.abs(f.zb - f.za);
+      const cotaTxt = f.cota || `${mmSpan.toFixed(1)} mm`;
+      ctx.fillStyle = ativa ? (isThemeDark ? "#cbd5e1" : "#334155") : "#64748b";
+      ctx.font = "bold 10px monospace";
+      const textX = Math.max(8, Math.min(canvas.width - 140, jl + 4));
+      const textYTop = Math.max(14, originY - r - jaw - 14);
+      ctx.fillText(`${txtLabel}${ativa ? "" : " (inativa)"}`, textX, textYTop);
+      if (!isBucha && jw >= 14) {
+        const yCota = originY + r + jaw + 11;
+        ctx.strokeStyle = isThemeDark ? "#64748b" : "#475569";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(jl, originY + r + jaw + 2);
+        ctx.lineTo(jl, yCota + 2);
+        ctx.moveTo(jr, originY + r + jaw + 2);
+        ctx.lineTo(jr, yCota + 2);
+        ctx.moveTo(jl, yCota - 2);
+        ctx.lineTo(jr, yCota - 2);
+        ctx.stroke();
+        ctx.fillStyle = isThemeDark ? "#94a3b8" : "#475569";
+        ctx.fillText(cotaTxt, jl + 2, yCota + 10);
+      } else if (isBucha) {
+        ctx.fillStyle = isThemeDark ? "#94a3b8" : "#475569";
+        ctx.fillText(cotaTxt, textX, textYTop + 11);
+      }
+      ctx.restore();
+    });
+
+    // Linhas da PEÇA (cheia) e do BRUTO (tracejada) importados do STEP, por cima da fixação e por baixo do caminho da ferramenta
     if (partLayers && partLayers.length) {
       ctx.save();
       partLayers.forEach((L) => {
@@ -2360,6 +2551,34 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           });
         }
       });
+      // Marca nítida do ZERO PEÇA (Z0) na origem escolhida
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#22d3ee";
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(originX, 20);
+      ctx.lineTo(originX, canvas.height - 20);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(originX, originY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#083344";
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#22d3ee";
+      ctx.beginPath();
+      ctx.moveTo(originX, originY);
+      ctx.arc(originX, originY, 6, 0, Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(originX, originY);
+      ctx.arc(originX, originY, 6, Math.PI, Math.PI * 1.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.font = "bold 10px monospace";
+      ctx.fillText("Z0", originX + 9, originY - 9);
       ctx.restore();
     }
 
@@ -2518,36 +2737,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.stroke();
     }
 
-    // ===== FIXAÇÃO: faixa vermelha (zona proibida) + castanhas + movimentos que batem =====
-    fixZones.forEach((f) => {
-      const ativa = f.lado === fixLado;
-      const fol = ativa ? fixFolga : 0;
-      const xa = originX + (f.za - fol) * zoom * zDirSign;
-      const xb = originX + (f.zb + fol) * zoom * zDirSign;
-      const left = Math.min(xa, xb);
-      const w = Math.abs(xb - xa);
-      ctx.save();
-      ctx.fillStyle = ativa ? "rgba(239,68,68,0.15)" : "rgba(148,163,184,0.08)";
-      ctx.fillRect(left, 0, w, canvas.height);
-      const r = (f.d / 2) * zoom;
-      const jaw = Math.max(10, r * 0.6);
-      const xz1 = originX + f.za * zoom * zDirSign;
-      const xz2 = originX + f.zb * zoom * zDirSign;
-      const jl = Math.min(xz1, xz2);
-      const jw = Math.abs(xz2 - xz1);
-      ctx.fillStyle = ativa ? "rgba(239,68,68,0.55)" : "rgba(148,163,184,0.3)";
-      ctx.fillRect(jl, originY - r - jaw, jw, jaw);
-      ctx.fillRect(jl, originY + r, jw, jaw);
-      ctx.strokeStyle = ativa ? "#ef4444" : "#94a3b8";
-      ctx.setLineDash([6, 4]);
-      ctx.lineWidth = 1.2;
-      ctx.strokeRect(left, 0, w, canvas.height);
-      ctx.setLineDash([]);
-      ctx.fillStyle = ativa ? "#fca5a5" : "#cbd5e1";
-      ctx.font = "bold 11px monospace";
-      ctx.fillText("FIXAÇÃO LADO " + f.lado + (ativa ? "" : " (inativa)"), left + 4, 16);
-      ctx.restore();
-    });
+    // ===== FIXAÇÃO: destaque dos movimentos que invadem a zona proibida =====
     if (fixHits.length) {
       ctx.save();
       ctx.strokeStyle = "#ff1f1f";

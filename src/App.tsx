@@ -3443,8 +3443,9 @@ function tmCompensar(pts: TMPt[], r: number, interno: boolean): TMPt[] {
   return simp.length >= 2 ? simp : pts;
 }
 
-function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number } }) {
+function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
   const f = tmFmt;
+  const fmtInt = (n: number) => (Number.isInteger(n) ? String(n) : f(n));
   const out: string[] = [];
   const h2: string[] = []; // operações da torre superior (H2) vão para o CANAL 2
   let alvo = out;
@@ -3484,15 +3485,17 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G96 S" + p.vc + " M03;" + coment);
     }
   };
+  const modoG53 = (cfg.recuoTroca?.modo ?? "G53") === "G53";
+  const recTrocaX = cfg.recuoTroca?.x !== undefined && isFinite(cfg.recuoTroca.x) ? cfg.recuoTroca.x : 320;
+  const recTrocaZ = cfg.recuoTroca?.z !== undefined && isFinite(cfg.recuoTroca.z) ? cfg.recuoTroca.z : 100;
+  const recTrocaX2 = cfg.recuoTroca?.xCanal2 !== undefined && isFinite(cfg.recuoTroca.xCanal2) ? cfg.recuoTroca.xCanal2 : 235;
+  const recTrocaZ2 = cfg.recuoTroca?.zCanal2 !== undefined && isFinite(cfg.recuoTroca.zCanal2) ? cfg.recuoTroca.zCanal2 : 280;
   const temRecuoTbsy = !!(cfg.recuoTroca && cfg.recuoTroca.x !== undefined && isFinite(cfg.recuoTroca.x) && cfg.recuoTroca.z !== undefined && isFinite(cfg.recuoTroca.z));
   const recuar = () => {
+    if (modoG53) return; // TBSy G53: troca segura vai antes de cada T (N{n}G0G53X320M89 / G0G53Z100) e no fim (G0G53V350M9)
     if (temRecuoTbsy) {
-      if (cfg.recuoTroca!.modo === "G53") {
-        W("G53 X" + f(cfg.recuoTroca!.x!) + " Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
-      } else {
-        W("G00 X" + f(cfg.recuoTroca!.x!) + ";");
-        W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
-      }
+      W("G00 X" + f(cfg.recuoTroca!.x!) + ";");
+      W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
     } else {
       W("G00 X" + f(bD + 20) + ";");
       W("G00 Z50.0; (RECUO - PREENCHER POSICAO DE TROCA NA MAQUINA)");
@@ -3505,6 +3508,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   const acabInt = ativos.find((o) => o.tipo === "acabInt");
   const ciclos: Record<string, { p: number; q: number; rp?: number }> = {};
   let nIdx = 1;
+  let tSeq = 1;
   // RESPEITA o Começo/Fim: junta as faixas e CORTA cada trecho do perfil no limite (não usina além do que foi escolhido)
   const sub = (iv: TMIntervalo[], faixas: TMFaixa[]) => {
     const fx = faixas.map(([a, b]) => [Math.min(a, b), Math.max(a, b)]).sort((p1, p2) => p1[0] - p2[0]);
@@ -3530,6 +3534,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   W("");
   W("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
   W("(ORIGENS: " + (cfg.origens || []).map((o, k) => (k + 1) + "=" + o.g + (o.tipo === "suico" ? " SUICO" : "")).join(" ") + ");");
+  if (modoG53) W("G0G53X" + fmtInt(recTrocaX) + "Z" + fmtInt(recTrocaZ) + "V350;");
 
   const contorno = (pts: TMPt[], fAcab: number, xSaida: number, n1: number | null, n2: number | null, passaCorte: boolean, tipo2 = false) => {
     W((n1 ? "N" + n1 + " " : "") + "G00 X" + f(pts[0].x) + (tipo2 ? " Z" + f(pts[0].z + 1) : "") + ";" + (tipo2 ? " (G71 TIPO II - COM REBAIXOS)" : ""));
@@ -3552,15 +3557,34 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     W("(OP " + (i + 1) + " - " + T.nome.toUpperCase() + (T.ciclo && op.ciclo ? " " + (op.cicloSel || T.ciclo) : T.ciclo ? " SEM CICLO" : "") + ");");
     const fxs: TMFaixa[] = op.faixas.length ? op.faixas : tmFaixaPadrao(op.tipo, geo, p) || []; // sem região marcada: usa a padrão (face, centro, corte)
     if (T.regiao && !fxs.length) { W("(SEM REGIAO MARCADA NA PECA - OPERACAO PULADA);"); return; }
+    if (modoG53) {
+      if (op.tipo === "corte") {
+        W("G0G53X" + fmtInt(recTrocaX) + "Z" + fmtInt(recTrocaZ) + "V350;");
+      } else {
+        W("N" + tSeq + "G0G53X" + fmtInt(recTrocaX) + "M89;");
+        W("G0G53Z" + fmtInt(recTrocaZ) + ";");
+        tSeq++;
+      }
+    }
     W(op.ferr + " (" + (op.nomeFerr || T.nome.toUpperCase()) + " - " + (op.cab || "H1") + ");");
     const og = (cfg.origens || [])[(op.orig || 1) - 1] || (cfg.origens || [])[0];
-    if (og) W(og.g + "; (ORIGEM " + (op.orig || 1) + (og.tipo === "suico" ? " - SUICO" : "") + ")");
     // PONTO DE APROXIMAÇÃO (campos X e Z da operação; X 0 = automático): chega num ponto seguro antes de entrar na peça
     const interno = T.grupo === "INTERNO";
     const apX = (p.ax ?? 0) > 0 ? p.ax : interno ? 0 : bD + 2;
     const apZ = p.az !== undefined ? p.az : 2;
-    if (apZ < zF - 1e-6) { alvo.push("G00 X" + f(apX) + ";"); alvo.push("G00 Z" + f(apZ) + "; (PONTO DE APROXIMACAO)"); }
-    else alvo.push("G00 X" + f(apX) + " Z" + f(apZ) + "; (PONTO DE APROXIMACAO)");
+    if (modoG53) {
+      const gOrig = og ? og.g : "G54";
+      if (apZ < zF - 1e-6) {
+        alvo.push("G0" + gOrig + "X" + f(apX) + "M7M87;");
+        alvo.push("G00 Z" + f(apZ) + "; (PONTO DE APROXIMACAO)");
+      } else {
+        alvo.push("G0" + gOrig + "X" + f(apX) + "Z" + f(apZ) + "M7M87; (PONTO DE APROXIMACAO)");
+      }
+    } else {
+      if (og) W(og.g + "; (ORIGEM " + (op.orig || 1) + (og.tipo === "suico" ? " - SUICO" : "") + ")");
+      if (apZ < zF - 1e-6) { alvo.push("G00 X" + f(apX) + ";"); alvo.push("G00 Z" + f(apZ) + "; (PONTO DE APROXIMACAO)"); }
+      else alvo.push("G00 X" + f(apX) + " Z" + f(apZ) + "; (PONTO DE APROXIMACAO)");
+    }
     pendAp = { x: apX, z: apZ, interno };
     // INTERNO PELA MESMA LÓGICA DO EXTERNO: o X do perfil interno é espelhado (x' = KM - x), o programa é gerado pelo
     // mesmo código do externo (desbaste, acabamento, canal) e depois o X volta ao normal. Afastamento: menor furo - folga.
@@ -4079,14 +4103,12 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   alvo = out;
   const fimOps = out.length;
   W("");
-  if (temRecuoTbsy) {
-    if (cfg.recuoTroca!.modo === "G53") {
-      W("M09;");
-      W("G53 X" + f(cfg.recuoTroca!.x!) + " Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
-    } else {
-      W("G00 X" + f(cfg.recuoTroca!.x!) + " M09;");
-      W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
-    }
+  if (modoG53) {
+    W("G0G53X" + fmtInt(recTrocaX) + "Z" + fmtInt(recTrocaZ) + "V350;");
+    W("G0G53V350M9;");
+  } else if (temRecuoTbsy) {
+    W("G00 X" + f(cfg.recuoTroca!.x!) + " M09;");
+    W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
   } else {
     W("G00 X" + f(bD + 20) + " M09;");
     W("G00 Z50.0;");
@@ -4105,7 +4127,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     const sg = og.tipo === "suico" ? -1 : 1;
     if (!vira && Math.abs(off - z0.offsetZ) < 1e-9 && sg === 1) return null;
     return (linha: string) =>
-      /\bG53\b/i.test(linha)
+      /(?<![A-Z])G53(?![0-9])/i.test(linha)
         ? linha
         : linha.replace(/(^|[^A-Z])([ZW])(-?\d+(?:\.\d*)?)/g, (_m: string, pre: string, eixo: string, num: string) => {
             const v = parseFloat(num);
@@ -4131,6 +4153,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   G("(GERADO PELO TORNO MASTER EM " + data + " - CONFERIR ANTES DE RODAR);");
   G("");
   G("G18 G40 G97 G99; (CONFERIR CABECALHO PADRAO DA MAQUINA)");
+  if (modoG53) G("G0G53X" + fmtInt(recTrocaX2) + "Z" + fmtInt(recTrocaZ2) + "Y0;");
   if (h2.length) {
     G("");
     G("(=== OPERACOES DA TORRE SUPERIOR H2 NO LADO 1 - CONFERIR SINCRONISMO COM O HEAD1 ===);");
@@ -4144,6 +4167,10 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   G("(2 - RECUO DO CONTRAFUSO COM A PECA);");
   G("(3 - LADO 2: FACEAR O LADO DO CORTE ATE O COMPRIMENTO FINAL L" + f(geo.L) + ");");
   G("(COMPLETAR COM T521 / T22 / T23 CONFORME O LAYOUT DA TORRE);");
+  if (modoG53) {
+    G("(TROCA ENTRE FERRAMENTAS HEAD2: N1G0G53X" + fmtInt(recTrocaX2) + "Z270Y0);");
+    G("G0G53X" + fmtInt(recTrocaX2) + "Z" + fmtInt(recTrocaZ2) + "Y0;");
+  }
   G("M30;");
   return { textos: [out.join("\n"), g.join("\n")] as [string, string], nomes: [nm + ".P-2", nm] as [string, string] };
 }
@@ -4271,6 +4298,23 @@ export const PainelPrograma: React.FC<{
     const tipoPad: TMOrigem["tipo"] = mIni.suico ? "suico" : "normal";
     if (Array.isArray(c.origens)) {
       c.origens = c.origens.map((og: TMOrigem) => ({ ...og, tipo: tipoPad }));
+    }
+    if (c.recuosPorMaq && typeof c.recuosPorMaq === "object") {
+      const limpo = { ...c.recuosPorMaq };
+      MAQUINAS_DNA.forEach((m) => {
+        const saved = limpo[m.id];
+        if (
+          m.recuoTroca.aprendido &&
+          saved &&
+          saved.x === undefined &&
+          saved.z === undefined &&
+          saved.xCanal2 === undefined &&
+          saved.zCanal2 === undefined
+        ) {
+          delete limpo[m.id];
+        }
+      });
+      c.recuosPorMaq = limpo;
     }
     return c;
   });
@@ -4477,12 +4521,6 @@ export const PainelPrograma: React.FC<{
       return { pendenciasMaquina: lista, opPendencias: porOp };
     }
     if (maqAtual.id === "TBSY") {
-      if (recuoAtual.x === undefined || !isFinite(recuoAtual.x)) {
-        lista.push({ msg: "Informar X de troca segura da TBSy.", targetKey: "maq_recuoX" });
-      }
-      if (recuoAtual.z === undefined || !isFinite(recuoAtual.z)) {
-        lista.push({ msg: "Informar Z de troca segura da TBSy.", targetKey: "maq_recuoZ" });
-      }
       return { pendenciasMaquina: lista, opPendencias: porOp };
     }
     if (maqAtual.diamMaxBarra !== undefined && bD > maqAtual.diamMaxBarra + 1e-9) {
@@ -4491,7 +4529,8 @@ export const PainelPrograma: React.FC<{
         targetKey: "bloco_maq",
       });
     }
-    if (maqAtual.suico) {
+    const usaXBarraStar = ["STAR_SB20R_N11", "STAR_SB20R_N13", "STAR_N19"].includes(maqAtual.id);
+    if (maqAtual.suico && !usaXBarraStar) {
       if (!(recuoAtual.x !== undefined && recuoAtual.x > 0)) {
         lista.push({ msg: "X de recuo seguro (troca de ferramenta).", targetKey: "maq_recuoX" });
       }
@@ -4675,7 +4714,7 @@ export const PainelPrograma: React.FC<{
       return;
     }
     setAvisoMaq("");
-    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z } }));
+    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
@@ -4700,7 +4739,7 @@ export const PainelPrograma: React.FC<{
         if (!res.erro) onGerar(res, true);
         return;
       }
-      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z } }), true);
+      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
     }, 400);
     return () => clearTimeout(t);
   }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina]);
@@ -5085,26 +5124,44 @@ export const PainelPrograma: React.FC<{
                 </>
               )}
               {maqAtual.suico && (
-                <>
-                  <label className="flex items-center gap-1.5 text-zinc-300">
-                    <span>X seguro (mm)</span>
-                    <TMOptNum
-                      inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
-                      v={recuoAtual.x}
-                      set={(n) => setRecuoMaq({ x: n })}
-                      placeholder="ex: 20"
-                      cls={
-                        inp +
-                        " w-20 " +
-                        (!(recuoAtual.x !== undefined && recuoAtual.x > 0) ? "border-amber-400 bg-amber-950/30 " : "") +
-                        (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
-                      }
-                    />
-                  </label>
-                  <span className="text-[11px] text-zinc-400">
-                    Frontal: {recuoAtual.zFrontal === -1 ? "G0Z-1T0 / M1" : "G0Z-5 / M1"} · H2: G28W0
-                  </span>
-                </>
+                ["STAR_SB20R_N11", "STAR_SB20R_N13", "STAR_N19"].includes(maqAtual.id) ? (
+                  <>
+                    <label className="flex items-center gap-1.5 text-zinc-300">
+                      <span>X seguro (mm)</span>
+                      <TMOptNum
+                        inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                        v={recuoAtual.x}
+                        set={(n) => setRecuoMaq({ x: n })}
+                        placeholder={bD > 0 ? tmFmt(bD + 1.4) : "barra+1.4"}
+                        cls={inp + " w-20 " + (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")}
+                      />
+                    </label>
+                    <span className="text-[11px] text-zinc-400">
+                      Tornear: G0X{bD > 0 ? tmFmt(recuoAtual.x && recuoAtual.x > 0 ? recuoAtual.x : bD + 1.4) : "barra+1.4"} / G0Z-1.0 / G97 / G0T0 / M101 · Frontal: G0Z-3 / G0X0 / G0T0 / M101 · H2: G28W0
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <label className="flex items-center gap-1.5 text-zinc-300">
+                      <span>X seguro (mm)</span>
+                      <TMOptNum
+                        inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                        v={recuoAtual.x}
+                        set={(n) => setRecuoMaq({ x: n })}
+                        placeholder="ex: 20"
+                        cls={
+                          inp +
+                          " w-20 " +
+                          (!(recuoAtual.x !== undefined && recuoAtual.x > 0) ? "border-amber-400 bg-amber-950/30 " : "") +
+                          (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
+                        }
+                      />
+                    </label>
+                    <span className="text-[11px] text-zinc-400">
+                      Frontal: {recuoAtual.zFrontal === -1 ? "G0Z-1T0 / M1" : "G0Z-5 / M1"} · H2: G28W0
+                    </span>
+                  </>
+                )
               )}
               {maqAtual.perfil === "SIEMENS_TND180" && (
                 <>

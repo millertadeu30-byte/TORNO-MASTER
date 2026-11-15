@@ -33,10 +33,17 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     suico: false,
     diamMaxBarra: 60,
     recuoTroca: {
-      modo: "G0_ABS",
-      linhasModelo: ["G00 X{x}; / G00 Z{z}; (ou G53 X{x} Z{z};)"],
-      origem: "Não informado (preencher posição fixa da máquina)",
-      aprendido: false,
+      modo: "G53",
+      x: 320,
+      z: 100,
+      xCanal2: 235,
+      zCanal2: 280,
+      linhasModelo: [
+        "G0G53X320Z100V350 / N{n}G0G53X320M89 + G0G53Z100 (HEAD1)",
+        "G0G53X235Z280Y0 / N{n}G0G53X235Z270Y0 (HEAD2)",
+      ],
+      origem: "CU2540E1.P-2 / TAMPA_JU / BUCHA_JU.P-2",
+      aprendido: true,
     },
   },
   {
@@ -104,10 +111,13 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     diamMaxBarra: 20,
     recuoTroca: {
       modo: "X_FIXO",
-      zFrontal: -5,
-      linhasModelo: ["G0X{xSeguro} / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
-      origem: "Não aprendido — informar X de recuo seguro",
-      aprendido: false,
+      zFrontal: -3,
+      linhasModelo: [
+        "G0X{barra+1.4} / G0Z-1.0 / G97 / G0T0 / M101 (tornear)",
+        "G0Z-3 / G0X0 / G0T0 / M101 (frontal)",
+      ],
+      origem: "O0001 (PC11906, STAR 20R)",
+      aprendido: true,
     },
   },
   {
@@ -121,10 +131,13 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     diamMaxBarra: 20,
     recuoTroca: {
       modo: "X_FIXO",
-      zFrontal: -5,
-      linhasModelo: ["G0X{xSeguro} / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
-      origem: "Não aprendido — informar X de recuo seguro",
-      aprendido: false,
+      zFrontal: -3,
+      linhasModelo: [
+        "G0X{barra+1.4} / G0Z-1.0 / G97 / G0T0 / M101 (tornear)",
+        "G0Z-3 / G0X0 / G0T0 / M101 (frontal)",
+      ],
+      origem: "O0001 (PC11906, STAR 20R)",
+      aprendido: true,
     },
   },
   {
@@ -138,10 +151,13 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     diamMaxBarra: 20,
     recuoTroca: {
       modo: "X_FIXO",
-      zFrontal: -5,
-      linhasModelo: ["G0X{xSeguro} / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
-      origem: "Não aprendido — informar X de recuo seguro",
-      aprendido: false,
+      zFrontal: -3,
+      linhasModelo: [
+        "G0X{barra+1.4} / G0Z-1.0 / G97 / G0T0 / M101 (tornear)",
+        "G0Z-3 / G0X0 / G0T0 / M101 (frontal)",
+      ],
+      origem: "O0001 (PC11906, STAR 20R)",
+      aprendido: true,
     },
   },
   {
@@ -173,10 +189,11 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     diamMaxBarra: 32,
     recuoTroca: {
       modo: "X_FIXO",
+      x: 50,
       zFrontal: -5,
-      linhasModelo: ["G0X{xSeguro} / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
-      origem: "Não aprendido — informar X de recuo seguro",
-      aprendido: false,
+      linhasModelo: ["G0X50 / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
+      origem: "PC111091",
+      aprendido: true,
     },
   },
   {
@@ -190,10 +207,11 @@ export const MAQUINAS_DNA: MaquinaDNA[] = [
     diamMaxBarra: 32,
     recuoTroca: {
       modo: "X_FIXO",
+      x: 50,
       zFrontal: -5,
-      linhasModelo: ["G0X{xSeguro} / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
-      origem: "Não aprendido — informar X de recuo seguro",
-      aprendido: false,
+      linhasModelo: ["G0X50 / T0M1 (tornear)", "G0Z-5 / M1 (frontal)"],
+      origem: "PC111091",
+      aprendido: true,
     },
   },
   {

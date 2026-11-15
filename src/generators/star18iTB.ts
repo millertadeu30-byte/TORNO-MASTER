@@ -1068,7 +1068,24 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       lines.push("M38");
     }
 
-    if (frontalH1) {
+    const isSB20R = ["STAR_SB20R_N11", "STAR_SB20R_N13", "STAR_N19"].includes(cfg.maqId || "");
+    if (isSB20R && canal === "H1") {
+      if (frontalH1) {
+        const zFr = zFrontalCfg !== undefined && isFinite(zFrontalCfg) ? zFrontalCfg : -3;
+        const zFrStr = Number.isInteger(zFr) ? String(zFr) : fmt(zFr);
+        lines.push("G0Z" + zFrStr);
+        lines.push("G0X0");
+        lines.push("G0T0");
+        lines.push("M101");
+      } else {
+        const xRet = xSegCfg !== undefined && isFinite(xSegCfg) && xSegCfg > 0 ? xSegCfg : bD + 1.4;
+        lines.push("G0X" + (Number.isInteger(xRet) ? String(xRet) : fmt(xRet)));
+        lines.push("G0Z-1.0");
+        lines.push("G97");
+        lines.push("G0T0");
+        lines.push("M101");
+      }
+    } else if (frontalH1) {
       const zFr = zFrontalCfg !== undefined && isFinite(zFrontalCfg) ? zFrontalCfg : -5;
       const zFrStr = Number.isInteger(zFr) ? String(zFr) : fmt(zFr);
       if (Math.abs(zFr + 1) < 1e-6) {
