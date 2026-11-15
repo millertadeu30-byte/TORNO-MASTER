@@ -58,6 +58,11 @@ import { extractLatheProfile, profileToLathe, PartProfile, PartZeroConfig } from
 import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
+import { MAQUINAS_DNA } from "./data/maquinasDNA";
+import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg } from "./generators/star18iTB";
+import { tmGerarStarG266 } from "./generators/starG266";
+import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
+import { tmGerarIndexABC } from "./generators/indexABC";
 import { localLogin, localRegister, syncLicensingWithServer, getGlobalSupportPhone, registerSessionHeartbeat, getOrCreateDeviceId } from "./lib/licensing";
 
 // Generate a random session ID on app load to track active devices (antifraud tracking)
@@ -987,7 +992,7 @@ export default function App() {
     baixarArquivo(JSON.stringify(proj), base + ".torno", "application/json");
   };
 
-  // Exporta só os programas (.nc), um arquivo por canal que tem texto
+  // Exporta só os programas (.nc ou formato nativo da máquina), um arquivo por canal que tem texto
   const handleExportNc = () => {
     const n = Math.max(1, Math.min(3, layoutCount || 1));
     let atraso = 0;
@@ -995,7 +1000,8 @@ export default function App() {
       const code = editorTexts[i];
       if (!code || !code.trim()) continue;
       const nome = fileNames[i] || `PROG_CNC_ED${i + 1}.nc`;
-      setTimeout(() => baixarArquivo(code, /\.\w+$/.test(nome) ? nome : nome + ".nc"), atraso);
+      const nomeFinal = /(\.\w+|\.P-\d+)$/i.test(nome) || /^O\d{4,}$/i.test(nome) ? nome : nome + ".nc";
+      setTimeout(() => baixarArquivo(code, nomeFinal), atraso);
       atraso += 500;
     }
   };
@@ -2473,9 +2479,16 @@ export default function App() {
                 onRegioes={setPainelRegioes}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
                 onGerar={(r, vivo) => {
-                  // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
-                  setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
-                  setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
+                  if (r.doisCanais) {
+                    setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
+                    setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
+                    if (!vivo) setLayoutCount((c) => Math.max(c, 2));
+                  } else {
+                    // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
+                    setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
+                    setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
+                    if (r.unicoCanal && !vivo) setLayoutCount(1);
+                  }
                   setActivePaneIdx(0);
                   if (!vivo) {
                     setRegiaoSel(null);
@@ -2499,6 +2512,13 @@ export default function App() {
                   onSetFocus={() => setActivePaneIdx(idx)}
                   isHighContrast={isHighContrast || editorBg === "branco"}
                   fileName={fileNames[idx]}
+                  onDownload={() => {
+                    const code = editorTexts[idx];
+                    if (!code || !code.trim()) return;
+                    const nome = fileNames[idx] || `PROG_CNC_ED${idx + 1}.nc`;
+                    const nomeFinal = /(\.\w+|\.P-\d+)$/i.test(nome) || /^O\d{4,}$/i.test(nome) ? nome : nome + ".nc";
+                    baixarArquivo(code, nomeFinal);
+                  }}
                   onToggleFloatingCalculator={() => setIsFloatingCalcOpen(prev => !prev)}
                   isFloatingCalculatorOpen={isFloatingCalcOpen}
                   allEditorTexts={editorTexts}
@@ -2991,6 +3011,31 @@ const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string }> = ({
     />
   );
 };
+const TMOptNum: React.FC<{ v: number | undefined; set: (n: number | undefined) => void; cls: string; placeholder?: string }> = ({ v, set, cls, placeholder }) => {
+  const [txt, setTxt] = useState<string | null>(null);
+  const base = v !== undefined && !isNaN(v) ? String(v).replace(".", ",") : "";
+  const mostra = txt !== null ? txt : base;
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      placeholder={placeholder}
+      value={mostra}
+      onFocus={(e) => { setTxt(base); const el = e.target; setTimeout(() => el.select(), 0); }}
+      onChange={(e) => {
+        const t = e.target.value;
+        setTxt(t);
+        if (t.trim() === "") { set(undefined); return; }
+        const n = parseFloat(t.replace(",", "."));
+        if (!isNaN(n)) set(n);
+      }}
+      onClick={(e) => (e.target as HTMLInputElement).select()}
+      onBlur={() => setTxt(null)}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+      className={cls}
+    />
+  );
+};
 // explicação do ciclo escolhido (aparece dentro da operação)
 const TM_CICLO_DICA: Record<string, string> = {
   LINHA: "Sem ciclo: o app escreve linha a linha (G00 / G01).",
@@ -3030,19 +3075,19 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "vc", rot: "Vc m/min", def: 120, step: 5 }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
     { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (frente, Z+)", "Lado 2 (placa, Z-)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
     { k: "sx", rot: "Sobremetal X p/ acabamento (Ø) mm", def: 0.2, step: 0.05, so: ["LINHA"] }, { k: "sz", rot: "Sobremetal Z p/ acabamento mm", def: 0.1, step: 0.05, so: ["LINHA"] },
-    { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 } ] },
+    { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 } ] },
   roscaExt: { nome: "Rosca externa", grupo: "EXTERNO", regiao: true, ciclo: "G76", ferr: "T0404", params: [
     { k: "rpm", rot: "Rotação rpm", def: 800, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.25, step: 0.01 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   centro: { nome: "Furo de centro", grupo: "INTERNO", regiao: true, ciclo: "", ferr: "T0505", params: [
     { k: "rpm", rot: "Rotação rpm", def: 1500, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "prof", rot: "Profundidade mm", def: 2, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   furo: { nome: "Furação", grupo: "INTERNO", regiao: true, ciclo: "G83", ferr: "T0606", params: [
-    { k: "rpm", rot: "Rotação rpm", def: 1200, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "d", rot: "Ø broca mm", def: 8, step: 0.1 }, { k: "q", rot: "Pica-pau Q mm", def: 5, step: 0.5 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "rpm", rot: "Rotação rpm", def: 1200, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "d", rot: "Ø broca mm", def: 8, step: 0.1 }, { k: "q", rot: "Pica-pau Q mm", def: 5, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   desbInt: { nome: "Desbaste interno", grupo: "INTERNO", regiao: true, ciclo: "G71", ferr: "T0707", params: [
-    { k: "vc", rot: "Vc m/min", def: 150, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.2, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.3, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 150, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.2, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.3, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   acabInt: { nome: "Acabamento interno", grupo: "INTERNO", regiao: true, ciclo: "G70", ferr: "T0808", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   roscaInt: { nome: "Rosca interna", grupo: "INTERNO", regiao: true, ciclo: "G76", ferr: "T0909", params: [
-    { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.2, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.2, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   macho: { nome: "Rosca com macho", grupo: "INTERNO", regiao: true, ciclo: "G84", ferr: "T1010", params: [
     { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
@@ -4068,6 +4113,37 @@ const TM_ORIGENS_PADRAO: TMOrigem[] = [
   { g: "G55", fuso: "contrafuso", tipo: "normal", face: "esquerda", desl: 0 },
 ];
 
+const TM_OPS_INT_BARRA: TMOpTipo[] = ["furo", "desbInt", "acabInt", "canalInt", "roscaInt"];
+function tmCalcMaxBarra(o: TMOp, geo: TMGeo | null): { dMax: number; dMinInt: number; folga: number; temLimite: boolean } {
+  const folga = Math.max(0, o.p.fb !== undefined ? o.p.fb : 0.5);
+  const d0 = o.p.d0 !== undefined && o.p.d0 > 0 ? o.p.d0 : Infinity;
+  let dPerf = Infinity;
+  if (geo && geo.int.length) {
+    if (o.faixas.length) {
+      const fx = o.faixas.map(([a, b]) => [Math.min(a, b), Math.max(a, b)] as [number, number]);
+      for (const q of geo.int) {
+        const xz = (z: number) =>
+          Math.abs(q.zA - q.zB) < 1e-9 ? Math.min(q.xa, q.xb) : q.xa + ((q.zA - z) / (q.zA - q.zB)) * (q.xb - q.xa);
+        for (const [lo, hi] of fx) {
+          const a = Math.min(q.zA, hi);
+          const b = Math.max(q.zB, lo);
+          if (hi - lo > 1e-4 ? a - b > 1e-4 : a - b >= -1e-6) {
+            dPerf = Math.min(dPerf, xz(a), xz(b));
+          }
+        }
+      }
+    } else {
+      dPerf = geo.intDmin;
+    }
+  }
+  const rawMin = Math.min(dPerf, d0);
+  const temLimite = isFinite(rawMin);
+  const dMinInt = temLimite ? rawMin : 0;
+  const dMax = temLimite ? Math.max(0, dMinInt - folga) : 0;
+  return { dMax, dMinInt, folga, temLimite };
+}
+const tmFmt2 = (n: number) => n.toFixed(2).replace(".", ",");
+
 export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string };
 export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number };
 
@@ -4085,13 +4161,33 @@ export const PainelPrograma: React.FC<{
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
   onRegioes: (r: TMRegiao[]) => void;
   onFix: (z: TMFixZone[]) => void;
-  onGerar: (r: { textos: [string, string]; nomes: [string, string] }, vivo?: boolean) => void;
+  onGerar: (r: { textos: [string, string]; nomes: [string, string]; doisCanais?: boolean; unicoCanal?: boolean }, vivo?: boolean) => void;
   onClose: () => void;
 }> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onRegioes, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
     try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
   };
-  const [cfg, setCfg] = useState(() => ler("cnc_painel_cfg", { maq: "TBSY", material: "Aço carbono", nome: "", rpmMax: 3000, l1: true, saida: 5, pega1: 15, l2: true, pega2: 10, origens: TM_ORIGENS_PADRAO as TMOrigem[] }));
+  const [cfg, setCfg] = useState(() => {
+    const c = ler("cnc_painel_cfg", {
+      maq: "TBSY",
+      material: "Aço carbono",
+      nome: "",
+      rpmMax: 3000,
+      l1: true,
+      saida: 5,
+      pega1: 15,
+      l2: true,
+      pega2: 10,
+      origens: TM_ORIGENS_PADRAO as TMOrigem[],
+      cursoCab: undefined as number | undefined,
+      ladoBedameK: "" as "" | "0" | "-17",
+      estTope: undefined as number | undefined,
+      estBedame: undefined as number | undefined,
+      pega2Maq: undefined as number | undefined,
+    });
+    if (!MAQUINAS_DNA.some((m) => m.id === c.maq)) c.maq = "TBSY";
+    return c;
+  });
   const [ops, setOps] = useState<TMOp[]>(() => {
     try { const v = JSON.parse(localStorage.getItem("cnc_ops_painel") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
   });
@@ -4101,13 +4197,18 @@ export const PainelPrograma: React.FC<{
   const [aoVivo, setAoVivo] = useState<boolean>(true); // programa e gráfico atualizam sozinhos a cada mudança
   const [arrastando, setArrastando] = useState<string | null>(null);
   const [podeArrastar, setPodeArrastar] = useState<string | null>(null); // só arrasta pelo cabeçalho, nunca pelas caixas de digitar
+  const [mostrarPerguntaMaq, setMostrarPerguntaMaq] = useState<boolean>(true);
+  const [avisoMaq, setAvisoMaq] = useState<string>("");
+  const [mostrarPend, setMostrarPend] = useState<boolean>(false);
   const primeiroRef = useRef<number | null>(null);
   useEffect(() => { try { localStorage.setItem("cnc_painel_cfg", JSON.stringify(cfg)); } catch {} }, [cfg]);
   useEffect(() => { try { localStorage.setItem("cnc_ops_painel", JSON.stringify(ops)); } catch {} }, [ops]);
+  useEffect(() => { setAvisoMaq(""); setMostrarPend(false); }, [cfg.maq]);
 
   const geo = useMemo(() => tmGeo(partProfile, partZero), [partProfile, partZero]);
-  // sentido do Z da ORIGEM 1: suíço = Z positivo entrando na peça (o gráfico e as regiões viram junto)
-  const sZ: 1 | -1 = cfg.origens && cfg.origens[0] && cfg.origens[0].tipo === "suico" ? -1 : 1;
+  const maqAtual = useMemo(() => MAQUINAS_DNA.find((m) => m.id === cfg.maq) || MAQUINAS_DNA[0], [cfg.maq]);
+  // sentido do Z: máquina suíça ou ORIGEM 1 suíça = Z positivo entrando na peça (o gráfico e as regiões viram junto)
+  const sZ: 1 | -1 = maqAtual.suico || (cfg.origens && cfg.origens[0] && cfg.origens[0].tipo === "suico") ? -1 : 1;
   useEffect(() => { onSentidoZ(sZ); }, [sZ]);
   const bD = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
 
@@ -4182,16 +4283,176 @@ export const PainelPrograma: React.FC<{
     if (grupo === "INTERNO") return geo.int.length ? [[geo.intZmin, geo.intZmax]] : [];
     return [[geo.zBack, geo.zFront]];
   };
+  const barraBloqueio = useMemo(() => {
+    for (let i = 0; i < ops.length; i++) {
+      const o = ops[i];
+      if (!o.ativo || !TM_OPS_INT_BARRA.includes(o.tipo)) continue;
+      const bm = o.p.bm ?? 0;
+      if (bm <= 0) continue;
+      const info = tmCalcMaxBarra(o, geo);
+      if (bm > info.dMax + 1e-9) return { num: i + 1, bm, dMax: info.dMax };
+    }
+    return null;
+  }, [ops, geo]);
+  const { pendenciasMaquina, opPendencias } = useMemo(() => {
+    const lista: string[] = [];
+    const porOp: Record<string, { msg: string; campo?: "ferr" | "apz" | "cab" }[]> = {};
+    const addOp = (id: string, msg: string, campo?: "ferr" | "apz" | "cab") => {
+      if (!porOp[id]) porOp[id] = [];
+      porOp[id].push({ msg, campo });
+      lista.push(msg);
+    };
+    if (maqAtual.id === "TBSY" || maqAtual.status === "EM CADASTRO") {
+      return { pendenciasMaquina: lista, opPendencias: porOp };
+    }
+    if (maqAtual.diamMaxBarra !== undefined && bD > maqAtual.diamMaxBarra + 1e-9) {
+      lista.push(`Ø da barra (${tmFmt(bD)} mm) excede o máximo da máquina (${maqAtual.diamMaxBarra} mm).`);
+    }
+    if (maqAtual.perfil === "STAR_G266" || maqAtual.id === "STAR_SR20J_N08") {
+      if (!(cfg.cursoCab !== undefined && cfg.cursoCab > 0)) {
+        lista.push("Informar o curso do cabeçote Z (mm).");
+      }
+    }
+    if (maqAtual.perfil === "STAR_G266") {
+      if (cfg.ladoBedameK !== "0" && cfg.ladoBedameK !== "-17") {
+        lista.push("Escolher o lado do bedame (K = 0 direito ou K = -17 esquerdo).");
+      }
+    }
+    if (maqAtual.canais >= 2) {
+      if (!(cfg.pega2Maq !== undefined && cfg.pega2Maq > 0)) {
+        lista.push("Informar a distância da pega do contrafuso (mm).");
+      }
+    }
+    if (maqAtual.perfil === "SIEMENS_TND180") {
+      const tTope = cfg.estTope !== undefined ? Math.round(cfg.estTope) : 0;
+      const tBed = cfg.estBedame !== undefined ? Math.round(cfg.estBedame) : 0;
+      if (!(tTope >= 1 && tTope <= 12)) lista.push("Informar a estação do tope R2 (1 a 12).");
+      if (!(tBed >= 1 && tBed <= 12)) lista.push("Informar a estação do bedame R3 (1 a 12).");
+      if (tTope >= 1 && tBed >= 1 && tTope === tBed) {
+        lista.push("Estação do tope (R2) e do bedame (R3) não podem ser iguais.");
+      }
+    }
+    const origs = cfg.origens || [];
+    ops.forEach((o, idx) => {
+      if (!o.ativo) return;
+      const T = TM_TIPOS[o.tipo];
+      if (maqAtual.perfil === "SIEMENS_TND180") {
+        const og = origs[(o.orig || 1) - 1] || origs[0];
+        if (o.cab === "H2" || og?.fuso === "contrafuso") {
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): TND 180 só tem 1 canal — mudar de H2/contrafuso para H1.`, "cab");
+        }
+      }
+      if (maqAtual.id === "INDEX_ABC") {
+        const f = (o.ferr || "").trim().toUpperCase();
+        if (!/^T[123]\d{5}$/.test(f)) {
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar ferramenta Index 6 dígitos (ex.: T201021 no carro 2, T101011 no carro 1, T301031 no carro 3).`, "ferr");
+        } else {
+          const carro = Number(f[1]);
+          const pos = parseInt(f.slice(2, 4), 10);
+          if (o.cab === "H2" && carro !== 3) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): operação no H2 da Index ABC usa carro 3 (T3xxxxx).`, "ferr");
+          } else if ((o.cab || "H1") === "H1" && carro === 3) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): carro 3 (T3xxxxx) é para H2; no H1 usar carro 2 (T2xxxxx) ou carro 1 (T1xxxxx).`, "ferr");
+          } else if (carro === 1 && (pos === 7 || pos === 8)) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posições 07 e 08 do carro 1 são reservadas (descarga/síncrono).`, "ferr");
+          } else if (carro === 2 && o.tipo !== "corte" && pos === 5) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posição 05 do carro 2 é reservada (tope/alimentação).`, "ferr");
+          }
+        }
+      }
+      if (T.params.some((pr) => pr.k === "apz")) {
+        if (o.p.apz === undefined || isNaN(o.p.apz) || o.p.apz < 0) {
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar folga Z no início do ciclo (mm ≥ 0).`, "apz");
+        }
+      }
+    });
+    return { pendenciasMaquina: lista, opPendencias: porOp };
+  }, [maqAtual, bD, cfg.cursoCab, cfg.ladoBedameK, cfg.pega2Maq, cfg.estTope, cfg.estBedame, cfg.origens, ops]);
+  const montarCfgMaq = (): StarGerarCfg => ({
+    nome: cfg.nome,
+    bD,
+    rpmMax: cfg.rpmMax,
+    material: cfg.material,
+    origens: cfg.origens,
+    zero: partZero,
+    maqId: maqAtual.id,
+    pega2: maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? cfg.pega2Maq : cfg.pega2,
+    cursoCab: cfg.cursoCab,
+    ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
+    estTope: cfg.estTope,
+    estBedame: cfg.estBedame,
+  });
   const gerar = () => {
-    if (!geo) return;
+    if (!geo || barraBloqueio) return;
+    if (
+      maqAtual.status === "EM CADASTRO" ||
+      (maqAtual.id !== "TBSY" &&
+        maqAtual.perfil !== "STAR_18iTB" &&
+        maqAtual.perfil !== "STAR_G266" &&
+        maqAtual.perfil !== "SIEMENS_TND180" &&
+        maqAtual.id !== "INDEX_ABC")
+    ) {
+      setAvisoMaq("O gerador desta máquina ainda está em construção (DNA em validação). Por enquanto só a Ergomat TBSy gera programa.");
+      return;
+    }
+    if (pendenciasMaquina.length > 0) {
+      setMostrarPend(true);
+      return;
+    }
+    setMostrarPend(false);
+    if (
+      maqAtual.perfil === "STAR_18iTB" ||
+      maqAtual.perfil === "STAR_G266" ||
+      maqAtual.perfil === "SIEMENS_TND180" ||
+      maqAtual.id === "INDEX_ABC"
+    ) {
+      const gerFn =
+        maqAtual.perfil === "STAR_G266"
+          ? tmGerarStarG266
+          : maqAtual.perfil === "SIEMENS_TND180"
+            ? tmGerarSiemensTND180
+            : maqAtual.id === "INDEX_ABC"
+              ? tmGerarIndexABC
+              : tmGerarStar18iTB;
+      const res = gerFn(ops as unknown as StarTMOp[], geo as unknown as StarTMGeo, montarCfgMaq());
+      if (res.erro) {
+        setAvisoMaq(res.erro);
+        return;
+      }
+      setAvisoMaq("");
+      onGerar(res);
+      return;
+    }
+    setAvisoMaq("");
     onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
     if (!aoVivo || !geo) return;
-    const t = setTimeout(() => onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero }), true), 400);
+    if (pendenciasMaquina.length > 0) return;
+    const t = setTimeout(() => {
+      if (
+        maqAtual.perfil === "STAR_18iTB" ||
+        maqAtual.perfil === "STAR_G266" ||
+        maqAtual.perfil === "SIEMENS_TND180" ||
+        maqAtual.id === "INDEX_ABC"
+      ) {
+        const gerFn =
+          maqAtual.perfil === "STAR_G266"
+            ? tmGerarStarG266
+            : maqAtual.perfil === "SIEMENS_TND180"
+              ? tmGerarSiemensTND180
+              : maqAtual.id === "INDEX_ABC"
+                ? tmGerarIndexABC
+                : tmGerarStar18iTB;
+        const res = gerFn(ops as unknown as StarTMOp[], geo as unknown as StarTMGeo, montarCfgMaq());
+        if (!res.erro) onGerar(res, true);
+        return;
+      }
+      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero }), true);
+    }, 400);
     return () => clearTimeout(t);
-  }, [ops, cfg, bD, geo, aoVivo, partZero]);
+  }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina]);
   // arrastar operação para cima / para baixo na árvore
   const soltarEm = (alvoId: string) => {
     if (!arrastando || arrastando === alvoId) return;
@@ -4222,17 +4483,138 @@ export const PainelPrograma: React.FC<{
       <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-[#0d0d14]">
         <div className="text-sm font-bold text-emerald-400">▶ Programa da peça</div>
         <div className="flex items-center gap-2">
-          <select value={cfg.maq} onChange={(e) => setCfg({ ...cfg, maq: e.target.value })} className={inp}>
-            <option value="TBSY">Ergomat TBSy 60</option>
-            <option value="X" disabled>Star SR38 (em cadastro)</option>
-            <option value="Y" disabled>Citizen (em cadastro)</option>
-            <option value="Z" disabled>Index ABC (em cadastro)</option>
+          <select value={cfg.maq} onChange={(e) => { const v = e.target.value; setCfg((c) => ({ ...c, maq: v })); }} className={inp}>
+            {MAQUINAS_DNA.map((m) => {
+              const excede = m.diamMaxBarra !== undefined && bD > m.diamMaxBarra + 1e-9;
+              return (
+                <option key={m.id} value={m.id} disabled={excede}>
+                  {m.nome}
+                  {m.status === "EM CADASTRO" ? " (em cadastro)" : ""}
+                  {excede ? ` — Ø barra ${tmFmt(bD)} > máx ${m.diamMaxBarra}` : m.diamMaxBarra === undefined ? " (Ø máx a confirmar)" : ""}
+                </option>
+              );
+            })}
           </select>
           <button onClick={onClose} className="text-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded border border-zinc-700" title="Fechar o painel e voltar aos programas">Programas ✕</button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {/* MÁQUINA ESCOLHIDA NO INÍCIO */}
+        <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/15 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-bold text-emerald-300 flex flex-wrap items-center gap-1.5">
+              <span>Em qual máquina esta peça vai ser feita?</span>
+              <span className="text-white">{maqAtual.nome}</span>
+              <span className={"text-[9px] font-bold px-1.5 py-0.5 rounded border " + (maqAtual.status === "PRONTA" ? "bg-emerald-600/30 text-emerald-300 border-emerald-500/50" : "bg-amber-600/20 text-amber-300 border-amber-500/40")}>
+                {maqAtual.status}
+              </span>
+            </div>
+            <button
+              onClick={() => setMostrarPerguntaMaq((v) => !v)}
+              className="text-[10px] text-zinc-400 hover:text-white px-1.5 py-0.5 rounded border border-zinc-700 shrink-0"
+            >
+              {mostrarPerguntaMaq ? "Recolher" : "Trocar"}
+            </button>
+          </div>
+          {mostrarPerguntaMaq && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-2 max-h-56 overflow-y-auto pr-0.5">
+              {MAQUINAS_DNA.map((m) => {
+                const sel = cfg.maq === m.id;
+                const excede = m.diamMaxBarra !== undefined && bD > m.diamMaxBarra + 1e-9;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={excede}
+                    onClick={() => { if (!excede) setCfg((c) => ({ ...c, maq: m.id })); }}
+                    className={
+                      "flex items-center justify-between gap-2 px-2 py-1.5 rounded border text-left transition " +
+                      (excede
+                        ? "opacity-45 cursor-not-allowed bg-zinc-950/40 border-zinc-800/60 text-zinc-500"
+                        : sel
+                          ? "bg-emerald-900/40 border-emerald-400 text-white"
+                          : "bg-zinc-950/70 border-zinc-800 hover:border-zinc-600 text-zinc-300")
+                    }
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-bold truncate">{m.nome}</div>
+                      <div className="text-[10px] text-zinc-400 truncate">
+                        {m.comando} · {excede ? <span className="text-red-400 font-semibold">Ø barra {tmFmt(bD)} &gt; máx {m.diamMaxBarra}</span> : m.diamMaxBarra !== undefined ? `Ø máx ${m.diamMaxBarra}mm` : "Ø máx a confirmar"}
+                      </div>
+                    </div>
+                    <span className={"text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 border " + (excede ? "bg-red-950/60 text-red-300 border-red-700/60" : m.status === "PRONTA" ? "bg-emerald-600/30 text-emerald-300 border-emerald-500/50" : "bg-amber-600/20 text-amber-300 border-amber-500/40")}>
+                      {excede ? `Ø > ${m.diamMaxBarra}` : m.status}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {maqAtual.id !== "TBSY" && maqAtual.status === "PRONTA" && (
+            <div className="mt-2 pt-2 border-t border-emerald-900/50 flex flex-wrap items-center gap-3 text-[11px]">
+              {(maqAtual.perfil === "STAR_G266" || maqAtual.id === "STAR_SR20J_N08") && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Curso cabeçote Z (mm)</span>
+                  <TMOptNum
+                    v={cfg.cursoCab}
+                    set={(n) => setCfg((c) => ({ ...c, cursoCab: n }))}
+                    placeholder="ex: 45"
+                    cls={inp + " w-20 " + (!(cfg.cursoCab !== undefined && cfg.cursoCab > 0) ? "border-amber-400 bg-amber-950/30" : "")}
+                  />
+                </label>
+              )}
+              {maqAtual.perfil === "STAR_G266" && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Lado bedame (K)</span>
+                  <select
+                    value={cfg.ladoBedameK || ""}
+                    onChange={(e) => setCfg((c) => ({ ...c, ladoBedameK: e.target.value as "" | "0" | "-17" }))}
+                    className={inp + " " + (cfg.ladoBedameK !== "0" && cfg.ladoBedameK !== "-17" ? "border-amber-400 bg-amber-950/30" : "")}
+                  >
+                    <option value="">Escolher…</option>
+                    <option value="0">0 (direito)</option>
+                    <option value="-17">-17 (esquerdo)</option>
+                  </select>
+                </label>
+              )}
+              {maqAtual.canais >= 2 && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Pega contrafuso (mm)</span>
+                  <TMOptNum
+                    v={cfg.pega2Maq}
+                    set={(n) => setCfg((c) => ({ ...c, pega2Maq: n, ...(n !== undefined && n > 0 ? { pega2: n } : {}) }))}
+                    placeholder="ex: 10"
+                    cls={inp + " w-20 " + (!(cfg.pega2Maq !== undefined && cfg.pega2Maq > 0) ? "border-amber-400 bg-amber-950/30" : "")}
+                  />
+                </label>
+              )}
+              {maqAtual.perfil === "SIEMENS_TND180" && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Estação tope R2</span>
+                    <TMOptNum
+                      v={cfg.estTope}
+                      set={(n) => setCfg((c) => ({ ...c, estTope: n }))}
+                      placeholder="1-12"
+                      cls={inp + " w-16 " + (!(cfg.estTope !== undefined && cfg.estTope >= 1 && cfg.estTope <= 12) || (cfg.estBedame !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30" : "")}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Estação bedame R3</span>
+                    <TMOptNum
+                      v={cfg.estBedame}
+                      set={(n) => setCfg((c) => ({ ...c, estBedame: n }))}
+                      placeholder="1-12"
+                      cls={inp + " w-16 " + (!(cfg.estBedame !== undefined && cfg.estBedame >= 1 && cfg.estBedame <= 12) || (cfg.estTope !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30" : "")}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* PEÇA E BRUTO */}
         <div className="rounded-lg border border-zinc-800 p-2">
           <div className="flex items-center justify-between mb-1">
@@ -4335,8 +4717,8 @@ export const PainelPrograma: React.FC<{
             <span className="text-zinc-400">dist. do corte</span>{num(cfg.saida, (n) => setCfg({ ...cfg, saida: n }), 0.5, "w-14")}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            {sw(cfg.l2, () => setCfg({ ...cfg, l2: !cfg.l2 }), "Lado 2")}
-            <span className="text-zinc-400">contrafuso (T1): pega</span>{num(cfg.pega2, (n) => setCfg({ ...cfg, pega2: n }), 0.5, "w-14")}
+            {sw(cfg.l2, () => setCfg((c) => ({ ...c, l2: !c.l2 })), "Lado 2")}
+            <span className="text-zinc-400">contrafuso (T1): pega</span>{num(cfg.pega2, (n) => setCfg((c) => ({ ...c, pega2: n, ...(maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? { pega2Maq: n > 0 ? n : undefined } : {}) })), 0.5, "w-14")}
           </div>
         </div>
 
@@ -4369,6 +4751,13 @@ export const PainelPrograma: React.FC<{
               const T = TM_TIPOS[o.tipo];
               const aberto = aberta === o.id;
               const escolhendo = regiaoSel && regiaoSel.opId === o.id;
+              const barraInfo = TM_OPS_INT_BARRA.includes(o.tipo) ? tmCalcMaxBarra(o, geo) : null;
+              const barraExcedida = !!barraInfo && (o.p.bm ?? 0) > 0 && (o.p.bm ?? 0) > barraInfo.dMax + 1e-9;
+              const pendOp = opPendencias[o.id] || [];
+              const temPendOp = o.ativo && pendOp.length > 0;
+              const pendFerr = temPendOp && pendOp.some((x) => x.campo === "ferr");
+              const pendCab = temPendOp && pendOp.some((x) => x.campo === "cab");
+              const pendApz = temPendOp && pendOp.some((x) => x.campo === "apz");
               return (
                 <div
                   key={o.id}
@@ -4378,17 +4767,22 @@ export const PainelPrograma: React.FC<{
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => soltarEm(o.id)}
                   onDragEnd={() => setArrastando(null)}
-                  className={"rounded-lg border " + (arrastando && arrastando !== o.id ? "border-dashed " : "") + (aberto || escolhendo ? "border-zinc-500 bg-zinc-900" : "border-zinc-800 bg-zinc-900/50") + (o.ativo ? "" : " opacity-50") + (arrastando === o.id ? " opacity-40" : "")}
+                  className={"rounded-lg border " + (arrastando && arrastando !== o.id ? "border-dashed " : "") + (barraExcedida ? "border-red-500/80 " : temPendOp ? "border-amber-400/80 " : aberto || escolhendo ? "border-zinc-500 " : "border-zinc-800 ") + (aberto || escolhendo ? "bg-zinc-900" : "bg-zinc-900/50") + (o.ativo ? "" : " opacity-50") + (arrastando === o.id ? " opacity-40" : "")}
                   title="Arraste para mudar a ordem"
                 >
                   <div className="flex items-center gap-2 px-2 py-1.5">
                     <input type="checkbox" checked={o.ativo} onChange={(e) => setOp(o.id, { ativo: e.target.checked })} title="Usar esta operação" />
                     <span className="w-3 h-3 rounded-full shrink-0" style={{ background: o.cor }} />
                     <button onClick={() => setAberta(aberto ? null : o.id)} className="flex-1 min-w-0 text-left">
-                      <div className="text-xs font-bold truncate">{i + 1}. {T.nome} <span className="text-[9px] text-zinc-500">{T.grupo}</span></div>
+                      <div className="text-xs font-bold truncate flex items-center gap-1.5">
+                        <span>{i + 1}. {T.nome}</span>
+                        <span className="text-[9px] text-zinc-500">{T.grupo}</span>
+                        {barraExcedida && <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-red-950 text-red-300 border border-red-500/60">Barra &gt; furo</span>}
+                        {temPendOp && <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-500/60">Pendência</span>}
+                      </div>
                       <div className="text-[10px] text-zinc-400 truncate">{textoRegiao(o)}</div>
                     </button>
-                    <input value={o.ferr} onChange={(e) => setOp(o.id, { ferr: e.target.value.toUpperCase() })} className={inp + " w-16 text-amber-300"} title="Ferramenta" />
+                    <input value={o.ferr} onChange={(e) => setOp(o.id, { ferr: e.target.value.toUpperCase() })} className={inp + " w-16 text-amber-300 " + (pendFerr ? "border-amber-400 bg-amber-950/40" : "")} title={pendFerr ? "Informar código da ferramenta no formato desta máquina (ex: T201021)" : "Ferramenta"} />
                     {T.ciclo && (
                       T.ciclos ? (
                         <select value={o.ciclo ? o.cicloSel || T.ciclos[0] : ""} onChange={(e) => { const v = e.target.value; setOp(o.id, v ? { ciclo: true, cicloSel: v } : { ciclo: false }); }} className={"text-[10px] font-bold px-1 py-0.5 rounded border bg-zinc-950 " + (o.ciclo ? "border-cyan-500 text-cyan-300" : "border-zinc-700 text-zinc-500")} title="Escolha o ciclo desta operação (os campos mudam conforme o ciclo)">
@@ -4401,7 +4795,7 @@ export const PainelPrograma: React.FC<{
                         </button>
                       )
                     )}
-                    <button onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (o.cab === "H2" ? "border-purple-500 text-purple-300" : "border-sky-600 text-sky-300")} title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)">{o.cab || "H1"}</button>
+                    <button onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300" : o.cab === "H2" ? "border-purple-500 text-purple-300" : "border-sky-600 text-sky-300")} title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)">{o.cab || "H1"}</button>
                     <button onClick={() => { const n = (cfg.origens || []).length || 1; setOp(o.id, { orig: ((o.orig || 1) % n) + 1 }); }} className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-cyan-700 text-cyan-300 hover:border-cyan-500" title="Origem (zero peça) desta operação — clique para trocar. Configure na seção ORIGENS">{((cfg.origens || [])[(o.orig || 1) - 1] || { g: "G54" }).g}</button>
                     <button
                       onClick={() => {
@@ -4464,12 +4858,36 @@ export const PainelPrograma: React.FC<{
                               <select value={o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def} onChange={(e) => { const v = Number(e.target.value); setOp(o.id, { p: { ...o.p, [pr.k]: v, ...(pr.k === "pas" ? { ang: TM_PASTILHA_ANG[v] } : {}) } }); }} className={inp + " w-28"}>
                                 {pr.opcoes.map((t, k) => <option key={k} value={k}>{t}</option>)}
                               </select>
+                            ) : pr.k === "apz" && maqAtual.id !== "TBSY" ? (
+                              <TMOptNum
+                                v={o.p.apz}
+                                set={(n) => {
+                                  const np = { ...o.p };
+                                  if (n === undefined) delete np.apz;
+                                  else np.apz = n;
+                                  setOp(o.id, { p: np });
+                                }}
+                                cls={inp + " w-16 " + (pendApz ? "border-amber-400 bg-amber-950/40" : "")}
+                              />
                             ) : (
                               num(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def, (n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } }), pr.step, "w-16")
                             )}
                           </label>
                         ))}
                       </div>
+                      {barraInfo && (
+                        <div className={"text-[11px] mt-1.5 px-2 py-1 rounded border " + (barraExcedida ? "bg-red-950/60 border-red-500/70 text-red-200" : "bg-zinc-950/80 border-zinc-800 text-zinc-300")}>
+                          <div>
+                            Ø máx. de barra p/ esta seleção: <span className="font-bold text-white">{tmFmt2(barraInfo.dMax)} mm</span>{" "}
+                            <span className="text-zinc-400">(menor Ø interno {tmFmt2(barraInfo.dMinInt)} − folga {tmFmt2(barraInfo.folga)})</span>
+                          </div>
+                          {barraExcedida && (
+                            <div className="text-red-400 font-bold mt-0.5">
+                              Barra maior que o furo na operação {i + 1}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {(T.ciclo || T.ciclos) && <div className="text-[10px] text-cyan-300/80 mt-1">{TM_CICLO_DICA[o.ciclo ? o.cicloSel || T.ciclo : "LINHA"] || ""}</div>}
                     </div>
                   )}
@@ -4505,13 +4923,43 @@ export const PainelPrograma: React.FC<{
         </div>
       </div>
 
+      {maqAtual.id === "INDEX_ABC" && (
+        <div className="px-3 py-1.5 border-t border-cyan-800/70 bg-cyan-950/60 text-cyan-200 text-xs font-semibold">
+          Index ABC: gerador baseado em 1 peça real (PC11166) — conferir na máquina na primeira vez
+        </div>
+      )}
+      {pendenciasMaquina.length > 0 && (
+        <div className={"px-3 py-1.5 border-t text-xs " + (mostrarPend ? "border-amber-500 bg-amber-950/90 text-amber-100" : "border-amber-800/70 bg-amber-950/50 text-amber-200")}>
+          <div className="font-bold text-amber-300">PENDÊNCIAS DA MÁQUINA ({pendenciasMaquina.length}) — preencha os campos em amarelo antes de gerar:</div>
+          <ul className="list-disc pl-4 mt-0.5 space-y-0.5 text-[11px] max-h-24 overflow-y-auto">
+            {pendenciasMaquina.map((msg, idx) => (
+              <li key={idx}>{msg}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {barraBloqueio && (
+        <div className="px-3 py-1.5 border-t border-red-900/80 bg-red-950/70 text-red-200 text-xs font-bold">
+          Barra maior que o furo na operação {barraBloqueio.num}
+        </div>
+      )}
+      {avisoMaq && (
+        <div className="px-3 py-1.5 border-t border-amber-800/80 bg-amber-950/70 text-amber-200 text-xs font-semibold flex items-center justify-between gap-2">
+          <span>{avisoMaq}</span>
+          <button onClick={() => setAvisoMaq("")} className="text-amber-300 hover:text-white text-[11px] px-1">✕</button>
+        </div>
+      )}
       <div className="px-3 py-2 border-t border-zinc-800 flex items-center justify-between gap-2 bg-[#0d0d14]">
         <label className="flex items-center gap-1.5 text-[11px] text-zinc-300" title="Cada mudança já refaz o programa no CANAL 1 e o simulador mostra na hora">
           <input type="checkbox" checked={aoVivo} onChange={(e) => setAoVivo(e.target.checked)} />
           Ao vivo
         </label>
         <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>
-        <button disabled={!geo} onClick={gerar} className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (geo ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-zinc-800 text-zinc-500")}>
+        <button
+          disabled={!geo || !!barraBloqueio}
+          onClick={gerar}
+          className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (!geo || barraBloqueio ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-500 text-white")}
+        >
           ✔ Gerar e ver o programa
         </button>
       </div>

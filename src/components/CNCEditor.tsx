@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from "react";
-import { Search, Copy, CheckCircle2, Trash2, Calculator, Minus, Plus } from "lucide-react";
+import { Search, Copy, CheckCircle2, Trash2, Calculator, Minus, Plus, Download } from "lucide-react";
 
 interface CNCEditorProps {
   paneIndex: number;
@@ -11,6 +11,7 @@ interface CNCEditorProps {
   onSetFocus: () => void;
   isHighContrast: boolean;
   fileName?: string;
+  onDownload?: () => void;
   onToggleFloatingCalculator?: () => void;
   isFloatingCalculatorOpen?: boolean;
   allEditorTexts?: string[];
@@ -31,6 +32,7 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
   onSetFocus,
   isHighContrast,
   fileName,
+  onDownload,
   onToggleFloatingCalculator,
   isFloatingCalculatorOpen,
   allEditorTexts,
@@ -615,6 +617,20 @@ export const CNCEditor: React.FC<CNCEditorProps> = ({
               <Plus className="w-2.5 h-2.5" />
             </button>
           </div>
+
+          {/* Download Button */}
+          {onDownload && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDownload();
+              }}
+              title={fileName ? `Baixar ${fileName}` : "Baixar este arquivo"}
+              className={`p-1 rounded hover:bg-zinc-800 transition ${isHighContrast ? 'text-black' : 'text-zinc-400 hover:text-emerald-400'}`}
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {/* Copy Button */}
           <button

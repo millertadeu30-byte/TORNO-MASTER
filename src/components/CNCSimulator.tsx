@@ -847,43 +847,161 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   // Dynamic G-Code parsing & Rendering
   function parseGCode(): { plotList: SimulationPlotItem[]; activeLineIndexes: number[]; error?: string } {
     try {
+    const evalArith = (exprRaw: string, vars: Record<number, number>): number | null => {
+      let expr = exprRaw.trim().replace(/\[/g, "(").replace(/\]/g, ")");
+      let missingVar = false;
+      expr = expr.replace(/#(\d+)/g, (_m, idStr) => {
+        const v = vars[parseInt(idStr, 10)];
+        if (v === undefined || !isFinite(v)) {
+          missingVar = true;
+          return "__UNDEF__";
+        }
+        return String(v);
+      });
+      if (missingVar || !expr) return null;
+      let pos = 0;
+      const skipWs = () => { while (pos < expr.length && /\s/.test(expr[pos])) pos++; };
+      const parseExpr = (): number | null => {
+        let left = parseTerm();
+        if (left === null) return null;
+        while (true) {
+          skipWs();
+          const ch = expr[pos];
+          if (ch === "+" || ch === "-") {
+            pos++;
+            const right = parseTerm();
+            if (right === null) return null;
+            left = ch === "+" ? left + right : left - right;
+          } else break;
+        }
+        return left;
+      };
+      const parseTerm = (): number | null => {
+        let left = parseFactor();
+        if (left === null) return null;
+        while (true) {
+          skipWs();
+          const ch = expr[pos];
+          if (ch === "*" || ch === "/") {
+            pos++;
+            const right = parseFactor();
+            if (right === null) return null;
+            if (ch === "/" && Math.abs(right) < 1e-12) return null;
+            left = ch === "*" ? left * right : left / right;
+          } else break;
+        }
+        return left;
+      };
+      const parseFactor = (): number | null => {
+        skipWs();
+        if (pos >= expr.length) return null;
+        const ch = expr[pos];
+        if (ch === "+" || ch === "-") {
+          pos++;
+          const val = parseFactor();
+          return val === null ? null : (ch === "-" ? -val : val);
+        }
+        if (ch === "(") {
+          pos++;
+          const val = parseExpr();
+          skipWs();
+          if (val === null || expr[pos] !== ")") return null;
+          pos++;
+          return val;
+        }
+        const slice = expr.slice(pos);
+        const mNum = slice.match(/^(\d+(?:\.\d*)?|\.\d+)/);
+        if (!mNum) return null;
+        pos += mNum[1].length;
+        const val = parseFloat(mNum[1]);
+        return isFinite(val) ? val : null;
+      };
+      const res = parseExpr();
+      skipWs();
+      if (res === null || pos !== expr.length || !isFinite(res)) return null;
+      return res;
+    };
+
+    const resolveMacros = (txt: string, vars: Record<number, number>): string => {
+      let s = txt;
+      let changed = true;
+      let guard = 0;
+      while (changed && guard++ < 10) {
+        changed = false;
+        s = s.replace(/\[([^\[\]]+)\]/g, (full, inner) => {
+          const val = evalArith(inner, vars);
+          if (val === null) return full;
+          changed = true;
+          return String(Math.round(val * 100000) / 100000);
+        });
+      }
+      s = s.replace(/#(\d+)/g, (full, idStr) => {
+        const v = vars[parseInt(idStr, 10)];
+        if (v === undefined || !isFinite(v)) return full;
+        return String(Math.round(v * 100000) / 100000);
+      });
+      return s;
+    };
+
+    let maxPartR = 25;
+    let minPartZ = 0;
+    let maxPartZ = 0;
+    let hasPartZ = false;
+    if (partLayers) {
+      for (const L of partLayers) {
+        for (const c of L.curves) {
+          for (const pt of c) {
+            if (isFinite(pt.x)) maxPartR = Math.max(maxPartR, Math.abs(pt.x) / 2);
+            if (isFinite(pt.z)) {
+              if (!hasPartZ) { minPartZ = pt.z; maxPartZ = pt.z; hasPartZ = true; }
+              else { minPartZ = Math.min(minPartZ, pt.z); maxPartZ = Math.max(maxPartZ, pt.z); }
+            }
+          }
+        }
+      }
+    }
+    const looksSwiss = /\bG266\b|\bG125\b|\bG300\b|\bG120\b|\/M25\b|\(HEAD\s*[12]\)/i.test(gcodeText) ||
+      (hasPartZ && minPartZ >= -2 && maxPartZ > 2 && /\bG0\s*Z-/i.test(gcodeText));
+    const safeR = maxPartR + 5;
+    const safeZ = hasPartZ ? (looksSwiss ? minPartZ - 10 : maxPartZ + 10) : (looksSwiss ? -10 : 10);
+
     const lines = gcodeText.split("\n");
     let currentGMode = 0; // Standard travel G00
     let lastG71_Line1: { u: number; r: number; lineIndex: number } | null = null;
     let lastG74_Line1: { r: number; lineIndex: number } | null = null;
     let commands: GCodeCommand[] = [];
     let skipTarget: number | null = null;
+    const vars: Record<number, number> = {};
 
     // First, pass to gather clean commands
     lines.forEach((lineText, idx) => {
       let trimmed = lineText.trim();
-      if (trimmed.startsWith(";")) return; // Skip complete comment lines starting with semicolon
-      let clean = trimmed.replace(/\(.*?\)/g, "").trim(); // Remove brackets comments
-      if (!clean) return;
+      if (!trimmed || trimmed.startsWith(";")) return; // Skip complete comment lines starting with semicolon
+      let clean = trimmed.replace(/\(.*?\)/g, "").replace(/;.*$/, "").trim(); // Remove comments
+      clean = clean.replace(/^\/\d*\s*/, "").trim(); // Ignore optional skip prefix / or /1
+      if (!clean || clean === "%") return;
 
-      // Check if we are currently skipping because of a previous GOTO
+      // Check if we are currently skipping because of a previous unconditional GOTO
       if (skipTarget !== null) {
-        // Look for the sequence block starting with N target
-        const matchN = clean.match(/N\s*(\d+)/i);
+        const matchN = clean.match(/^N\s*(\d+)/i);
         if (matchN && parseInt(matchN[1], 10) === skipTarget) {
-          // Found target block! Stop skipping and process this N line
           skipTarget = null;
         } else {
-          // Still skipping
           return;
         }
       }
 
-      // Check if this line itself triggers a GOTO jump
-      const gotoMatch = clean.match(/GOTO\s*(\d+)/i);
+      // Never trigger GOTO skip from conditional IF[...]GOTO or Siemens GOTOB/GOTOF
+      if (/^IF\b/i.test(clean) || /^GOTOB\b/i.test(clean) || /^GOTOF\b/i.test(clean)) return;
+
+      // Unconditional GOTO jump only
+      const gotoMatch = clean.match(/^GOTO\s*(\d+)/i);
       if (gotoMatch) {
         const targetNum = parseInt(gotoMatch[1], 10);
-        // Ensure the target N exists ahead in the program so we don't skip forever on a typo
         let targetExists = false;
         for (let j = idx + 1; j < lines.length; j++) {
-          const checkTrimmed = lines[j].trim();
-          const checkClean = checkTrimmed.replace(/\(.*?\)/g, "").trim();
-          const checkN = checkClean.match(/N\s*(\d+)/i);
+          const checkClean = lines[j].trim().replace(/\(.*?\)/g, "").replace(/;.*$/, "").replace(/^\/\d*\s*/, "").trim();
+          const checkN = checkClean.match(/^N\s*(\d+)/i);
           if (checkN && parseInt(checkN[1], 10) === targetNum) {
             targetExists = true;
             break;
@@ -891,36 +1009,92 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         }
         if (targetExists) {
           skipTarget = targetNum;
-          return; // Skip the GOTO command line itself
+          return;
         }
       }
 
-      const gMatches = clean.match(/G\s*(\d+)/g);
+      // G266 Star header: populate #531 (A), #530/#533 (W), #528 (B) and never draw
+      if (/\bG266(?![0-9])/i.test(clean)) {
+        const resolved266 = resolveMacros(clean, vars);
+        const mA = resolved266.match(/A\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+        const mW = resolved266.match(/W\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+        const mB = resolved266.match(/B\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+        if (mA) vars[531] = parseFloat(mA[1]);
+        if (mW) {
+          vars[530] = parseFloat(mW[1]);
+          vars[533] = parseFloat(mW[1]);
+        }
+        if (mB) vars[528] = parseFloat(mB[1]);
+        return;
+      }
+
+      // Macro variable assignment (#nnn = expr)
+      const macroAssign = clean.match(/^#(\d+)\s*=\s*(.+)$/);
+      if (macroAssign) {
+        const val = evalArith(macroAssign[2], vars);
+        if (val !== null) vars[parseInt(macroAssign[1], 10)] = val;
+        return;
+      }
+
+      // Non-tool lines: Siemens R-vars, labels, O-prog, Index H-pressure, TRANS, MSG, ALIMENTACAO
+      if (
+        /^R\d+\s*=/i.test(clean) ||
+        /^[A-Z0-9_]+:$/.test(clean) ||
+        /^O\d+/i.test(clean) ||
+        /^H\d+\./i.test(clean) ||
+        /^TRANS\b/i.test(clean) ||
+        /^MSG\b/i.test(clean) ||
+        /^ALIMENTACAO/i.test(clean)
+      ) {
+        return;
+      }
+
+      // Dialect non-motion G-codes (read only, never draw)
+      if (/\bG0?(?:4|120|125|130|131|170|171|300|900|8100|8128|8129|8130|8131|8132|9590|9392|65)(?![0-9])/i.test(clean)) {
+        return;
+      }
+
+      // Resolve known macro variables & bracket expressions (unknown #vars stay untouched, never 0)
+      clean = resolveMacros(clean, vars);
+
+      // Pure M-only / T-only / S-only lines (no G, X, Z, U, W, N)
+      if (!/[GXZUWN]/i.test(clean)) return;
+
+      const isMachineRef = /\bG\s*(?:53|28)\b/i.test(clean);
+      const isG92Limit = /\bG\s*92\s*S/i.test(clean) || (/\bG\s*92(?![0-9])/i.test(clean) && !/[XZ]/i.test(clean));
+
+      const gMatches = clean.match(/G\s*(\d+)/gi);
       if (gMatches) {
         gMatches.forEach((gStr) => {
-          const num = parseInt(gStr.replace("G", "").trim(), 10);
-          if ([0, 1, 2, 3, 70, 71, 74, 75, 76, 80, 83, 84, 96, 97].includes(num)) {
+          const num = parseInt(gStr.replace(/G/i, "").trim(), 10);
+          if (num === 92 && isG92Limit) return;
+          if ([0, 1, 2, 3, 31, 32, 33, 70, 71, 74, 75, 76, 80, 83, 84, 92].includes(num)) {
             currentGMode = num;
           }
         });
       }
 
-      // Modifier ,R and ,C for chamfers/radii
+      // Modifier ,R and ,C for chamfers/radii and strip Siemens/Index named modifiers
       const commaRMatch = clean.match(/,R\s*(-?\d*\.?\d+)/i);
       const commaCMatch = clean.match(/,C\s*(-?\d*\.?\d+)/i);
-      const temp = clean.replace(/,[RC]\s*-?\d*\.?\d+/gi, "");
+      const temp = clean
+        .replace(/,[RC]\s*-?\d*\.?\d+/gi, "")
+        .replace(/\bLIMS\s*=\s*-?\d*\.?\d*/gi, "")
+        .replace(/\b(?:CHF|RND)\s*=\s*-?\d*\.?\d*/gi, "")
+        .replace(/\bS[14]?\s*=\s*-?\d*\.?\d*/gi, "")
+        .replace(/\bT\d+/gi, "");
 
-      const isG4Dwell = /G\s*0?4(?![0-9])/i.test(clean);
+      const isG4Dwell = /\bG\s*0?4(?![0-9])/i.test(clean);
 
-      const matchX = temp.match(/X\s*(-?\d*\.?\d+)/i);
-      const matchZ = temp.match(/Z\s*(-?\d*\.?\d+)/i);
-      const matchR = temp.match(/R\s*(-?\d*\.?\d+)/i);
-      const matchN = clean.match(/N\s*(\d+)/i);
-      const matchP = clean.match(/P\s*(\d+)/i);
-      const matchQ = clean.match(/Q\s*(\d+)/i);
-      const matchU = clean.match(/U\s*(-?\d*\.?\d+)/i);
-      const matchW = clean.match(/W\s*(-?\d*\.?\d+)/i);
-      const matchF = clean.match(/F\s*(-?\d*\.?\d+)/i);
+      const matchX = temp.match(/(?<![A-Z])X\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchZ = temp.match(/(?<![A-Z])Z\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchR = temp.match(/(?<![A-Z])R\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchN = clean.match(/(?<![A-Z])N\s*(\d+)/i);
+      const matchP = temp.match(/(?<![A-Z])P\s*(\d+)/i);
+      const matchQ = temp.match(/(?<![A-Z])Q\s*(\d+)/i);
+      const matchU = temp.match(/(?<![A-Z])U\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchW = temp.match(/(?<![A-Z])W\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchF = temp.match(/(?<![A-Z])F\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
 
       const cmd: GCodeCommand = {
         mode: currentGMode,
@@ -937,6 +1111,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         f: matchF ? parseFloat(matchF[1]) : null,
         text: clean,
         linhaOriginal: idx,
+        isMachineRef,
       };
 
       commands.push(cmd);
@@ -945,26 +1120,28 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     // Determine absolute coordinate paths (X represents Diameter, divide by 2 for radius)
     let cx = 0;
     let cz = 0;
-    let firstX = null;
-    let firstZ = null;
+    let firstX: number | null = null;
+    let firstZ: number | null = null;
+    let startsWithMachineRef = false;
 
-    // Spot first absolute position
     for (const cmd of commands) {
-      if (cmd.x !== null) {
-        firstX = cmd.x;
+      if (cmd.isMachineRef) {
+        if (firstX === null && firstZ === null) startsWithMachineRef = true;
+        continue;
       }
-      if (cmd.z !== null) {
-        firstZ = cmd.z;
-      }
+      if (cmd.x !== null && firstX === null) firstX = cmd.x;
+      if (cmd.z !== null && firstZ === null) firstZ = cmd.z;
       if (firstX !== null && firstZ !== null) break;
     }
 
-    cx = firstX !== null ? firstX / 2 : 0;
-    cz = firstZ !== null ? firstZ : 0;
+    cx = startsWithMachineRef ? safeR : (firstX !== null ? firstX / 2 : 0);
+    cz = startsWithMachineRef ? safeZ : (firstZ !== null ? firstZ : 0);
 
     const plotList: SimulationPlotItem[] = [];
     const activeLineIndexes: number[] = [];
     let skipUntil_N: number | null = null;
+    let g92Anchor: { x: number; z: number } | null = null;
+    let g92LastZ = cz;
 
     const renderStandardMove = (cmd: GCodeCommand, forceColor?: string, idOffset: number = 0, cmdIndex?: number) => {
       if (cmd.x !== null || cmd.z !== null) {
@@ -1059,6 +1236,40 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       if (skipUntil_N !== null) {
         if (cmd.n === skipUntil_N) {
           skipUntil_N = null;
+        }
+        continue;
+      }
+
+      if (cmd.mode !== 92) g92Anchor = null;
+
+      // G53 / G28 machine reference move: move cursor to safe point outside part, never draw or collide
+      if (cmd.isMachineRef) {
+        if (cmd.x !== null || cmd.u !== null) cx = safeR;
+        if (cmd.z !== null || cmd.w !== null) cz = safeZ;
+        if (cmd.x === null && cmd.u === null && cmd.z === null && cmd.w === null) {
+          cx = safeR;
+          cz = safeZ;
+        }
+        continue;
+      }
+
+      // G92 Sistema A threading cycle
+      if (cmd.mode === 92) {
+        if (!g92Anchor) {
+          g92Anchor = { x: cx, z: cz };
+          g92LastZ = cmd.z !== null ? cmd.z : cz;
+        }
+        if (cmd.x !== null) {
+          const px = cmd.x / 2;
+          const pz = cmd.z !== null ? cmd.z : g92LastZ;
+          g92LastZ = pz;
+          plotList.push({ type: "line", x1: g92Anchor.x, z1: g92Anchor.z, x2: px, z2: g92Anchor.z, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.001 });
+          plotList.push({ type: "line", x1: px, z1: g92Anchor.z, x2: px, z2: pz, color: "#ff8c00", linhaId: cmd.linhaOriginal + 0.002 });
+          plotList.push({ type: "line", x1: px, z1: pz, x2: g92Anchor.x, z2: pz, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.003 });
+          plotList.push({ type: "line", x1: g92Anchor.x, z1: pz, x2: g92Anchor.x, z2: g92Anchor.z, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.004 });
+          cx = g92Anchor.x;
+          cz = g92Anchor.z;
+          if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
         }
         continue;
       }
@@ -1282,7 +1493,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                     // TIPO II como na máquina: entra no rebaixo SEGUINDO o perfil (nunca mergulha reto nem passa por dentro da peça)
                     const nivelAnt = xp - sgn * absDepth;
                     let jj = -1;
-                    for (let k = 0; k < offPts.length - 1; k++) { if (za <= offPts[k].y + 1e-6 && za >= offPts[k + 1].y - 1e-6) { jj = k; break; } }
+                    for (let k = 0; k < offPts.length - 1; k++) {
+                      const zLo = Math.min(offPts[k].y, offPts[k + 1].y);
+                      const zHi = Math.max(offPts[k].y, offPts[k + 1].y);
+                      if (za >= zLo - 1e-6 && za <= zHi + 1e-6) { jj = k; break; }
+                    }
                     const acima = (px: number) => (isInternal ? px <= nivelAnt + 1e-6 : px >= nivelAnt - 1e-6);
                     const cam: { x: number; z: number }[] = [{ x: xp, z: za }];
                     let achou = false;
@@ -1309,8 +1524,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                     push(curX, curZ, xp, za, idx === 0 && Math.abs(za - startZ) < 1e-6 ? RAP : CUT);
                   }
                   push(xp, za, xp, zb, CUT);
+                  const zFrontDir = endZ >= startZ ? -1 : 1;
                   const rx = xp + sgn * retractR;
-                  const rz = zb + retractR;
+                  const rz = zb + zFrontDir * retractR;
                   push(xp, zb, rx, rz, RAP);
                   curX = rx;
                   curZ = rz;
@@ -1533,10 +1749,11 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
             let peckCount = 0;
 
             if (passCount > 1) {
+                const stepZDir = targetZ >= originalZ ? 1 : -1;
                 plotList.push({
                     type: "line",
                     x1: originalX,
-                    z1: currentZ + stepZ,
+                    z1: currentZ - stepZDir * stepZ,
                     x2: originalX,
                     z2: currentZ,
                     color: "#ff2a2a",
@@ -1567,28 +1784,30 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               // Micro-retract
               if ((plungeXDir < 0 && currentX > targetX) || (plungeXDir > 0 && currentX < targetX)) {
                 if (isSingleLineG75) {
+                    const zRetDir = targetZ >= originalZ ? -1 : 1;
+                    const rZ = currentZ + zRetDir * Math.abs(retractR);
                     plotList.push({
                       type: "line",
                       x1: currentX,
                       z1: currentZ,
                       x2: currentX,
-                      z2: currentZ + Math.abs(retractR),
+                      z2: rZ,
                       color: "#ff2a2a",
                       linhaId: stepId + 0.00002,
                     });
                     plotList.push({
                       type: "line",
                       x1: currentX,
-                      z1: currentZ + Math.abs(retractR),
+                      z1: rZ,
                       x2: originalX,
-                      z2: currentZ + Math.abs(retractR),
+                      z2: rZ,
                       color: "#ff2a2a",
                       linhaId: stepId + 0.00004,
                     });
                     plotList.push({
                       type: "line",
                       x1: originalX,
-                      z1: currentZ + Math.abs(retractR),
+                      z1: rZ,
                       x2: originalX,
                       z2: currentZ,
                       color: "#ff2a2a",
@@ -1621,28 +1840,30 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
             // Return plunge tool to outer clearance
             if (isSingleLineG75) {
+                const zRetDir = targetZ >= originalZ ? -1 : 1;
+                const rZ = currentZ + zRetDir * Math.abs(retractR);
                 plotList.push({
                   type: "line",
                   x1: targetX,
                   z1: currentZ,
                   x2: targetX,
-                  z2: currentZ + Math.abs(retractR),
+                  z2: rZ,
                   color: "#ff2a2a",
                   linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.008,
                 });
                 plotList.push({
                   type: "line",
                   x1: targetX,
-                  z1: currentZ + Math.abs(retractR),
+                  z1: rZ,
                   x2: originalX,
-                  z2: currentZ + Math.abs(retractR),
+                  z2: rZ,
                   color: "#ff2a2a",
                   linhaId: cmd.linhaOriginal + passCount * 0.01 + 0.009,
                 });
                 plotList.push({
                   type: "line",
                   x1: originalX,
-                  z1: currentZ + Math.abs(retractR),
+                  z1: rZ,
                   x2: originalX,
                   z2: currentZ,
                   color: "#ff2a2a",
@@ -1661,8 +1882,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               }
             }
 
-            if (stepZ === 0 || currentZ === targetZ) break;
-            currentZ = Math.max(currentZ - stepZ, targetZ);
+            if (stepZ === 0 || Math.abs(currentZ - targetZ) < 1e-4) break;
+            currentZ = targetZ >= originalZ ? Math.min(currentZ + stepZ, targetZ) : Math.max(currentZ - stepZ, targetZ);
             passCount++;
           }
 
@@ -1789,12 +2010,22 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         } else {
           let z = z0;
           let guardD = 0;
-          while (z > zf + 1e-6 && guardD++ < 500) {
-            const alvo = Math.max(zf, z - qmm);
-            if (z < z0 - 1e-6) seg(x0, z0, x0, z + 0.3, "#ff2a2a");
-            seg(x0, z < z0 - 1e-6 ? z + 0.3 : z0, x0, alvo, "#39ff14");
-            seg(x0, alvo, x0, z0, "#ff2a2a");
-            z = alvo;
+          if (zf >= z0) {
+            while (z < zf - 1e-6 && guardD++ < 500) {
+              const alvo = Math.min(zf, z + qmm);
+              if (z > z0 + 1e-6) seg(x0, z0, x0, z - 0.3, "#ff2a2a");
+              seg(x0, z > z0 + 1e-6 ? z - 0.3 : z0, x0, alvo, "#39ff14");
+              seg(x0, alvo, x0, z0, "#ff2a2a");
+              z = alvo;
+            }
+          } else {
+            while (z > zf + 1e-6 && guardD++ < 500) {
+              const alvo = Math.max(zf, z - qmm);
+              if (z < z0 - 1e-6) seg(x0, z0, x0, z + 0.3, "#ff2a2a");
+              seg(x0, z < z0 - 1e-6 ? z + 0.3 : z0, x0, alvo, "#39ff14");
+              seg(x0, alvo, x0, z0, "#ff2a2a");
+              z = alvo;
+            }
           }
         }
         cx = x0;
@@ -1802,7 +2033,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
         continue;
       }
-      renderStandardMove(cmd, undefined, 0, i);
+      renderStandardMove(cmd, cmd.mode === 32 || cmd.mode === 33 ? "#ff8c00" : undefined, 0, i);
     }
 
     return { plotList, activeLineIndexes };
@@ -1813,7 +2044,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   };
 
   // Lê o programa só quando o texto muda (antes relia a cada movimento do mouse/zoom = travava)
-  const { plotList, activeLineIndexes, error: parseError } = useMemo(() => parseGCode(), [gcodeText, simInvertZ]);
+  const { plotList, activeLineIndexes, error: parseError } = useMemo(() => parseGCode(), [gcodeText, simInvertZ, partLayers]);
   // COLISÃO: movimentos do programa (inclusive G00) que entram na fixação do lado ativo (+ folga)
   const fixHits = useMemo(() => {
     const zone = fixZones.find((f) => f.lado === fixLado);

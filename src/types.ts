@@ -37,6 +37,7 @@ export interface GCodeCommand {
   targetZ?: number | null;
   incX?: number;
   shiftZ?: number;
+  isMachineRef?: boolean;
 }
 
 export interface SimulationPlotItem {
