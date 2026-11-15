@@ -2610,6 +2610,7 @@ export default function App() {
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
+                      canalSim={activePaneIdx + 1}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2675,6 +2676,7 @@ export default function App() {
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
+                      canalSim={activePaneIdx + 1}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -4214,7 +4216,7 @@ function tmCalcMaxBarra(o: TMOp, geo: TMGeo | null): { dMax: number; dMinInt: nu
 const tmFmt2 = (n: number) => n.toFixed(2).replace(".", ",");
 
 export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string };
-export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number };
+export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number; gContra?: string[] };
 
 function sugerirFerrIndexABC(o: TMOp): string {
   if (o.cab === "H2") {
@@ -4284,6 +4286,7 @@ export const PainelPrograma: React.FC<{
       pega1: 15,
       l2: true,
       pega2: 10,
+      ini2: 0, // pega do contrafuso: começa a "ini2" mm da face cortada e vai até "pega2" mm
       origens: TM_ORIGENS_PADRAO as TMOrigem[],
       cursoCab: undefined as number | undefined,
       ladoBedameK: "" as "" | "0" | "-17",
@@ -4381,6 +4384,14 @@ export const PainelPrograma: React.FC<{
   const deslH1 = partZero.offsetZ;
   const zDisp = (z: number) => (sZ === 1 ? z : (geo ? geo.zFront - z + deslH1 : -z + deslH1));
   const zFromDisp = (zd: number) => (sZ === 1 ? zd : (geo ? geo.zFront - zd + deslH1 : -zd + deslH1));
+  // face do zero 1 (a ponta da peça que fica para fora e que o contrafuso pega) e o sentido para dentro da peça
+  // (funções, para só ler "geo" quando já existir)
+  const zPega2 = (mm: number) => {
+    if (!geo) return 0;
+    const zFace1 = Math.abs(zDisp(geo.zFront) - deslH1) <= Math.abs(zDisp(geo.zBack) - deslH1) ? geo.zFront : geo.zBack;
+    const dirDentro = Math.sign((zFace1 === geo.zFront ? geo.zBack : geo.zFront) - zFace1) || 1;
+    return zFace1 + dirDentro * mm; // mm medidos a partir da face do zero 1
+  };
   useEffect(() => { onSentidoZ(sZ); }, [sZ]);
   const bD = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
 
@@ -4443,15 +4454,34 @@ export const PainelPrograma: React.FC<{
     const lc = corteOp ? corteOp.p.larg : 3;
     const z: TMFixZone[] = [];
     if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD });
-    if (cfg.l2) z.push({ lado: 2, za: geo.zBack, zb: geo.zBack + cfg.pega2, d: geo.dTras });
-    onFix(sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) })));
-  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, bD, ops, sZ, deslH1]);
+    if (cfg.l2) z.push({ lado: 2, za: zPega2(Math.min(cfg.ini2 || 0, cfg.pega2)), zb: zPega2(cfg.pega2), d: bD });
+    const gC = (cfg.origens || []).filter((o) => o.fuso === "contrafuso").map((o) => o.g);
+onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))).map((q) => ({ ...q, gContra: gC })));
+  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, cfg.ini2, bD, ops, sZ, deslH1, cfg.origens]);
 
   // toque na peça (vem do simulador) vira região da operação escolhida
   useEffect(() => {
     if (!pick || !regiaoSel) return;
     const r = sZ === 1 ? pick.r : { ...pick.r, z: zFromDisp(pick.r.z), za: pick.r.za === undefined ? undefined : zFromDisp(pick.r.za), zb: pick.r.zb === undefined ? undefined : zFromDisp(pick.r.zb) };
     const sel = regiaoSel;
+    // ZERO DA ORIGEM POR CLIQUE: "__orig<k>" — o clique na peça define a face e o deslocamento da origem k (ex.: G55 contrafuso / Head 2)
+    if (sel.opId.startsWith("__orig") && geo) {
+      const k = parseInt(sel.opId.slice(6), 10);
+      primeiroRef.current = null;
+      const zc = r.z;
+      // qual face do desenho é a origem 1 (a que fica no zero do gráfico)
+      const frontEhOrig1 = Math.abs(zDisp(geo.zFront) - deslH1) <= Math.abs(zDisp(geo.zBack) - deslH1);
+      const nomeOutra = partZero.face === "direita" ? "esquerda" : "direita";
+      const faceFront = frontEhOrig1 ? partZero.face : nomeOutra;
+      const faceBack = frontEhOrig1 ? nomeOutra : partZero.face;
+      const dF = Math.abs(zc - geo.zFront), dB = Math.abs(zc - geo.zBack);
+      const face = (dF <= dB ? faceFront : faceBack) as TMOrigem["face"];
+      let desl = Math.min(dF, dB);
+      desl = desl < 0.3 ? 0 : Math.round(desl * 1000) / 1000;
+      setCfg((c) => ({ ...c, origens: (c.origens || []).map((x: TMOrigem, j: number) => (j === k ? { ...x, face, desl } : x)) }));
+      setRegiaoSel(null);
+      return;
+    }
     if (sel.modo === "linha") {
       if (r.za === undefined || r.zb === undefined) return;
       const nova: TMFaixa = [Math.min(r.za, r.zb), Math.max(r.za, r.zb)];
@@ -4645,6 +4675,29 @@ export const PainelPrograma: React.FC<{
     return { pendenciasMaquina: lista, opPendencias: porOp };
   }, [maqAtual, bD, geo, cfg.cursoCab, cfg.ladoBedameK, cfg.pega2Maq, cfg.estTope, cfg.estBedame, cfg.transZ, cfg.origens, cfg.recuosPorMaq, ops]);
   const pendenciasBloqueantes = pendenciasMaquina.some((x) => !x.avisoOp);
+// GUIA: zero + fixações precisam ser confirmados antes de liberar operações e o botão Gerar
+const [preparoOk, setPreparoOk] = useState<string>("");
+const sigPreparo = JSON.stringify([maqAtual.id, geo ? [geo.zFront, geo.zBack] : null, partZero.face, partZero.offsetZ, cfg.l1, cfg.l2, cfg.pega1, cfg.saida, cfg.pega2, cfg.ini2]);
+const preparoConfirmado = !!geo && preparoOk === sigPreparo;
+// AVISOS HEAD 1 x HEAD 2: a pega do contrafuso (Lado 2) tem que estar usinada no lado 1 e nada externo do lado 2 pode entrar nela
+const avisosLados: string[] = (() => {
+  const out: string[] = [];
+  if (!geo || !cfg.l2 || !(cfg.pega2 > 0)) return out;
+  const zIni2 = zPega2(Math.min(cfg.ini2 || 0, cfg.pega2));
+  const p1 = Math.min(zIni2, zPega2(cfg.pega2)), p2 = Math.max(zIni2, zPega2(cfg.pega2));
+  const ladoOp = (o: TMOp) => (maqAtual.suico ? (o.cab === "H2" ? 2 : 1) : ((cfg.origens || [])[(o.orig || 1) - 1]?.fuso === "contrafuso" ? 2 : 1));
+  const sobrepoe = (fx: TMFaixa) => Math.max(Math.min(fx[0], fx[1]), p1) < Math.min(Math.max(fx[0], fx[1]), p2) - 0.01;
+  let cobertoL1 = false;
+  ops.forEach((o, i) => {
+    if (!o.ativo || TM_TIPOS[o.tipo].grupo !== "EXTERNO" || o.tipo === "corte") return;
+    const dentro = (o.faixas || []).some(sobrepoe);
+    if (!dentro) return;
+    if (ladoOp(o) === 2) out.push("Op. " + (i + 1) + " (" + TM_TIPOS[o.tipo].nome + ") é do LADO 2 mas passa dentro da pega do contrafuso (" + tmFmt(cfg.pega2) + " mm) — vai bater na pinça. " + (maqAtual.suico ? "Mude a operação para H1 (usinar no Head 1)" : "Mude a origem para o fuso principal (usinar no Head 1)") + " ou diminua a pega.");
+    else cobertoL1 = true;
+  });
+  if (!cobertoL1) out.push("A região da pega do contrafuso (" + tmFmt(cfg.ini2 || 0) + " a " + tmFmt(cfg.pega2) + " mm da face do zero 1) não é usinada por nenhuma operação externa do LADO 1 — o contrafuso vai pegar em superfície bruta. Confira se é isso mesmo.");
+  return out;
+})();
   const irParaPendencia = (item: { msg: string; targetKey: string; opId?: string }) => {
     if (item.opId) setAberta(item.opId);
     setFocoAlvo({ key: item.targetKey, seq: Date.now() });
@@ -4790,7 +4843,47 @@ export const PainelPrograma: React.FC<{
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {/* MÁQUINA ESCOLHIDA NO INÍCIO */}
+        {/* GUIA PASSO A PASSO (Claude) — mostra em que etapa está e o que fazer a seguir */}
+{(() => {
+const compPeca = geo ? Math.abs(geo.zBack - geo.zFront) : 0;
+const deslGrande = !!geo && Math.abs(partZero.offsetZ || 0) > 0.5 && Math.abs(partZero.offsetZ || 0) >= compPeca * 0.5;
+const etapas = [
+{ n: 1, nome: "Máquina", ok: !!maqAtual, dica: "Escolha a máquina na lista abaixo (as que não aceitam o Ø da barra ficam bloqueadas)." },
+{ n: 2, nome: "Peça", ok: !!geo, dica: "Anexe o STEP da peça no painel PEÇA e confira Ø da barra e material." },
+{ n: 3, nome: "Zero", ok: !!geo && !deslGrande, dica: maqAtual.suico ? "ORIGENS linha 1: escolha qual face fica para FORA da bucha (é a que o Head 1 usina primeiro). Deixe desloc. Z = 0." : "ORIGENS linha 1: escolha a face do zero. Deixe desloc. Z = 0 (só para ajuste fino)." },
+{ n: 4, nome: "Fixações", ok: preparoConfirmado, dica: maqAtual.suico ? "FIXAÇÕES: ligue o Lado 1 (bucha/barra atrás da peça) e o Lado 2 se o contrafuso pega a peça. No simulador, o bloco cinza tem que ficar ATRÁS da peça." : "FIXAÇÕES: ligue o Lado 1 (castanha/pinça) com a pega e o Lado 2 (contrafuso). No simulador o bloco cinza mostra onde a peça está presa." },
+{ n: 5, nome: "Operações", ok: preparoConfirmado && ops.some((o) => o.ativo), dica: "ÁRVORE DE OPERAÇÕES: clique em 'sugerir de novo' depois de definir zero e fixações. O app prefere ciclo; operação marcada 'sem ciclo' é recomendação." },
+{ n: 6, nome: "Pendências", ok: !!geo && ops.some((o) => o.ativo) && pendenciasMaquina.length === 0, dica: "Resolva os itens piscando (ferramentas, dados da máquina). Ao preencher eles somem." },
+{ n: 7, nome: "Verificar", ok: false, dica: "Clique em 'Gerar e ver o programa' e rode o simulador: só leve para a máquina com 0 colisões." },
+];
+const atual = etapas.find((e) => !e.ok) || etapas[etapas.length - 1];
+return (
+<div className="rounded-lg border border-emerald-900/60 bg-emerald-950/20 p-2">
+<div className="flex flex-wrap items-center gap-1 mb-1">
+{etapas.map((e) => (
+<span key={e.n} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (e.n === atual.n ? "border-emerald-400 text-white bg-emerald-900/50" : e.ok ? "border-emerald-800 text-emerald-400" : "border-zinc-800 text-zinc-500")}>
+{e.ok && e.n !== atual.n ? "✓ " : e.n + " "}{e.nome}
+</span>
+))}
+</div>
+<div className="text-[11px] text-zinc-300"><span className="font-bold text-emerald-300">Etapa {atual.n} – {atual.nome}:</span> {atual.dica}</div>
+{!!geo && !preparoConfirmado && (
+<div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+{(cfg.l1 || cfg.l2) && !deslGrande ? (<>
+<button onClick={() => { setPreparoOk(sigPreparo); setOps(tmOpsPadrao(geo, cfg.material)); setAberta(null); }} className="text-[10px] font-bold px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white">✔ Zero e fixações conferidos → sugerir operações</button>
+{ops.length > 0 && <button onClick={() => setPreparoOk(sigPreparo)} className="text-[10px] px-2 py-1 rounded border border-zinc-600 text-zinc-300 hover:text-white">confirmar mantendo as operações atuais</button>}
+</>) : (
+<span className="text-[10px] text-amber-300">Para liberar as operações: zero com desloc. Z correto e pelo menos uma fixação ligada (veja no simulador se o bloco cinza está atrás da peça).</span>
+)}
+{preparoOk !== "" && <span className="text-[10px] text-amber-300 w-full">⚠ Zero ou fixações mudaram depois de confirmados — confira e confirme de novo.</span>}
+</div>
+)}
+{preparoConfirmado && avisosLados.map((t, i) => <div key={"avl" + i} className="text-[10px] text-amber-300 mt-1">⚠ {t}</div>)}
+{deslGrande && <div className="text-[10px] text-amber-300 mt-1">⚠ desloc. Z da origem 1 está grande ({tmFmt(partZero.offsetZ)} mm): isso empurra a peça para o lado errado do zero e a fixação fica na frente da face. Normalmente é 0.</div>}
+</div>
+);
+})()}
+{/* MÁQUINA ESCOLHIDA NO INÍCIO */}
         <div
           ref={(el) => { fieldRefs.current["bloco_maq"] = el; }}
           tabIndex={-1}
@@ -4889,14 +4982,19 @@ export const PainelPrograma: React.FC<{
               const desl = k === 0 ? partZero.offsetZ : og.desl;
               const mud = (m: Partial<TMOrigem>) => {
                 if (k === 0 && (m.face !== undefined || m.desl !== undefined)) setPartZero({ ...partZero, face: m.face !== undefined ? m.face : partZero.face, offsetZ: m.desl !== undefined ? m.desl : partZero.offsetZ });
-                setCfg((c) => ({ ...c, origens: (c.origens || []).map((x: TMOrigem, j: number) => (j === k ? { ...x, ...m } : x)) }));
+                const oposta = m.face === "direita" ? "esquerda" : "direita";
+                setCfg((c) => ({ ...c, origens: (c.origens || []).map((x: TMOrigem, j: number) => (j === k ? { ...x, ...m } : (k === 0 && maqAtual.suico && m.face !== undefined && j > 0 && x.fuso === "contrafuso" ? { ...x, face: oposta as TMOrigem["face"] } : x))) }));
               };
               return (
                 <div key={k} className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="w-5 text-center font-bold text-cyan-300">{k + 1}</span>
+                  {maqAtual.suico && k > 0 && og.fuso === "contrafuso" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-cyan-800 text-cyan-300" title="Torno suíço: cada canal tem o seu G54. Este é o zero do HEAD 2 (contrafuso); as operações marcadas H2 saem medidas a partir dele.">G54 do Head 2</span>
+                  ) : (
                   <select value={og.g} onChange={(e) => mud({ g: e.target.value })} className={inp}>
                     {TM_CODIGOS_ORIGEM.map((g) => <option key={g} value={g}>{g}</option>)}
                   </select>
+                  )}
                   <select value={og.fuso} onChange={(e) => mud({ fuso: e.target.value as TMOrigem["fuso"] })} className={inp}>
                     <option value="principal">Fuso principal</option>
                     <option value="contrafuso">Contrafuso</option>
@@ -4918,6 +5016,16 @@ export const PainelPrograma: React.FC<{
                       title="Zerar deslocamento Z"
                     >
                       ✕
+                    </button>
+                  )}
+                  {k > 0 && geo && (
+                    <button
+                      type="button"
+                      onClick={() => setRegiaoSel({ opId: "__orig" + k, modo: "cf" })}
+                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (regiaoSel && regiaoSel.opId === "__orig" + k ? "border-amber-400 text-amber-200 bg-amber-500/20" : "border-cyan-700 text-cyan-300 hover:text-white")}
+                      title="Clique aqui e depois toque na peça no simulador: a face mais perto vira o zero desta origem (com o deslocamento até o ponto tocado)"
+                    >
+                      📍 clicar na peça
                     </button>
                   )}
                   {k > 0 && (
@@ -4954,12 +5062,13 @@ export const PainelPrograma: React.FC<{
           <div className="text-[11px] font-bold text-red-300 mb-1">FIXAÇÕES (zona proibida)</div>
           <div className="flex flex-wrap items-center gap-2 text-xs mb-1">
             {sw(cfg.l1, () => setCfg({ ...cfg, l1: !cfg.l1 }), "Lado 1")}
-            <span className="text-zinc-400">placa: pega</span>{num(cfg.pega1, (n) => setCfg({ ...cfg, pega1: n }), 0.5, "w-14")}
+            {maqAtual.suico ? <span className="text-zinc-400" title="Torno suíço: o lado 1 é a bucha de guia / pinça do cabeçote. A zona proibida começa na linha de corte (barra atrás da peça).">bucha de guia (automática)</span> : <><span className="text-zinc-400">placa: pega</span>{num(cfg.pega1, (n) => setCfg({ ...cfg, pega1: n }), 0.5, "w-14")}</>}
             <span className="text-zinc-400">dist. do corte</span>{num(cfg.saida, (n) => setCfg({ ...cfg, saida: n }), 0.5, "w-14")}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {sw(cfg.l2, () => setCfg((c) => ({ ...c, l2: !c.l2 })), "Lado 2")}
-            <span className="text-zinc-400">contrafuso (T1): pega</span>{num(cfg.pega2, (n) => setCfg((c) => ({ ...c, pega2: n, ...(maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? { pega2Maq: n > 0 ? n : undefined } : {}) })), 0.5, "w-14")}
+            <span className="text-zinc-400">{maqAtual.suico ? "contrafuso pega — de" : "contrafuso (T1) pega — de"}</span>{num(cfg.ini2 || 0, (n) => setCfg((c) => ({ ...c, ini2: Math.max(0, Math.min(n, c.pega2)) })), 0.5, "w-12")}<span className="text-zinc-400">até</span>{num(cfg.pega2, (n) => setCfg((c) => ({ ...c, pega2: n, ...(maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? { pega2Maq: n > 0 ? n : undefined } : {}) })), 0.5, "w-14")}
+          <span className="text-zinc-400">mm da face do zero 1</span>{geo && <span className="text-[10px] text-zinc-500 w-full">(ponta que o contrafuso pega) = Z{tmFmt(zDisp(zPega2(Math.min(cfg.ini2 || 0, cfg.pega2))))} até Z{tmFmt(zDisp(zPega2(cfg.pega2)))} (zona proibida só para a usinagem do Head 2)</span>}
           </div>
         </div>
 
@@ -5267,7 +5376,8 @@ export const PainelPrograma: React.FC<{
         )}
 
         {/* OPERAÇÕES */}
-        <div>
+        {!preparoConfirmado && <div className="rounded-lg border border-zinc-800 p-2 text-[11px] text-zinc-400">🔒 ÁRVORE DE OPERAÇÕES bloqueada — primeiro defina o ZERO e as FIXAÇÕES e clique em "Zero e fixações conferidos" no guia lá em cima. Assim as operações já nascem respeitando onde a peça está presa.</div>}
+        <div className={preparoConfirmado ? "" : "hidden"}>
           <div className="flex items-center justify-between mb-1">
             <label className="flex items-center gap-1.5 cursor-pointer" title="Ticar / desticar todas as operações">
               <input type="checkbox" className="w-3 h-3 opacity-70" checked={ops.length > 0 && ops.every((o) => o.ativo)} ref={(el) => { if (el) el.indeterminate = ops.some((o) => o.ativo) && !ops.every((o) => o.ativo); }} onChange={(e) => { const v = e.target.checked; setOps((arr) => arr.map((o) => ({ ...o, ativo: v }))); }} />
@@ -5286,7 +5396,7 @@ export const PainelPrograma: React.FC<{
           </div>
           {regiaoSel && (
             <div className="text-[11px] font-bold bg-amber-500/20 border border-amber-500/60 text-amber-200 rounded px-2 py-1 mb-2">
-              {regiaoSel.modo === "cf" ? "Toque na peça no COMEÇO e depois no FIM da região" : "Toque nas LINHAS da peça (toque de novo para tirar). Clique em OK quando terminar."}
+              {regiaoSel.opId.startsWith("__orig") ? "Toque na peça no ponto que será o ZERO da origem " + (parseInt(regiaoSel.opId.slice(6), 10) + 1) + " (perto da face = zero na face)" : regiaoSel.modo === "cf" ? "Toque na peça no COMEÇO e depois no FIM da região" : "Toque nas LINHAS da peça (toque de novo para tirar). Clique em OK quando terminar."}
               <button onClick={() => setRegiaoSel(null)} className="ml-2 px-2 rounded bg-amber-600 text-white">OK</button>
             </div>
           )}
@@ -5568,9 +5678,9 @@ export const PainelPrograma: React.FC<{
         </label>
         <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>
         <button
-          disabled={!geo || !!barraBloqueio}
+          disabled={!geo || !!barraBloqueio || !preparoConfirmado}
           onClick={gerar}
-          className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (!geo || barraBloqueio ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-500 text-white")}
+          className={"text-sm font-bold px-4 py-1.5 rounded-lg " + (!geo || barraBloqueio || !preparoConfirmado ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-500 text-white")}
         >
           ✔ Gerar e ver o programa
         </button>

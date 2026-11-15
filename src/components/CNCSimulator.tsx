@@ -6,6 +6,7 @@ import { ResizableBox } from "./ResizableBox";
 import { CycleTimePanel } from "./CycleTimePanel";
 
 export type FixZone = {
+  gContra?: string[]; // origens (G54..G59) do contrafuso: linhas nelas contam como Lado 2
   lado: 1 | 2;
   za: number;
   zb: number;
@@ -67,6 +68,7 @@ interface CNCSimulatorProps {
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
   regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string }[];
   fixComando?: { seq: number; zones: FixZone[] } | null; // painel liga/desliga fixações
+  canalSim?: number; // canal/cabeçote do programa simulado (1 = Head 1, 2 = Head 2)
   partLayers?: PartLayer[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
 }
@@ -1377,11 +1379,28 @@ export function simularGCodeEColisoes(
   partLayers: PartLayer[] | undefined,
   fixZones: FixZone[],
   fixLado: 1 | 2 | "all" = 1,
-  fixFolga = 1
+  fixFolga = 1,
+  canalSim = 1
 ): SimColisaoRelatorio {
   const { plotList, activeLineIndexes, error } = parseGCodeSim(gcodeText, simInvertZ, partLayers);
   const fixHits: SimFixHit[] = [];
-  const zonasCheck = fixLado === "all" ? fixZones : fixZones.filter((f) => f.lado === fixLado);
+  // REGRA DO USUÁRIO: a fixação do Lado 1 só vale para a usinagem do Head 1 (fuso principal)
+  // e a pega do Lado 2 (contrafuso) só vale para a usinagem do Head 2 / origem do contrafuso.
+  void fixLado;
+  const gContra = new Set<string>();
+  fixZones.forEach((f) => (f.gContra || []).forEach((g) => gContra.add(g.toUpperCase())));
+  const ladoPorLinha: number[] = [];
+  {
+    let ladoAtual = canalSim >= 2 ? 2 : 1;
+    gcodeText.split("\n").forEach((ln, i) => {
+      const semComent = ln.replace(/\([^)]*\)/g, "").toUpperCase();
+      const mG = semComent.match(/G5[4-9](?:\.\d)?/g);
+      if (mG) { const g = mG[mG.length - 1].slice(0, 3); ladoAtual = gContra.has(g) ? 2 : (canalSim >= 2 ? 2 : 1); }
+      ladoPorLinha[i] = ladoAtual;
+    });
+  }
+  const ladoDoItem = (it: { linhaId?: number }) => { const li = Math.floor(it.linhaId ?? 0); return ladoPorLinha[li] ?? (canalSim >= 2 ? 2 : 1); };
+  const zonasCheck = fixZones;
   zonasCheck.forEach((zone) => {
     const isBucha = zone.tipo === "bucha" || !!zone.infinito;
     if (isBucha) {
@@ -1389,6 +1408,7 @@ export function simularGCodeEColisoes(
       const zMax = Math.max(zone.za, zone.zb);
       const buchaDireita = zone.zb >= zone.za;
       plotList.forEach((it, idx) => {
+        if (ladoDoItem(it) !== zone.lado) return;
         const lo = Math.min(it.z1, it.z2);
         const hi = Math.max(it.z1, it.z2);
         const bate = buchaDireita ? hi > zMin + 0.05 : lo < zMax - 0.05;
@@ -1405,6 +1425,7 @@ export function simularGCodeEColisoes(
       const a = Math.min(zone.za, zone.zb) - fixFolga;
       const b = Math.max(zone.za, zone.zb) + fixFolga;
       plotList.forEach((it, idx) => {
+        if (ladoDoItem(it) !== zone.lado) return;
         const lo = Math.min(it.z1, it.z2);
         const hi = Math.max(it.z1, it.z2);
         if (hi >= a && lo <= b) {
@@ -1523,6 +1544,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   onRegiaoPick,
   regioes,
   fixComando,
+  canalSim = 1,
   partLayers,
   onInsertPoint,
 }) => {
@@ -2343,8 +2365,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Lê o programa só quando o texto muda (antes relia a cada movimento do mouse/zoom = travava)
   const { plotList, activeLineIndexes, fixHits, pecaHits, error: parseError } = useMemo(
-    () => simularGCodeEColisoes(gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga),
-    [gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga]
+    () => simularGCodeEColisoes(gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim),
+    [gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim]
   );
   const [alvoCol, setAlvoCol] = useState<number>(-1); // qual colisão está selecionada (clique no alarme)
   const [alarmeMin, setAlarmeMin] = useState<boolean>(false); // alarme minimizado (só a bolinha)
@@ -2508,7 +2530,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.font = "bold 10px monospace";
       const textX = Math.max(8, Math.min(canvas.width - 140, jl + 4));
       const textYTop = Math.max(14, originY - r - jaw - 14);
-      ctx.fillText(`${txtLabel}${ativa ? "" : " (inativa)"}`, textX, textYTop);
+      ctx.fillText(`${txtLabel}${f.lado === 2 ? " – vale só no Head 2" : " – vale no Head 1"}`, textX, textYTop);
       if (!isBucha && jw >= 14) {
         const yCota = originY + r + jaw + 11;
         ctx.strokeStyle = isThemeDark ? "#64748b" : "#475569";

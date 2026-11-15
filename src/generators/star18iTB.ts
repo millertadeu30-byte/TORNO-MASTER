@@ -613,8 +613,13 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   // Suíço: Z0 na face escolhida da barra (+ deslocamento da origem 1), Z positivo entra na peça
   const deslH1 = cfg.origens?.[0]?.desl ?? cfg.zero?.offsetZ ?? 0;
   const zH1 = (zGeo: number) => geo.zFront - zGeo + deslH1;
-  // H2 (contrafuso): Z0 na face traseira (corte), Z positivo entra pela traseira da peça
-  const zH2 = (zGeo: number) => zGeo - geo.zBack;
+  // H2 (contrafuso) = "G54 do Head 2": Z0 na face escolhida na origem do contrafuso (padrão: face cortada/traseira)
+  // + deslocamento para dentro da peça; Z positivo entra na peça a partir dessa face
+  const origH2 = (cfg.origens || []).find((o, j) => j > 0 && o.fuso === "contrafuso");
+  const faceH1 = cfg.zero?.face ?? cfg.origens?.[0]?.face ?? "direita";
+  const h2NaFrente = !!origH2 && origH2.face === faceH1; // zero do Head 2 na mesma face do Head 1 (raro)
+  const deslH2 = origH2 ? (origH2.desl || 0) : 0;
+  const zH2 = (zGeo: number) => (h2NaFrente ? geo.zFront - deslH2 - zGeo : zGeo - (geo.zBack + deslH2));
 
   const emitSpindle = (out: string[], p: Record<string, number>, dRef: number, padrao: number, acionada = false) => {
     if (acionada) {
