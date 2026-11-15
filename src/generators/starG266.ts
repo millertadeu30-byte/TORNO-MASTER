@@ -60,10 +60,10 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   const limCorte = corteOp && (corteOp.p.lim ?? 0) > 0 ? Math.round(corteOp.p.lim) : cfg.rpmMax || 3000;
   const fCorte = corteOp && (corteOp.p.f ?? 0) > 0 ? corteOp.p.f : 0.05;
   const kBedame = cfg.ladoBedameK !== undefined ? cfg.ladoBedameK : (corteOp && corteOp.p.ref === 1 ? -17 : 0);
-  const cursoCab = cfg.cursoCab && cfg.cursoCab > 0 ? cfg.cursoCab : geo.L + largCorte;
+  const { gerarOpLinhas, ferramentasUsadas, deslH1 } = criarEmissorOpsStar(ops, geo, cfg);
+  const compCorte = Math.max(0.1, geo.L + deslH1);
+  const cursoCab = cfg.cursoCab && cfg.cursoCab > 0 ? cfg.cursoCab : compCorte + largCorte;
   const subPega = cfg.maqId === "STAR_N17" ? "7000" : "8000";
-
-  const { gerarOpLinhas, ferramentasUsadas } = criarEmissorOpsStar(ops, geo, cfg);
   const opsH1 = ativos.filter((o) => o.tipo !== "corte" && (o.cab || "H1") === "H1");
   const opsH2 = ativos.filter((o) => o.tipo !== "corte" && o.cab === "H2");
 
@@ -105,7 +105,7 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   h1.push("M38");
   h1.push("G0G99G97G40M5");
   h1.push(
-    `G266A${fmtStar(bD)}W${fmtStar(geo.L)}S${rpmCorte}X-1.5Z${fmtStar(cursoCab)}F${fmtStar(fCorte)}B${fmtStar(largCorte)}K${kBedame}`
+    `G266A${fmtStar(bD)}W${fmtStar(compCorte)}S${rpmCorte}X-1.5Z${fmtStar(cursoCab)}F${fmtStar(fCorte)}B${fmtStar(largCorte)}K${kBedame}`
   );
   h1.push("(A:DIAMETRO DA BARRA)");
   h1.push("(W:COMPRIMENTO DA PECA)");
@@ -141,8 +141,7 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   h1.push("/M25");
   h1.push(`G50S${limCorte}`);
   h1.push(`G99G97M3S${rpmCorte}`);
-  h1.push("G0X[#531+1]Z-1.0T1");
-  h1.push("G0Z#521");
+  h1.push("G0X[#531+1]Z#521T1");
   h1.push("M82");
   h1.push("M301");
   h1.push("M302");

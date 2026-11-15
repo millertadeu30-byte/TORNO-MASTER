@@ -19,6 +19,7 @@ interface CNCSimulatorProps {
   cursorStyle?: CursorStyle; // cores e tamanho da mira e do quadradinho do desenho (Aparência)
   // Painel ▶ Programa da peça: escolher a REGIÃO de cada operação clicando na peça e mostrar as regiões
   regiaoModo?: "cf" | "linha" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
+  regiaoLimparSeq?: number; // incrementa quando o usuário limpa a seleção para apagar as marquinhas
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
   regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string }[];
   fixComando?: { seq: number; zones: { lado: 1 | 2; za: number; zb: number; d: number }[] } | null; // painel liga/desliga fixações
@@ -39,6 +40,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   bgColor,
   cursorStyle,
   regiaoModo,
+  regiaoLimparSeq,
   onRegiaoPick,
   regioes,
   fixComando,
@@ -62,6 +64,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   const [panY, setPanY] = useState<number>(0);
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<Point2D>({ x: 0, y: 0 });
+  const panStartClientRef = useRef<Point2D | null>(null);
+  const mouseHasMovedRef = useRef<boolean>(false);
+  const [regiaoClicks, setRegiaoClicks] = useState<{ z: number; r: number }[]>([]);
+  useEffect(() => {
+    setRegiaoClicks([]);
+  }, [regiaoModo, regiaoLimparSeq]);
   const [isThemeDark, setIsThemeDark] = useState<boolean>(true);
   // Se uma cor de fundo foi escolhida em "Aparência", ajusta linhas/textos do gráfico para manter contraste
   useEffect(() => {
@@ -431,6 +439,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     if (sketchTool !== "none" && e.button === 0) return; // desenhando: botão esquerdo desenha, botão do meio move
     // Check if middle click or standard click
     if (e.button === 0 || e.button === 1) {
+      panStartClientRef.current = { x: e.clientX, y: e.clientY };
+      mouseHasMovedRef.current = false;
       setIsPanning(true);
       setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
     }
@@ -681,6 +691,9 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning) {
+      if (panStartClientRef.current && Math.hypot(e.clientX - panStartClientRef.current.x, e.clientY - panStartClientRef.current.y) > 4) {
+        mouseHasMovedRef.current = true;
+      }
       setPanX(e.clientX - dragStart.x);
       setPanY(e.clientY - dragStart.y);
       setHoveredPoint(null);
@@ -962,8 +975,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
     const looksSwiss = /\bG266\b|\bG125\b|\bG300\b|\bG120\b|\/M25\b|\(HEAD\s*[12]\)/i.test(gcodeText) ||
       (hasPartZ && minPartZ >= -2 && maxPartZ > 2 && /\bG0\s*Z-/i.test(gcodeText));
-    const safeR = maxPartR + 5;
-    const safeZ = hasPartZ ? (looksSwiss ? minPartZ - 10 : maxPartZ + 10) : (looksSwiss ? -10 : 10);
+    const safeR = Math.max(maxPartR + 10, 25);
+    const safeZ = hasPartZ ? (looksSwiss ? minPartZ - 12 : maxPartZ + 12) : (looksSwiss ? -12 : 12);
 
     const lines = gcodeText.split("\n");
     let currentGMode = 0; // Standard travel G00
@@ -1058,9 +1071,38 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       clean = resolveMacros(clean, vars);
 
       // Pure M-only / T-only / S-only lines (no G, X, Z, U, W, N)
-      if (!/[GXZUWN]/i.test(clean)) return;
+      if (!/[GXZUWN]/i.test(clean)) {
+        if (looksSwiss) {
+          const tOnly = clean.match(/^T(\d{3,4})$/i);
+          if (tOnly) {
+            const tNum = parseInt(tOnly[1], 10);
+            const tGrp = Math.floor(tNum / 100);
+            if (tGrp >= 1 && tGrp <= 10) {
+              commands.push({
+                mode: currentGMode,
+                x: null,
+                z: null,
+                r: null,
+                commaR: null,
+                commaC: null,
+                n: null,
+                p: null,
+                q: null,
+                u: null,
+                w: null,
+                f: null,
+                text: clean,
+                linhaOriginal: idx,
+                isToolPark: true,
+              });
+            }
+          }
+        }
+        return;
+      }
 
-      const isMachineRef = /\bG\s*(?:53|28)\b/i.test(clean);
+      const isG53 = /\bG\s*53(?![0-9])/i.test(clean);
+      const isMachineRef = isG53 || /\bG\s*28(?![0-9])/i.test(clean);
       const isG92Limit = /\bG\s*92\s*S/i.test(clean) || (/\bG\s*92(?![0-9])/i.test(clean) && !/[XZ]/i.test(clean));
 
       const gMatches = clean.match(/G\s*(\d+)/gi);
@@ -1082,13 +1124,13 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         .replace(/\bLIMS\s*=\s*-?\d*\.?\d*/gi, "")
         .replace(/\b(?:CHF|RND)\s*=\s*-?\d*\.?\d*/gi, "")
         .replace(/\bS[14]?\s*=\s*-?\d*\.?\d*/gi, "")
-        .replace(/\bT\d+/gi, "");
+        .replace(/(?<![A-Z])T\d+/gi, "");
 
       const isG4Dwell = /\bG\s*0?4(?![0-9])/i.test(clean);
 
       const matchX = temp.match(/(?<![A-Z])X\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
       const matchZ = temp.match(/(?<![A-Z])Z\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
-      const matchR = temp.match(/(?<![A-Z])R\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
+      const matchR = temp.match(/(?:(?<![A-Z])R|\bCR\s*=)\s*([+-]?(?:\d+\.?\d*|\.\d+))/i);
       const matchN = clean.match(/(?<![A-Z])N\s*(\d+)/i);
       const matchP = temp.match(/(?<![A-Z])P\s*(\d+)/i);
       const matchQ = temp.match(/(?<![A-Z])Q\s*(\d+)/i);
@@ -1112,6 +1154,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         text: clean,
         linhaOriginal: idx,
         isMachineRef,
+        isG53,
       };
 
       commands.push(cmd);
@@ -1242,14 +1285,41 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
       if (cmd.mode !== 92) g92Anchor = null;
 
-      // G53 / G28 machine reference move: move cursor to safe point outside part, never draw or collide
+      // G53 / G28 machine reference move:
+      // G53 draws rapid retract to fixed park OUTSIDE part area and still triggers collision if it crosses material.
       if (cmd.isMachineRef) {
+        if (cmd.isG53) {
+          const hasX = cmd.x !== null || cmd.u !== null;
+          const hasZ = cmd.z !== null || cmd.w !== null;
+          const tx = hasX || !hasZ ? Math.max(safeR, cx) : cx;
+          const tz = hasZ || !hasX ? (looksSwiss ? Math.min(safeZ, cz) : Math.max(safeZ, cz)) : cz;
+          if (Math.abs(tx - cx) > 1e-6 && Math.abs(tz - cz) > 1e-6) {
+            const d = Math.min(Math.abs(tx - cx), Math.abs(tz - cz));
+            const mx = cx + Math.sign(tx - cx) * d;
+            const mz = cz + Math.sign(tz - cz) * d;
+            plotList.push({ type: "line", x1: cx, z1: cz, x2: mx, z2: mz, color: "#ff2a2a", linhaId: cmd.linhaOriginal });
+            plotList.push({ type: "line", x1: mx, z1: mz, x2: tx, z2: tz, color: "#ff2a2a", linhaId: cmd.linhaOriginal + 0.0001 });
+            if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+          } else if (Math.abs(tx - cx) > 1e-6 || Math.abs(tz - cz) > 1e-6) {
+            plotList.push({ type: "line", x1: cx, z1: cz, x2: tx, z2: tz, color: "#ff2a2a", linhaId: cmd.linhaOriginal });
+            if (!activeLineIndexes.includes(cmd.linhaOriginal)) activeLineIndexes.push(cmd.linhaOriginal);
+          }
+          cx = tx;
+          cz = tz;
+          continue;
+        }
         if (cmd.x !== null || cmd.u !== null) cx = safeR;
         if (cmd.z !== null || cmd.w !== null) cz = safeZ;
         if (cmd.x === null && cmd.u === null && cmd.z === null && cmd.w === null) {
           cx = safeR;
           cz = safeZ;
         }
+        continue;
+      }
+
+      // Swiss standalone gang tool call (T100..T1000): tool starts from retracted X clearance, not from previous drill X0
+      if (cmd.isToolPark) {
+        cx = Math.max(cx, safeR);
         continue;
       }
 
@@ -1390,6 +1460,43 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
                     px = p2x;
                     pz = p2z;
                     continue;
+                  }
+                }
+              }
+
+              if ((contCmd.mode === 2 || contCmd.mode === 3) && contCmd.r !== null && contCmd.r > 0) {
+                const zDir = simInvertZ ? -1 : 1;
+                const px1 = pz * zDir;
+                const py1 = -px;
+                const px2 = targetZ * zDir;
+                const py2 = -targetX;
+                const dx = px2 - px1;
+                const dy = py2 - py1;
+                const dist = Math.hypot(dx, dy);
+                if (dist > 1e-6 && dist <= 2 * contCmd.r + 1e-4) {
+                  const R = Math.max(contCmd.r, dist / 2);
+                  const mx = (px1 + px2) / 2;
+                  const my = (py1 + py2) / 2;
+                  const h = Math.sqrt(Math.max(0, R * R - (dist / 2) * (dist / 2)));
+                  const nx = -dy / dist;
+                  const ny = dx / dist;
+                  const g3 = simInvertZ ? contCmd.mode === 2 : contCmd.mode === 3;
+                  const acx = g3 ? mx - h * nx : mx + h * nx;
+                  const acy = g3 ? my - h * ny : my + h * ny;
+                  const a1 = Math.atan2(py1 - acy, px1 - acx);
+                  const a2 = Math.atan2(py2 - acy, px2 - acx);
+                  let da = a2 - a1;
+                  if (g3) {
+                    while (da > 0) da -= 2 * Math.PI;
+                  } else {
+                    while (da < 0) da += 2 * Math.PI;
+                  }
+                  const n = Math.min(80, Math.max(4, Math.ceil((Math.abs(da) * R) / 0.15)));
+                  for (let s = 1; s < n; s++) {
+                    const ang = a1 + da * (s / n);
+                    const sx = acx + R * Math.cos(ang);
+                    const sy = acy + R * Math.sin(ang);
+                    profilePoints.push({ x: -sy, y: sx * zDir });
                   }
                 }
               }
@@ -2077,25 +2184,66 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       if (!xs.length) return null;
       return { ext: Math.max(...xs), int: xs.length >= 2 ? Math.min(...xs) : null };
     };
+    const zDir = simInvertZ ? -1 : 1;
     plotList.forEach((it, idx) => {
       const rapido = it.color === "#ff2a2a";
       const tol = rapido ? 0.05 : 0.6; // G01: a ponta teórica de ferramenta com raio passa um pouco "dentro" nas quinas (compensação) - não é colisão
-      const len = Math.hypot(it.x2 - it.x1, it.z2 - it.z1);
-      const n = Math.min(400, Math.max(1, Math.ceil(len / 0.1)));
-      for (let k = 0; k <= n; k++) {
-        const t = k / n;
-        const z = it.z1 + (it.z2 - it.z1) * t;
-        const r = it.x1 + (it.x2 - it.x1) * t;
+      const pts: { z: number; r: number }[] = [];
+      if (it.type === "arc" && it.radius && it.radius > 0) {
+        const px1 = it.z1 * zDir;
+        const py1 = -it.x1;
+        const px2 = it.z2 * zDir;
+        const py2 = -it.x2;
+        const dx = px2 - px1;
+        const dy = py2 - py1;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1e-6 && dist <= 2 * it.radius + 1e-4) {
+          const R = Math.max(it.radius, dist / 2);
+          const mx = (px1 + px2) / 2;
+          const my = (py1 + py2) / 2;
+          const h = Math.sqrt(Math.max(0, R * R - (dist / 2) * (dist / 2)));
+          const nx = -dy / dist;
+          const ny = dx / dist;
+          const g3 = !!it.isG3;
+          const acx = g3 ? mx - h * nx : mx + h * nx;
+          const acy = g3 ? my - h * ny : my + h * ny;
+          const a1 = Math.atan2(py1 - acy, px1 - acx);
+          const a2 = Math.atan2(py2 - acy, px2 - acx);
+          let da = a2 - a1;
+          if (g3) {
+            while (da > 0) da -= 2 * Math.PI;
+          } else {
+            while (da < 0) da += 2 * Math.PI;
+          }
+          const arcLen = Math.abs(da) * R;
+          const n = Math.min(400, Math.max(4, Math.ceil(arcLen / 0.1)));
+          for (let k = 0; k <= n; k++) {
+            const ang = a1 + da * (k / n);
+            const px = acx + R * Math.cos(ang);
+            const py = acy + R * Math.sin(ang);
+            pts.push({ z: px * zDir, r: -py });
+          }
+        }
+      }
+      if (!pts.length) {
+        const len = Math.hypot(it.x2 - it.x1, it.z2 - it.z1);
+        const n = Math.min(400, Math.max(1, Math.ceil(len / 0.1)));
+        for (let k = 0; k <= n; k++) {
+          const t = k / n;
+          pts.push({ z: it.z1 + (it.z2 - it.z1) * t, r: it.x1 + (it.x2 - it.x1) * t });
+        }
+      }
+      for (const pt of pts) {
         // olha um pouquinho antes e depois em Z: encostar numa face em pé (ferramenta rente à parede) NÃO é colisão
-        const e1 = env(z - 0.002);
-        const e2 = env(z + 0.002);
+        const e1 = env(pt.z - 0.002);
+        const e2 = env(pt.z + 0.002);
         if (!e1 || !e2) continue;
         const e = { ext: Math.min(e1.ext, e2.ext), int: e1.int === null || e2.int === null ? null : Math.max(e1.int, e2.int) };
-        if (r < e.ext - tol && (e.int === null || r > e.int + tol)) { hits.push({ idx, linha: it.linhaId, z, d: r * 2, rapido }); break; }
+        if (pt.r < e.ext - tol && (e.int === null || pt.r > e.int + tol)) { hits.push({ idx, linha: it.linhaId, z: pt.z, d: pt.r * 2, rapido }); break; }
       }
     });
     return hits;
-  }, [plotList, partLayers]);
+  }, [plotList, partLayers, simInvertZ]);
   const [alvoCol, setAlvoCol] = useState<number>(-1); // qual colisão está selecionada (clique no alarme)
   const [alarmeMin, setAlarmeMin] = useState<boolean>(false); // alarme minimizado (só a bolinha)
   const irParaColisao = () => {
@@ -2514,6 +2662,30 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.restore();
     }
 
+    // Marcas discretas dos cliques na seleção de região (Começo/Fim e Linha por linha)
+    if (regiaoModo && regiaoClicks.length) {
+      ctx.save();
+      regiaoClicks.forEach((pt, idx) => {
+        const px = originX + pt.z * zoom * zDirSign;
+        const py = originY - pt.r * zoom;
+        ctx.strokeStyle = "#f59e0b";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(px - 8, py);
+        ctx.lineTo(px + 8, py);
+        ctx.moveTo(px, py - 8);
+        ctx.lineTo(px, py + 8);
+        ctx.stroke();
+        ctx.font = "bold 11px JetBrains Mono, monospace";
+        ctx.fillStyle = "#fbbf24";
+        ctx.fillText(String(idx + 1), px + 8, py - 6);
+      });
+      ctx.restore();
+    }
+
     // Draw Hover/Snap Target ("Mira")
     if ((showMirinha || pgMode || fixMode || !!regiaoModo) && hoveredPoint) { // no PG a mira aparece sempre
       ctx.save();
@@ -2879,6 +3051,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     fixMode,
     regioes,
     regiaoModo,
+    regiaoClicks,
     cursorStyle,
     canvasSize,
     gcodeText,
@@ -2912,11 +3085,16 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     if (sketchTool !== "none") { handleSketchClick(e); return; } // ferramenta de desenho ligada
     // PAINEL: escolhendo a REGIÃO de uma operação (começo/fim ou linha por linha)
     if (regiaoModo && onRegiaoPick) {
+      if (mouseHasMovedRef.current || touchHasMovedRef.current) {
+        mouseHasMovedRef.current = false;
+        return;
+      }
       const cnv = canvasRef.current;
       if (!cnv) return;
       const rct = cnv.getBoundingClientRect();
       const mx = rct.width > 0 ? ((e.clientX - rct.left) / rct.width) * cnv.width : 0;
       const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
+      const T = sketchView(cnv);
       if (regiaoModo === "linha") {
         // acha a LINHA (ou arco) do perfil mais perto do toque e manda o começo e o fim dela em Z
         if (!partLayers || !partLayers.length) return;
@@ -2925,26 +3103,33 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         const oX = cnv.width / 2 + 50 + panX;
         const oY = cnv.height / 2 + 50 + panY;
         let melhor: { x: number; z: number }[] | null = null;
+        let melhorPt: { x: number; y: number } | null = null;
         let bd = 45;
         for (const c of pecaL.curves) {
           for (const sgn of [1, -1]) {
             for (let i = 0; i < c.length - 1; i++) {
               const res = getDistanceToSegment(mx, my, oX + c[i].z * zoom * zDir, oY - sgn * (c[i].x / 2) * zoom, oX + c[i + 1].z * zoom * zDir, oY - sgn * (c[i + 1].x / 2) * zoom);
-              if (res.distance < bd) { bd = res.distance; melhor = c; }
+              if (res.distance < bd) { bd = res.distance; melhor = c; melhorPt = { x: res.x, y: res.y }; }
             }
           }
         }
         const m = melhor as { x: number; z: number }[] | null;
         if (m) {
+          const clickW = melhorPt ? skToWorld(melhorPt.x, melhorPt.y, T) : skToWorld(mx, my, T);
+          setRegiaoClicks((prev) => [...prev, clickW]);
           const zs = m.map((p) => p.z);
           onRegiaoPick({ z: (Math.min(...zs) + Math.max(...zs)) / 2, x: Math.max(...m.map((p) => p.x)), za: Math.min(...zs), zb: Math.max(...zs) });
         }
         return;
       }
       const g = findPickSnap(mx, my, cnv, 45);
-      if (g) onRegiaoPick({ z: g.latheZ, x: g.latheX });
-      else {
-        const w = skToWorld(mx, my, sketchView(cnv));
+      if (g) {
+        const clickW = skToWorld(g.canvasX, g.canvasY, T);
+        setRegiaoClicks((prev) => [...prev, clickW]);
+        onRegiaoPick({ z: g.latheZ, x: g.latheX });
+      } else {
+        const w = skToWorld(mx, my, T);
+        setRegiaoClicks((prev) => [...prev, w]);
         onRegiaoPick({ z: w.z, x: Math.abs(w.r) * 2 });
       }
       return;

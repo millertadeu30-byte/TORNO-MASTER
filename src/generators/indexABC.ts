@@ -6,7 +6,11 @@ import {
   StarTMIntervalo,
   StarTMFaixa,
   DESC_TIPO_STAR,
+  emitirContornoArcos,
+  detectarCanaisStar,
+  planoCanalStar,
 } from "./star18iTB";
+import { MAQUINAS_DNA } from "../data/maquinasDNA";
 
 export interface IndexGerarResult {
   textos: [string, string];
@@ -283,6 +287,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   const bD = cfg.bD;
   const ativos = ops.filter((o) => o.ativo);
   const corteOp = ativos.find((o) => o.tipo === "corte");
+  const largCorte = corteOp ? (corteOp.p.larg !== undefined ? corteOp.p.larg : 3) : 3;
   const fCorte = corteOp && (corteOp.p.f ?? 0) > 0 ? corteOp.p.f : 0.02;
   const vcCorte = corteOp && (corteOp.p.vc ?? 0) > 0 ? Math.round(corteOp.p.vc) : 100;
   const limCorte = corteOp && (corteOp.p.lim ?? 0) > 0 ? Math.round(corteOp.p.lim) : cfg.rpmMax || 3000;
@@ -291,16 +296,18 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
       ? Math.round(corteOp.p.rpm)
       : Math.min(limCorte, Math.round((vcCorte * 1000) / (Math.PI * Math.max(bD, 1))));
   const pegaDist = Math.max(1, cfg.pega2 ?? 10);
+  const dnaRecuo = MAQUINAS_DNA.find((m) => m.id === (cfg.maqId || "INDEX_ABC"))?.recuoTroca;
+  const fmtIdx = (n: number) => (Number.isInteger(n) ? String(n) : fmt(n));
+  const x2000 = fmtIdx(cfg.recuoTroca?.x ?? dnaRecuo?.x ?? 330);
+  const z2000 = fmtIdx(cfg.recuoTroca?.z ?? dnaRecuo?.z ?? 160);
+  const z2000Bar = Number(z2000) === 160 ? "170" : z2000;
+  const x1000 = fmtIdx(cfg.recuoTroca?.xCanal2 ?? dnaRecuo?.xCanal2 ?? 270);
+  const z1000 = fmtIdx(cfg.recuoTroca?.zCanal2 ?? dnaRecuo?.zCanal2 ?? 380);
 
-  const origs = cfg.origens || [];
-  const offZ = (op: StarTMOp) => {
-    const og = origs[(op.orig || 1) - 1] || origs[0];
-    return og ? og.desl || 0 : 0;
-  };
-  // Torno normal: Z0 na face da peça, Z negativo entra na peça
-  const zMain = (zGeo: number, op?: StarTMOp) => zGeo - geo.zFront + (op ? offZ(op) : 0);
+  // Torno normal: Z0 na face da frente da peça, Z negativo entra na peça (nunca soma deslocamento do painel Peça)
+  const zMain = (zGeo: number) => zGeo - geo.zFront;
   // Fuso síncrono (lado 2): Z0 na face traseira, Z negativo entra na peça
-  const zSync = (zGeo: number, op?: StarTMOp) => geo.zBack - zGeo + (op ? offZ(op) : 0);
+  const zSync = (zGeo: number) => geo.zBack - zGeo;
 
   let nIdx = 1;
   const ciclos: Record<string, { p: number; q: number; rp?: number }> = {};
@@ -323,8 +330,26 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
     const nextRef = carro === 2 ? nextPosC2 : carro === 1 ? nextPosC1 : nextPosC3;
     const { tCode, pos } = resolverFerrIndex(op.ferr, carro, reservadas, nextRef);
     const desc = (op.nomeFerr || DESC_TIPO_STAR[op.tipo] || op.tipo).toUpperCase().replace(/[()]/g, "").replace(/\s+/g, "*");
+    if (op.tipo === "furo") {
+      const dBroca = p.d ?? 0;
+      if (dBroca <= 0) return [`(PENDENCIA: ${desc} - INFORMAR DIAMETRO DA BROCA)`];
+      if (geo.intDmin > 0 && dBroca > geo.intDmin + 0.05) {
+        return [`(PENDENCIA: ${desc} - BROCA D${fmt(dBroca)} MAIOR QUE FURO D${fmt(geo.intDmin)})`];
+      }
+    }
+    if (op.tipo === "desbInt" || op.tipo === "acabInt" || op.tipo === "canalInt" || op.tipo === "roscaInt") {
+      if (!geo.int.length || !subIntervalos(geo.int, fxs).length) {
+        return [`(PENDENCIA: ${desc} - SEM PERFIL INTERNO NA REGIAO)`];
+      }
+      const dSegChk = op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
+      const bm = p.bm ?? 0;
+      const fb = p.fb ?? 0.5;
+      if (bm > 0 && bm + fb > dSegChk + (op.tipo === "desbInt" ? 2 * Math.max(0.05, p.ap ?? 1) : 0) + 1e-6) {
+        return [`(PENDENCIA: ${desc} - BARRA D${fmt(bm)} NAO CABE NO FURO D${fmt(dSegChk)})`];
+      }
+    }
     const aprox = p.apz !== undefined ? p.apz : 2;
-    const zCoord = (zGeo: number) => (fuso === "sincrono" ? zSync(zGeo, op) : zMain(zGeo, op));
+    const zCoord = (zGeo: number) => (fuso === "sincrono" ? zSync(zGeo) : zMain(zGeo));
 
     lines.push(`N${pos}(${desc})`);
     lines.push(tCode);
@@ -365,6 +390,12 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
     };
 
     const zFrontClear = zCoord(fuso === "sincrono" ? geo.zBack : geo.zFront) + Math.max(2, aprox);
+    const g0FrontalSeguro = (xTarget: number, zTarget: number) => {
+      const zSafe = Math.max(zFrontClear, zTarget);
+      g0Cool(bD + 4, zSafe);
+      lines.push(`G0X${fmt(xTarget)}`);
+      if (zTarget < zSafe - 1e-4) lines.push(`G0Z${fmt(zTarget)}`);
+    };
 
     if (op.tipo === "face") {
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
@@ -415,27 +446,29 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
             lines.push(`G71U${fmt(apDesb)}R0.5`);
             lines.push(`G71P${n1}Q${n2}U${fmt(p.u ?? 0.4)}W${fmt(p.w ?? 0.1)}F${fmt(p.f ?? 0.25)}`);
             const fAc = acabExtOp ? acabExtOp.p.f ?? 0.1 : 0.1;
-            lines.push(`N${n1}G0X${fmt(pts[0].x)}`);
-            lines.push(`G1Z${fmt(zCoord(pts[0].z))}F${fmt(fAc)}`);
-            for (let k = 1; k < pts.length; k++) {
-              lines.push(`G1X${fmt(pts[k].x)}Z${fmt(zCoord(pts[k].z))}`);
-            }
-            lines.push(`N${n2}G1X${fmt(xSai)}`);
+            emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", fAc, { n1, n2, xSaida: xSai });
           } else {
-            const mono = real ? compensarRaio(perfilMono(s, false, false), p.rp ?? 0.4, false) : pts;
-            const monoU = mono.map((q) => ({ x: q.x + (p.u ?? 0.4), z: q.z }));
-            const xMin = Math.min(...monoU.map((q) => q.x));
+            const uOff = Math.max(0, p.u ?? 0.4);
+            const wOff = Math.max(0, p.w ?? 0.1);
+            const rawMono = perfilMono(s, false, false);
+            const rawOff = rawMono.map((q) => ({ x: q.x + uOff, z: q.z + wOff }));
+            const compOff = compensarRaio(rawOff, p.rp ?? 0.4, false);
+            const xMin = Math.min(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
             let xp = bD;
             let gXp = 0;
             while (gXp++ < 1000 && xp > xMin + 1e-6) {
               const nx = Math.max(xMin, xp - 2 * apDesb);
               if (nx >= xp - 1e-6) break;
               xp = nx;
-              const zl = zOndeAlvo(monoU, xp + 1e-6, false);
-              if (zl >= pts[0].z - 1e-6) continue;
-              lines.push(`G0X${fmt(xp)}Z${fmt(zStart)}`);
-              lines.push(`G1Z${fmt(zCoord(zl) + (p.w ?? 0.1))}F${fmt(p.f ?? 0.25)}`);
-              lines.push(`G1X${fmt(xp + 1)}`);
+              const zlComp = zOndeAlvo(compOff, xp + 1e-6, false);
+              const zlRaw = zOndeAlvo(rawOff, xp + 1e-6, false);
+              const zl = Math.max(zlComp, zlRaw);
+              if (zl >= pts[0].z - 1e-4) continue;
+              const zEndS = zCoord(zl);
+              const xRet = Math.min(bD + 4, xp + Math.min(2 * apDesb, 1.5));
+              lines.push(`G0X${fmt(xp)}`);
+              lines.push(`G1Z${fmt(zEndS)}F${fmt(p.f ?? 0.25)}`);
+              lines.push(`G1X${fmt(xRet)}Z${fmt(zEndS + 0.5)}`);
               lines.push(`G0Z${fmt(zStart)}`);
             }
           }
@@ -445,59 +478,95 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
           if (op.ciclo && c && mesmoRaio) {
             lines.push(`G70P${c.p}Q${c.q}`);
           } else {
-            lines.push(`G0X${fmt(pts[0].x)}`);
-            lines.push(`G1Z${fmt(zCoord(pts[0].z))}F${fmt(p.f ?? 0.1)}`);
-            for (let k = 1; k < pts.length; k++) {
-              lines.push(`G1X${fmt(pts[k].x)}Z${fmt(zCoord(pts[k].z))}`);
-            }
-            lines.push(`G1X${fmt(xSai)}`);
+            emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.1, { xSaida: xSai });
           }
         }
       }
     } else if (op.tipo === "canal" || op.tipo === "canalInt") {
       const interno = op.tipo === "canalInt";
       const s = subIntervalos(interno ? geo.int : geo.ext, fxs);
-      const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
-      const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
-      const dFundo = s.length
-        ? interno
-          ? Math.max(...s.map((q) => Math.max(q.xa, q.xb)))
-          : Math.min(...s.map((q) => Math.min(q.xa, q.xb)))
-        : interno
-          ? geo.intDmin + 2
-          : Math.max(2, geo.dMax - 4);
       const larg = Math.max(0.5, p.larg ?? 3);
       const passoZ = (p.ps ?? 0) > 0 ? p.ps : larg * 0.8;
       const pk = (p.pk ?? 1) > 0 ? p.pk : 1;
-      const xStart = interno ? Math.max(2, geo.intDmin - 1) : bD + 4;
+      const xStart = interno ? Math.max(1, geo.intDmin - 1) : bD + 4;
       emitSpindle(interno ? Math.max(geo.intDmin, 2) : bD, 1);
       if (interno) {
-        g0Cool(xStart, zFrontClear);
-        if (Math.abs(zCoord(zIni) - zFrontClear) > 1e-4) lines.push(`G0Z${fmt(zCoord(zIni))}`);
+        const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+        const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+        const dFundo = s.length
+          ? Math.max(...s.map((q) => Math.max(q.xa, q.xb)))
+          : geo.intDmin + 2;
+        g0FrontalSeguro(xStart, zCoord(zIni));
+        if (op.ciclo) {
+          lines.push(`G75R${fmt(p.re ?? 0.5)}`);
+          lines.push(
+            `G75X${fmt(dFundo)}Z${fmt(zCoord(zFim))}P${Math.round(pk * 1000)}Q${Math.round(passoZ * 1000)}F${fmt(p.f ?? 0.05)}`
+          );
+        } else {
+          const zA = zCoord(zIni);
+          const zB = zCoord(zFim);
+          const stepZ = zB <= zA ? -Math.max(0.2, passoZ) : Math.max(0.2, passoZ);
+          let zCur = zA;
+          let gC = 0;
+          while (gC++ < 200) {
+            lines.push(`G0Z${fmt(zCur)}`);
+            lines.push(`G1X${fmt(dFundo)}F${fmt(p.f ?? 0.05)}`);
+            lines.push(`G0X${fmt(xStart)}`);
+            if (Math.abs(zCur - zB) < 1e-4) break;
+            zCur = stepZ < 0 ? Math.max(zB, zCur + stepZ) : Math.min(zB, zCur + stepZ);
+          }
+        }
+        lines.push(`G0Z${fmt(zFrontClear)}`);
       } else {
-        g0Cool(xStart, Math.max(zFrontClear, zCoord(zIni)));
-        if (zCoord(zIni) < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zCoord(zIni))}`);
-      }
-      if (op.ciclo) {
-        lines.push(`G75R${fmt(p.re ?? 0.5)}`);
-        lines.push(
-          `G75X${fmt(dFundo)}Z${fmt(zCoord(zFim))}P${Math.round(pk * 1000)}Q${Math.round(passoZ * 1000)}F${fmt(p.f ?? 0.05)}`
-        );
-      } else {
-        const zA = zCoord(zIni);
-        const zB = zCoord(zFim);
-        const stepZ = zB <= zA ? -Math.max(0.2, passoZ) : Math.max(0.2, passoZ);
-        let zCur = zA;
-        let gC = 0;
-        while (gC++ < 200) {
-          lines.push(`G0Z${fmt(zCur)}`);
-          lines.push(`G1X${fmt(dFundo)}F${fmt(p.f ?? 0.05)}`);
-          lines.push(`G0X${fmt(xStart)}`);
-          if (Math.abs(zCur - zB) < 1e-4) break;
-          zCur = stepZ < 0 ? Math.max(zB, zCur + stepZ) : Math.min(zB, zCur + stepZ);
+        let canais = s.length ? detectarCanaisStar(s) : [];
+        if (!canais.length && s.length) {
+          canais = [{
+            zStart: s[0].zA,
+            zEnd: s[s.length - 1].zB,
+            fundo: Math.min(...s.map((q) => Math.min(q.xa, q.xb))),
+            topo: Math.max(...s.map((q) => Math.max(q.xa, q.xb))),
+          }];
+        }
+        canais = canais.filter((c) => !(Math.abs(c.zEnd - geo.zBack) < 1e-3 && c.zStart - c.zEnd <= larg + 1e-6));
+        const planos = canais.map((c) => planoCanalStar(geo, c, larg, largCorte, bD));
+        const temGrupos = planos.some((pl) => pl.grupos.length > 0);
+        if (!temGrupos) {
+          lines.push(`(CANAL: NADA PARA CORTAR SEM INVADIR FLANCOS COM BEDAME L${fmt(larg)})`);
+        } else {
+          let primeiroMov = true;
+          planos.forEach((pl) => {
+            pl.grupos.forEach((g) => {
+              const ziS = zCoord(g[0].z);
+              const zfS = zCoord(g[g.length - 1].z);
+              const fundo = g[0].d;
+              if (primeiroMov) {
+                primeiroMov = false;
+                g0Cool(xStart, Math.max(zFrontClear, ziS));
+                if (ziS < zFrontClear - 1e-4) lines.push(`G0Z${fmt(ziS)}`);
+              } else {
+                lines.push(`G0Z${fmt(ziS)}`);
+              }
+              if (op.ciclo) {
+                lines.push(`G75R${fmt(p.re ?? 0.5)}`);
+                lines.push(
+                  `G75X${fmt(fundo)}Z${fmt(zfS)}P${Math.round(pk * 1000)}Q${Math.round(passoZ * 1000)}F${fmt(p.f ?? 0.05)}`
+                );
+              } else {
+                const stepZ = zfS <= ziS ? -Math.max(0.2, passoZ) : Math.max(0.2, passoZ);
+                let zCur = ziS;
+                let gC = 0;
+                while (gC++ < 200) {
+                  lines.push(`G0Z${fmt(zCur)}`);
+                  lines.push(`G1X${fmt(fundo)}F${fmt(p.f ?? 0.05)}`);
+                  lines.push(`G0X${fmt(xStart)}`);
+                  if (Math.abs(zCur - zfS) < 1e-4) break;
+                  zCur = stepZ < 0 ? Math.max(zfS, zCur + stepZ) : Math.min(zfS, zCur + stepZ);
+                }
+              }
+            });
+          });
         }
       }
-      if (interno) lines.push(`G0Z${fmt(zFrontClear)}`);
     } else if (op.tipo === "roscaExt" || op.tipo === "roscaInt") {
       // Sistema B: G92 é limite de rotação; rosca sempre via G76
       const interno = op.tipo === "roscaInt";
@@ -520,8 +589,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
       const zEntry = zCoord(zIni) + aprox;
       lines.push(fuso === "sincrono" ? `G97S1=${rpmRosca}M103` : `G97S4=${rpmRosca}M403`);
       if (interno) {
-        g0Cool(xStart, zFrontClear);
-        if (Math.abs(zEntry - zFrontClear) > 1e-4) lines.push(`G0Z${fmt(zEntry)}`);
+        g0FrontalSeguro(xStart, zEntry);
       } else {
         g0Cool(Math.max(bD + 4, xStart), Math.max(zFrontClear, zEntry));
         if (zEntry < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zEntry)}`);
@@ -538,8 +606,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
       const zEntry = zCoord(zIni) + aprox;
       const rpmC = Math.round(p.rpm ?? 1500);
       lines.push(fuso === "sincrono" ? `G97S1=${rpmC}M103` : `G97S4=${rpmC}M403`);
-      g0Cool(0, Math.max(zFrontClear, zEntry));
-      if (zEntry < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zEntry)}`);
+      g0FrontalSeguro(0, zEntry);
       lines.push(`G1Z${fmt(zCoord(zFim))}F${fmt(p.f ?? 0.08)}`);
       lines.push(`G0Z${fmt(Math.max(zFrontClear, zEntry))}`);
     } else if (op.tipo === "furo") {
@@ -551,8 +618,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
       const qMm = Math.max(0.5, p.q ?? 5);
       const rpmF = Math.round(p.rpm ?? 1200);
       lines.push(fuso === "sincrono" ? `G97S1=${rpmF}M103` : `G97S4=${rpmF}M403`);
-      g0Cool(0, Math.max(zFrontClear, zEntry));
-      if (zEntry < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zEntry)}`);
+      g0FrontalSeguro(0, zEntry);
       if (op.ciclo) {
         lines.push(`G83Z${fmt(zFimS)}Q${Math.round(qMm * 1000)}F${fmt(p.f ?? 0.1)}`);
         lines.push("G80");
@@ -573,8 +639,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
       const zEntry = zCoord(zIni) + aprox;
       const rpmM = Math.round(p.rpm ?? 300);
       lines.push(fuso === "sincrono" ? `G97S1=${rpmM}M103` : `G97S4=${rpmM}M403`);
-      g0Cool(0, Math.max(zFrontClear, zEntry));
-      if (zEntry < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zEntry)}`);
+      g0FrontalSeguro(0, zEntry);
       lines.push(`G84Z${fmt(zCoord(zFim))}F${fmt(p.passo ?? 1.5)}`);
       lines.push("G80");
       if (zEntry < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zFrontClear)}`);
@@ -588,8 +653,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
         const xEnt = Math.max(1, dSeg - ((p.fi ?? 1) > 0 ? p.fi : 1));
         const zStart = zCoord(pts[0].z) + aprox;
         emitSpindle(Math.max(dSeg, 2), 0);
-        g0Cool(xEnt, Math.max(zFrontClear, zStart));
-        if (zStart < zFrontClear - 1e-4) lines.push(`G0Z${fmt(zStart)}`);
+        g0FrontalSeguro(xEnt, zStart);
         const chave = `${carro}_${fuso}_${JSON.stringify(fxs)}`;
         if (op.tipo === "desbInt") {
           const apDesb = Math.max(0.05, (p.ap ?? 1) > 0 ? p.ap : 1);
@@ -600,24 +664,29 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
             ciclos["I" + chave + (real ? "R" : "")] = { p: n1, q: n2, rp: p.rp ?? 0.4 };
             lines.push(`G71U${fmt(apDesb)}R0.5`);
             lines.push(`G71P${n1}Q${n2}U-${fmt(p.u ?? 0.3)}W${fmt(p.w ?? 0.1)}F${fmt(p.f ?? 0.2)}`);
-            lines.push(`N${n1}G0X${fmt(pts[0].x)}`);
-            lines.push(`G1Z${fmt(zCoord(pts[0].z))}F${fmt(p.f ?? 0.2)}`);
-            for (let k = 1; k < pts.length; k++) {
-              lines.push(`G1X${fmt(pts[k].x)}Z${fmt(zCoord(pts[k].z))}`);
-            }
-            lines.push(`N${n2}G1X${fmt(xEnt)}`);
+            emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.2, { n1, n2, xSaida: xEnt });
           } else {
-            const xMaxInt = Math.max(...pts.map((q) => q.x)) - (p.u ?? 0.3);
+            const uOff = Math.max(0, p.u ?? 0.3);
+            const wOff = Math.max(0, p.w ?? 0.1);
+            const rawMono = perfilMono(s, true, false);
+            const rawOff = rawMono.map((q) => ({ x: Math.max(0.5, q.x - uOff), z: q.z + wOff }));
+            const compOff = compensarRaio(rawOff, p.rp ?? 0.4, true);
+            const xMaxInt = Math.max(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
             let xp = dSeg;
             let gXp = 0;
             while (gXp++ < 1000 && xp < xMaxInt - 1e-6) {
               const nx = Math.min(xMaxInt, xp + 2 * apDesb);
               if (nx <= xp + 1e-6) break;
               xp = nx;
-              const zl = zOndeAlvo(pts, xp - 1e-6, true);
+              const zlComp = zOndeAlvo(compOff, xp - 1e-6, true);
+              const zlRaw = zOndeAlvo(rawOff, xp - 1e-6, true);
+              const zl = Math.max(zlComp, zlRaw);
+              if (zl >= pts[0].z - 1e-4) continue;
+              const zEndS = zCoord(zl);
+              const xRet = Math.max(1, xp - Math.min(2 * apDesb, 1.5));
               lines.push(`G0X${fmt(xp)}Z${fmt(zStart)}`);
-              lines.push(`G1Z${fmt(zCoord(zl) + (p.w ?? 0.1))}F${fmt(p.f ?? 0.2)}`);
-              lines.push(`G1X${fmt(Math.max(1, xp - 1))}`);
+              lines.push(`G1Z${fmt(zEndS)}F${fmt(p.f ?? 0.2)}`);
+              lines.push(`G1X${fmt(xRet)}Z${fmt(zEndS + 0.5)}`);
               lines.push(`G0Z${fmt(zStart)}`);
             }
           }
@@ -627,12 +696,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
           if (op.ciclo && c && mesmoRaio) {
             lines.push(`G70P${c.p}Q${c.q}`);
           } else {
-            lines.push(`G0X${fmt(pts[0].x)}`);
-            lines.push(`G1Z${fmt(zCoord(pts[0].z))}F${fmt(p.f ?? 0.08)}`);
-            for (let k = 1; k < pts.length; k++) {
-              lines.push(`G1X${fmt(pts[k].x)}Z${fmt(zCoord(pts[k].z))}`);
-            }
-            lines.push(`G1X${fmt(xEnt)}`);
+            emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.08, { xSaida: xEnt });
           }
         }
         lines.push(`G0Z${fmt(zFrontClear)}`);
@@ -641,10 +705,11 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
 
     lines.push(`G0X${fmt(bD + 4)}${coolStop}`);
     if (carro === 2) {
-      lines.push("G53X330");
-      lines.push("G53Z160");
+      lines.push(`G53X${x2000}`);
+      lines.push(`G53Z${z2000}`);
     } else {
-      lines.push("G53X270Z350");
+      lines.push(`G53Z${z1000}`);
+      lines.push(`G53X${x1000}`);
     }
     lines.push("G97G95");
     return lines;
@@ -665,8 +730,8 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o2000.push("H1.0060");
   o2000.push("M368");
   o2000.push("N99(RETORNO*TROCA*BARRA)");
-  o2000.push("G53X330");
-  o2000.push("G53Z170");
+  o2000.push(`G53X${x2000}`);
+  o2000.push(`G53Z${z2000Bar}`);
   o2000.push("M2010");
   o2000.push("G65P8420(LEITURA*POSICAO*ATUAL)");
   o2000.push("M2020");
@@ -684,8 +749,8 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o2000.push("M168(FECHAR*PINCA)");
   o2000.push("G0Z10");
   o2000.push("G0X40");
-  o2000.push("G53X330");
-  o2000.push("G53Z160");
+  o2000.push(`G53X${x2000}`);
+  o2000.push(`G53Z${z2000}`);
   o2000.push("G97G95");
   o2000.push("M2025");
 
@@ -721,9 +786,9 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o2000.push("M2060");
   o2000.push("G8129");
   o2000.push("M105M405");
-  o2000.push("G53X330");
+  o2000.push(`G53X${x2000}`);
   o2000.push("M2061");
-  o2000.push("G53Z170");
+  o2000.push(`G53Z${z2000Bar}`);
   o2000.push("M1581");
   o2000.push("G4X.5");
   o2000.push("M2070");
@@ -742,7 +807,7 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o1000.push("H1.0060(PRESSAO FUSO PRINCIPAL)");
   o1000.push("H3.0032(PRESSAO PICKUP)");
   o1000.push("N99(DESVIO*CARREGAR*BARRA)");
-  o1000.push("G53X270Z380(PTO TROCA)");
+  o1000.push(`G53X${x1000}Z${z1000}(PTO TROCA)`);
   o1000.push("M2010");
   o1000.push("G65P8420(LEITURA*POSICAO*ATUAL)");
   o1000.push("M2020");
@@ -764,8 +829,8 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o1000.push("M1905");
   o1000.push("M368");
   o1000.push("M1908");
-  o1000.push("G53Z380");
-  o1000.push("G53X270");
+  o1000.push(`G53Z${z1000}`);
+  o1000.push(`G53X${x1000}`);
   o1000.push("G97G95");
   o1000.push("M2031");
   o1000.push("M2032");
@@ -795,9 +860,9 @@ export function tmGerarIndexABC(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   o1000.push("M2059");
   o1000.push("M2060");
   o1000.push("G8129A1Z20");
-  o1000.push("G53Z350M405");
+  o1000.push(`G53Z${z1000}M405`);
   o1000.push("M2061");
-  o1000.push("G53X270");
+  o1000.push(`G53X${x1000}`);
   o1000.push("M2070");
   o1000.push("G97G95");
   o1000.push("G9392");

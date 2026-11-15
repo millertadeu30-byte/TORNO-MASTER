@@ -38,6 +38,8 @@ export interface GCodeCommand {
   incX?: number;
   shiftZ?: number;
   isMachineRef?: boolean;
+  isG53?: boolean;
+  isToolPark?: boolean;
 }
 
 export interface SimulationPlotItem {

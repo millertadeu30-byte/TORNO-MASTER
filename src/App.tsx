@@ -252,12 +252,22 @@ export default function App() {
   useEffect(() => saveJSON("cnc_stockZero", stockZero), [stockZero]);
   useEffect(() => saveJSON("cnc_layerColors", layerColors), [layerColors]);
   // Linhas da peça e do bruto já no sistema do torno (X diâmetro, Z com o zero escolhido) para desenhar no gráfico
-  // SUÍÇO: o gráfico mostra a peça com o Z virado (igual ao programa)
-  const zFlip = (cs: { x: number; z: number }[][]) => (zSinal === 1 ? cs : cs.map((c) => c.map((p) => ({ x: p.x, z: -p.z }))));
+  // SUÍÇO: o gráfico vira Z a partir da face da frente (Z0 = face da frente, Z+ entrando na peça)
   const partLayers = useMemo(() => {
+    const pecaLathe = partProfile && showPart ? profileToLathe(partProfile, partZero) : null;
+    const stockLathe = stockProfile && showStock ? profileToLathe(stockProfile, stockZero) : null;
+    let zFrontRef = partZero.offsetZ;
+    if (zSinal === -1 && partProfile) {
+      const refCs = pecaLathe || profileToLathe(partProfile, partZero);
+      let maxZ = -Infinity;
+      refCs.forEach((c) => c.forEach((p) => { if (p.z > maxZ) maxZ = p.z; }));
+      if (isFinite(maxZ)) zFrontRef = maxZ;
+    }
+    const zFlip = (cs: { x: number; z: number }[][]) =>
+      zSinal === 1 ? cs : cs.map((c) => c.map((p) => ({ x: p.x, z: zFrontRef - p.z + partZero.offsetZ })));
     const L: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[] = [];
-    if (stockProfile && showStock) L.push({ id: "bruto", label: "BRUTO", color: layerColors.bruto, dashed: true, curves: zFlip(profileToLathe(stockProfile, stockZero)) });
-    if (partProfile && showPart) L.push({ id: "peca", label: "PEÇA", color: layerColors.peca, dashed: false, curves: zFlip(profileToLathe(partProfile, partZero)) });
+    if (stockLathe) L.push({ id: "bruto", label: "BRUTO", color: layerColors.bruto, dashed: true, curves: zFlip(stockLathe) });
+    if (pecaLathe) L.push({ id: "peca", label: "PEÇA", color: layerColors.peca, dashed: false, curves: zFlip(pecaLathe) });
     return L.length ? L : undefined;
   }, [partProfile, stockProfile, partZero, stockZero, showPart, showStock, layerColors, zSinal]);
   // Peça REAL no 3D (com rasgos): eixo achado no STEP + zero da peça, para montar o sólido no simulador 3D
@@ -328,6 +338,7 @@ export default function App() {
   const [showIniciar, setShowIniciar] = useState<boolean>(false); // assistente ▶ Iniciar Programa
   const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" } | null>(null); // escolhendo região no simulador
   const [regiaoPick, setRegiaoPick] = useState<{ seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null>(null);
+  const [regiaoLimparSeq, setRegiaoLimparSeq] = useState<number>(0);
   const [painelRegioes, setPainelRegioes] = useState<TMRegiao[]>([]);
   const [fixComando, setFixComando] = useState<{ seq: number; zones: TMFixZone[] } | null>(null);
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
@@ -2476,6 +2487,7 @@ export default function App() {
                 regiaoSel={regiaoSel}
                 setRegiaoSel={setRegiaoSel}
                 pick={regiaoPick}
+                onLimparRegiao={() => setRegiaoLimparSeq((n) => n + 1)}
                 onRegioes={setPainelRegioes}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
                 onGerar={(r, vivo) => {
@@ -2594,6 +2606,7 @@ export default function App() {
                     <CNCSimulator
                       key={"proj" + projVer}
                       regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      regiaoLimparSeq={regiaoLimparSeq}
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
@@ -2658,6 +2671,7 @@ export default function App() {
                     <CNCSimulator
                       key={"proj" + projVer}
                       regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      regiaoLimparSeq={regiaoLimparSeq}
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
@@ -2994,11 +3008,12 @@ interface TMOp {
 }
 type TMParam = { k: string; rot: string; def: number; step: number; so?: string[]; rotPor?: Record<string, string>; opcoes?: string[]; soUso?: number[]; check?: boolean; quando?: [string, number[]] }; // check = caixinha; quando = só aparece se outro campo tiver esse valor // soUso = só aparece nesse "Uso do ciclo" (0 auto, 1 canal, 2 faceamento) // so = só aparece nesses ciclos ("LINHA" = sem ciclo)
 // Caixa de número: fica parada, seleciona tudo ao clicar, aceita vírgula e sinal de menos
-const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string }> = ({ v, set, cls }) => {
+const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void }> = ({ v, set, cls, inputRef }) => {
   const [txt, setTxt] = useState<string | null>(null);
   const mostra = txt !== null ? txt : String(v).replace(".", ",");
   return (
     <input
+      ref={inputRef}
       type="text"
       inputMode="decimal"
       value={mostra}
@@ -3011,12 +3026,13 @@ const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string }> = ({
     />
   );
 };
-const TMOptNum: React.FC<{ v: number | undefined; set: (n: number | undefined) => void; cls: string; placeholder?: string }> = ({ v, set, cls, placeholder }) => {
+const TMOptNum: React.FC<{ v: number | undefined; set: (n: number | undefined) => void; cls: string; placeholder?: string; inputRef?: (el: HTMLInputElement | null) => void }> = ({ v, set, cls, placeholder, inputRef }) => {
   const [txt, setTxt] = useState<string | null>(null);
   const base = v !== undefined && !isNaN(v) ? String(v).replace(".", ",") : "";
   const mostra = txt !== null ? txt : base;
   return (
     <input
+      ref={inputRef}
       type="text"
       inputMode="decimal"
       placeholder={placeholder}
@@ -3427,7 +3443,7 @@ function tmCompensar(pts: TMPt[], r: number, interno: boolean): TMPt[] {
   return simp.length >= 2 ? simp : pts;
 }
 
-function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig }) {
+function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number } }) {
   const f = tmFmt;
   const out: string[] = [];
   const h2: string[] = []; // operações da torre superior (H2) vão para o CANAL 2
@@ -3468,7 +3484,20 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G96 S" + p.vc + " M03;" + coment);
     }
   };
-  const recuar = () => { W("G00 X" + f(bD + 20) + ";"); W("G00 Z50.0; (RECUO - CONFERIR)"); };
+  const temRecuoTbsy = !!(cfg.recuoTroca && cfg.recuoTroca.x !== undefined && isFinite(cfg.recuoTroca.x) && cfg.recuoTroca.z !== undefined && isFinite(cfg.recuoTroca.z));
+  const recuar = () => {
+    if (temRecuoTbsy) {
+      if (cfg.recuoTroca!.modo === "G53") {
+        W("G53 X" + f(cfg.recuoTroca!.x!) + " Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
+      } else {
+        W("G00 X" + f(cfg.recuoTroca!.x!) + ";");
+        W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
+      }
+    } else {
+      W("G00 X" + f(bD + 20) + ";");
+      W("G00 Z50.0; (RECUO - PREENCHER POSICAO DE TROCA NA MAQUINA)");
+    }
+  };
   const ativos = ops.filter((o) => o.ativo);
   const corteOp = ativos.find((o) => o.tipo === "corte");
   const largCorte = corteOp ? corteOp.p.larg : 3;
@@ -4050,8 +4079,18 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   alvo = out;
   const fimOps = out.length;
   W("");
-  W("G00 X" + f(bD + 20) + " M09;");
-  W("G00 Z50.0;");
+  if (temRecuoTbsy) {
+    if (cfg.recuoTroca!.modo === "G53") {
+      W("M09;");
+      W("G53 X" + f(cfg.recuoTroca!.x!) + " Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
+    } else {
+      W("G00 X" + f(cfg.recuoTroca!.x!) + " M09;");
+      W("G00 Z" + f(cfg.recuoTroca!.z!) + "; (RECUO TROCA)");
+    }
+  } else {
+    W("G00 X" + f(bD + 20) + " M09;");
+    W("G00 Z50.0;");
+  }
   W("M30;");
 
   // ORIGENS: cada operação sai no zero da sua origem (G54, G55...) e no sentido do Z da máquina (normal ou SUÍÇO)
@@ -4065,13 +4104,16 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     const vira = face !== z0.face; // zero na outra face = peça virada
     const sg = og.tipo === "suico" ? -1 : 1;
     if (!vira && Math.abs(off - z0.offsetZ) < 1e-9 && sg === 1) return null;
-    return (linha: string) => linha.replace(/(^|[^A-Z])([ZW])(-?\d+(?:\.\d*)?)/g, (_m: string, pre: string, eixo: string, num: string) => {
-      const v = parseFloat(num);
-      if (eixo === "W") return pre + "W" + f(sg * (vira ? -1 : 1) * v);
-      const zn = v - z0.offsetZ;
-      const zk = vira ? -zn - geo.L + off : zn + off;
-      return pre + "Z" + f(sg * zk);
-    });
+    return (linha: string) =>
+      /\bG53\b/i.test(linha)
+        ? linha
+        : linha.replace(/(^|[^A-Z])([ZW])(-?\d+(?:\.\d*)?)/g, (_m: string, pre: string, eixo: string, num: string) => {
+            const v = parseFloat(num);
+            if (eixo === "W") return pre + "W" + f(sg * (vira ? -1 : 1) * v);
+            const zn = v - z0.offsetZ;
+            const zk = vira ? -zn - geo.L + off : zn + off;
+            return pre + "Z" + f(sg * zk);
+          });
   };
   marcas.forEach((m, j) => {
     const t = trf(m.op.orig || 1);
@@ -4147,6 +4189,42 @@ const tmFmt2 = (n: number) => n.toFixed(2).replace(".", ",");
 export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string };
 export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number };
 
+function sugerirFerrIndexABC(o: TMOp): string {
+  if (o.cab === "H2") {
+    return o.tipo === "face" || o.tipo === "acabExt" || o.tipo === "acabInt" ? "T304044" : "T301041";
+  }
+  const nf = (o.nomeFerr || "").toUpperCase();
+  if (/FRESA|ACION|SEXT|TORX/.test(nf)) return "T206026";
+  switch (o.tipo) {
+    case "face":
+    case "desbExt":
+      return "T201021";
+    case "acabExt":
+      return "T203023";
+    case "canal":
+    case "canalInt":
+      return "T202022";
+    case "corte":
+      return "T204024";
+    case "roscaExt":
+      return "T207027";
+    case "centro":
+      return "T103003";
+    case "furo":
+      return "T104004";
+    case "macho":
+      return "T105005";
+    case "desbInt":
+      return "T106006";
+    case "acabInt":
+      return "T102002";
+    case "roscaInt":
+      return "T101001";
+    default:
+      return "T201021";
+  }
+}
+
 export const PainelPrograma: React.FC<{
   partProfile: PartProfile | null;
   partZero: PartZeroConfig;
@@ -4159,11 +4237,12 @@ export const PainelPrograma: React.FC<{
   regiaoSel: { opId: string; modo: "cf" | "linha" } | null;
   setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" } | null) => void;
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
+  onLimparRegiao: () => void;
   onRegioes: (r: TMRegiao[]) => void;
   onFix: (z: TMFixZone[]) => void;
   onGerar: (r: { textos: [string, string]; nomes: [string, string]; doisCanais?: boolean; unicoCanal?: boolean }, vivo?: boolean) => void;
   onClose: () => void;
-}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onRegioes, onFix, onGerar, onClose }) => {
+}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
     try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
   };
@@ -4184,8 +4263,15 @@ export const PainelPrograma: React.FC<{
       estTope: undefined as number | undefined,
       estBedame: undefined as number | undefined,
       pega2Maq: undefined as number | undefined,
+      transZ: undefined as number | undefined,
+      recuosPorMaq: {} as Record<string, { modo?: "G53" | "G0_ABS" | "X_FIXO"; x?: number; z?: number; xCanal2?: number; zCanal2?: number }>,
     });
     if (!MAQUINAS_DNA.some((m) => m.id === c.maq)) c.maq = "TBSY";
+    const mIni = MAQUINAS_DNA.find((m) => m.id === c.maq) || MAQUINAS_DNA[0];
+    const tipoPad: TMOrigem["tipo"] = mIni.suico ? "suico" : "normal";
+    if (Array.isArray(c.origens)) {
+      c.origens = c.origens.map((og: TMOrigem) => ({ ...og, tipo: tipoPad }));
+    }
     return c;
   });
   const [ops, setOps] = useState<TMOp[]>(() => {
@@ -4200,15 +4286,57 @@ export const PainelPrograma: React.FC<{
   const [mostrarPerguntaMaq, setMostrarPerguntaMaq] = useState<boolean>(true);
   const [avisoMaq, setAvisoMaq] = useState<string>("");
   const [mostrarPend, setMostrarPend] = useState<boolean>(false);
+  const [focoAlvo, setFocoAlvo] = useState<{ key: string; seq: number } | null>(null);
+  const [piscaKey, setPiscaKey] = useState<string | null>(null);
+  const fieldRefs = useRef<Record<string, HTMLElement | null>>({});
   const primeiroRef = useRef<number | null>(null);
   useEffect(() => { try { localStorage.setItem("cnc_painel_cfg", JSON.stringify(cfg)); } catch {} }, [cfg]);
   useEffect(() => { try { localStorage.setItem("cnc_ops_painel", JSON.stringify(ops)); } catch {} }, [ops]);
   useEffect(() => { setAvisoMaq(""); setMostrarPend(false); }, [cfg.maq]);
+  useEffect(() => {
+    if (!focoAlvo) return;
+    let blinkTimer: number | undefined;
+    const t = window.setTimeout(() => {
+      const el = fieldRefs.current[focoAlvo.key];
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (typeof (el as HTMLElement).focus === "function") (el as HTMLElement).focus();
+      if (el instanceof HTMLInputElement) el.select();
+      setPiscaKey(null);
+      window.requestAnimationFrame(() => setPiscaKey(focoAlvo.key));
+      blinkTimer = window.setTimeout(() => setPiscaKey((cur) => (cur === focoAlvo.key ? null : cur)), 1500);
+    }, 50);
+    return () => {
+      window.clearTimeout(t);
+      if (blinkTimer !== undefined) window.clearTimeout(blinkTimer);
+    };
+  }, [focoAlvo]);
 
   const geo = useMemo(() => tmGeo(partProfile, partZero), [partProfile, partZero]);
   const maqAtual = useMemo(() => MAQUINAS_DNA.find((m) => m.id === cfg.maq) || MAQUINAS_DNA[0], [cfg.maq]);
-  // sentido do Z: máquina suíça ou ORIGEM 1 suíça = Z positivo entrando na peça (o gráfico e as regiões viram junto)
-  const sZ: 1 | -1 = maqAtual.suico || (cfg.origens && cfg.origens[0] && cfg.origens[0].tipo === "suico") ? -1 : 1;
+  const recuoAtual = { ...maqAtual.recuoTroca, ...(cfg.recuosPorMaq?.[maqAtual.id] || {}) };
+  const setRecuoMaq = (mud: { modo?: "G53" | "G0_ABS" | "X_FIXO"; x?: number; z?: number; xCanal2?: number; zCanal2?: number }) =>
+    setCfg((c) => ({
+      ...c,
+      recuosPorMaq: {
+        ...(c.recuosPorMaq || {}),
+        [maqAtual.id]: { ...maqAtual.recuoTroca, ...(c.recuosPorMaq?.[maqAtual.id] || {}), ...mud },
+      },
+    }));
+  const selecionarMaquina = (maqId: string) => {
+    const m = MAQUINAS_DNA.find((x) => x.id === maqId);
+    const tipoPad: TMOrigem["tipo"] = m?.suico ? "suico" : "normal";
+    setCfg((c) => ({
+      ...c,
+      maq: maqId,
+      origens: (c.origens || TM_ORIGENS_PADRAO).map((og: TMOrigem) => ({ ...og, tipo: tipoPad })),
+    }));
+  };
+  // sentido do Z segue a máquina: Star = suíço (Z+ entra na peça), demais = torno normal (Z− entra na peça)
+  const sZ: 1 | -1 = maqAtual.suico ? -1 : 1;
+  const deslH1 = partZero.offsetZ;
+  const zDisp = (z: number) => (sZ === 1 ? z : (geo ? geo.zFront - z + deslH1 : -z + deslH1));
+  const zFromDisp = (zd: number) => (sZ === 1 ? zd : (geo ? geo.zFront - zd + deslH1 : -zd + deslH1));
   useEffect(() => { onSentidoZ(sZ); }, [sZ]);
   const bD = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
 
@@ -4218,10 +4346,51 @@ export const PainelPrograma: React.FC<{
     if (partProfile && !cfg.nome) setCfg((c) => ({ ...c, nome: partProfile.name.replace(/\.[^.]+$/, "").toUpperCase().replace(/[^A-Z0-9_\-]/g, "_").slice(0, 20) }));
   }, [geo]);
 
+  // ao mudar a face zero ou desloc. Z da Origem 1, acompanha as faixas das operações sem apagar nada
+  const prevZeroRef = useRef<{ face: PartZeroConfig["face"]; offsetZ: number }>({
+    face: partZero.face,
+    offsetZ: partZero.offsetZ,
+  });
+  useEffect(() => {
+    const prev = prevZeroRef.current;
+    if (prev.face === partZero.face && Math.abs(prev.offsetZ - partZero.offsetZ) < 1e-9) return;
+    prevZeroRef.current = { face: partZero.face, offsetZ: partZero.offsetZ };
+    if (!partProfile || !geo) return;
+    const L = partProfile.aMax - partProfile.aMin;
+    const faceMudou = prev.face !== partZero.face;
+    const mapZ = (zOld: number) =>
+      faceMudou
+        ? partZero.offsetZ + prev.offsetZ - L - zOld
+        : zOld + (partZero.offsetZ - prev.offsetZ);
+    setOps((arr) =>
+      arr.map((o) => {
+        if (o.tipo === "face") {
+          const sobre = o.p.sobre !== undefined ? o.p.sobre : 0.5;
+          return { ...o, faixas: [[geo.zFront, geo.zFront + sobre] as TMFaixa] };
+        }
+        if (o.tipo === "corte") {
+          return { ...o, faixas: [[geo.zBack, geo.zBack] as TMFaixa] };
+        }
+        if (o.tipo === "centro") {
+          const prof = o.p.prof !== undefined ? o.p.prof : 2;
+          return { ...o, faixas: [[geo.zFront - prof, geo.zFront] as TMFaixa] };
+        }
+        return {
+          ...o,
+          faixas: o.faixas.map(([a, b]) => {
+            const na = mapZ(a);
+            const nb = mapZ(b);
+            return [Math.min(na, nb), Math.max(na, nb)] as TMFaixa;
+          }),
+        };
+      })
+    );
+  }, [partZero.face, partZero.offsetZ, partProfile, geo]);
+
   // regiões pintadas na peça
   useEffect(() => {
-    onRegioes(ops.filter((o) => o.ativo && TM_TIPOS[o.tipo].regiao).map((o) => ({ cor: o.cor, faixas: o.faixas.map((fx) => [fx[0] * sZ, fx[1] * sZ] as [number, number]), grupo: TM_TIPOS[o.tipo].grupo, ativa: aberta === o.id || (regiaoSel ? regiaoSel.opId === o.id : false) })));
-  }, [ops, aberta, regiaoSel, sZ]);
+    onRegioes(ops.filter((o) => o.ativo && TM_TIPOS[o.tipo].regiao).map((o) => ({ cor: o.cor, faixas: o.faixas.map((fx) => [zDisp(fx[0]), zDisp(fx[1])] as [number, number]), grupo: TM_TIPOS[o.tipo].grupo, ativa: aberta === o.id || (regiaoSel ? regiaoSel.opId === o.id : false) })));
+  }, [ops, aberta, regiaoSel, sZ, geo, deslH1]);
 
   // fixações ligadas/desligadas viram zonas FIX no simulador
   useEffect(() => {
@@ -4231,13 +4400,13 @@ export const PainelPrograma: React.FC<{
     const z: TMFixZone[] = [];
     if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD });
     if (cfg.l2) z.push({ lado: 2, za: geo.zBack, zb: geo.zBack + cfg.pega2, d: geo.dTras });
-    onFix(sZ === 1 ? z : z.map((q) => ({ ...q, za: -q.zb, zb: -q.za })));
-  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, bD, ops, sZ]);
+    onFix(sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) })));
+  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, bD, ops, sZ, deslH1]);
 
   // toque na peça (vem do simulador) vira região da operação escolhida
   useEffect(() => {
     if (!pick || !regiaoSel) return;
-    const r = sZ === 1 ? pick.r : { ...pick.r, z: -pick.r.z, za: pick.r.za === undefined ? undefined : -pick.r.za, zb: pick.r.zb === undefined ? undefined : -pick.r.zb };
+    const r = sZ === 1 ? pick.r : { ...pick.r, z: zFromDisp(pick.r.z), za: pick.r.za === undefined ? undefined : zFromDisp(pick.r.za), zb: pick.r.zb === undefined ? undefined : zFromDisp(pick.r.zb) };
     const sel = regiaoSel;
     if (sel.modo === "linha") {
       if (r.za === undefined || r.zb === undefined) return;
@@ -4267,13 +4436,14 @@ export const PainelPrograma: React.FC<{
   });
   const escolherRegiao = (id: string, modo: "cf" | "linha") => {
     primeiroRef.current = null;
+    onLimparRegiao();
     if (regiaoSel && regiaoSel.opId === id && regiaoSel.modo === modo) setRegiaoSel(null);
     else setRegiaoSel({ opId: id, modo });
   };
   const textoRegiao = (o: TMOp) => {
     if (!TM_TIPOS[o.tipo].regiao) return "peça toda";
     if (!o.faixas.length) return geo && tmFaixaPadrao(o.tipo, geo, o.p) ? "padrão da peça (abra para mudar)" : "sem região";
-    return o.faixas.map((fx) => "Z" + tmFmt(sZ * Math.max(fx[0], fx[1])) + "→Z" + tmFmt(sZ * Math.min(fx[0], fx[1]))).join("  ");
+    return o.faixas.map((fx) => "Z" + tmFmt(zDisp(Math.max(fx[0], fx[1]))) + "→Z" + tmFmt(zDisp(Math.min(fx[0], fx[1])))).join("  ");
   };
   const toda = (o: TMOp): TMFaixa[] => {
     if (!geo) return [];
@@ -4284,6 +4454,7 @@ export const PainelPrograma: React.FC<{
     return [[geo.zBack, geo.zFront]];
   };
   const barraBloqueio = useMemo(() => {
+    if (maqAtual.id !== "TBSY") return null;
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i];
       if (!o.ativo || !TM_OPS_INT_BARRA.includes(o.tipo)) continue;
@@ -4293,43 +4464,87 @@ export const PainelPrograma: React.FC<{
       if (bm > info.dMax + 1e-9) return { num: i + 1, bm, dMax: info.dMax };
     }
     return null;
-  }, [ops, geo]);
+  }, [ops, geo, maqAtual.id]);
   const { pendenciasMaquina, opPendencias } = useMemo(() => {
-    const lista: string[] = [];
-    const porOp: Record<string, { msg: string; campo?: "ferr" | "apz" | "cab" }[]> = {};
-    const addOp = (id: string, msg: string, campo?: "ferr" | "apz" | "cab") => {
+    const lista: { msg: string; targetKey: string; opId?: string; avisoOp?: boolean }[] = [];
+    const porOp: Record<string, { msg: string; campo?: "ferr" | "apz" | "cab" | "orig" | "d" | "bm" }[]> = {};
+    const addOp = (id: string, msg: string, campo: "ferr" | "apz" | "cab" | "orig" | "d" | "bm", targetKey: string, avisoOp = false) => {
       if (!porOp[id]) porOp[id] = [];
       porOp[id].push({ msg, campo });
-      lista.push(msg);
+      lista.push({ msg, targetKey, opId: id, avisoOp });
     };
-    if (maqAtual.id === "TBSY" || maqAtual.status === "EM CADASTRO") {
+    if (maqAtual.status === "EM CADASTRO") {
+      return { pendenciasMaquina: lista, opPendencias: porOp };
+    }
+    if (maqAtual.id === "TBSY") {
+      if (recuoAtual.x === undefined || !isFinite(recuoAtual.x)) {
+        lista.push({ msg: "Informar X de troca segura da TBSy.", targetKey: "maq_recuoX" });
+      }
+      if (recuoAtual.z === undefined || !isFinite(recuoAtual.z)) {
+        lista.push({ msg: "Informar Z de troca segura da TBSy.", targetKey: "maq_recuoZ" });
+      }
       return { pendenciasMaquina: lista, opPendencias: porOp };
     }
     if (maqAtual.diamMaxBarra !== undefined && bD > maqAtual.diamMaxBarra + 1e-9) {
-      lista.push(`Ø da barra (${tmFmt(bD)} mm) excede o máximo da máquina (${maqAtual.diamMaxBarra} mm).`);
+      lista.push({
+        msg: `Ø da barra (${tmFmt(bD)} mm) excede o máximo da máquina (${maqAtual.diamMaxBarra} mm).`,
+        targetKey: "bloco_maq",
+      });
+    }
+    if (maqAtual.suico) {
+      if (!(recuoAtual.x !== undefined && recuoAtual.x > 0)) {
+        lista.push({ msg: "X de recuo seguro (troca de ferramenta).", targetKey: "maq_recuoX" });
+      }
     }
     if (maqAtual.perfil === "STAR_G266" || maqAtual.id === "STAR_SR20J_N08") {
       if (!(cfg.cursoCab !== undefined && cfg.cursoCab > 0)) {
-        lista.push("Informar o curso do cabeçote Z (mm).");
+        lista.push({ msg: "Informar o curso do cabeçote Z (mm).", targetKey: "maq_cursoCab" });
       }
     }
     if (maqAtual.perfil === "STAR_G266") {
       if (cfg.ladoBedameK !== "0" && cfg.ladoBedameK !== "-17") {
-        lista.push("Escolher o lado do bedame (K = 0 direito ou K = -17 esquerdo).");
+        lista.push({ msg: "Escolher o lado do bedame K (0 = direito / -17 = esquerdo).", targetKey: "maq_ladoBedameK" });
       }
     }
     if (maqAtual.canais >= 2) {
       if (!(cfg.pega2Maq !== undefined && cfg.pega2Maq > 0)) {
-        lista.push("Informar a distância da pega do contrafuso (mm).");
+        lista.push({ msg: "Informar a distância da pega do contrafuso (mm).", targetKey: "maq_pega2Maq" });
       }
     }
     if (maqAtual.perfil === "SIEMENS_TND180") {
       const tTope = cfg.estTope !== undefined ? Math.round(cfg.estTope) : 0;
       const tBed = cfg.estBedame !== undefined ? Math.round(cfg.estBedame) : 0;
-      if (!(tTope >= 1 && tTope <= 12)) lista.push("Informar a estação do tope R2 (1 a 12).");
-      if (!(tBed >= 1 && tBed <= 12)) lista.push("Informar a estação do bedame R3 (1 a 12).");
+      if (!(tTope >= 1 && tTope <= 12)) {
+        lista.push({ msg: "Informar a estação do tope R2 (1 a 12).", targetKey: "maq_estTope" });
+      }
+      if (!(tBed >= 1 && tBed <= 12)) {
+        lista.push({ msg: "Informar a estação do bedame R3 (1 a 12).", targetKey: "maq_estBedame" });
+      }
       if (tTope >= 1 && tBed >= 1 && tTope === tBed) {
-        lista.push("Estação do tope (R2) e do bedame (R3) não podem ser iguais.");
+        lista.push({ msg: "Estação do tope (R2) e do bedame (R3) não podem ser iguais.", targetKey: "maq_estBedame" });
+      }
+      if (!(cfg.transZ !== undefined && isFinite(cfg.transZ))) {
+        lista.push({ msg: "Informar o TRANS Z (zero da máquina).", targetKey: "maq_transZ" });
+      }
+      if (recuoAtual.x === undefined || !isFinite(recuoAtual.x)) {
+        lista.push({ msg: "Informar X de troca segura (G53).", targetKey: "maq_recuoX" });
+      }
+      if (recuoAtual.z === undefined || !isFinite(recuoAtual.z)) {
+        lista.push({ msg: "Informar Z de troca segura (G53).", targetKey: "maq_recuoZ" });
+      }
+    }
+    if (maqAtual.id === "INDEX_ABC") {
+      if (recuoAtual.x === undefined || !isFinite(recuoAtual.x)) {
+        lista.push({ msg: "Informar X de troca segura do O2000 (G53).", targetKey: "maq_recuoX" });
+      }
+      if (recuoAtual.z === undefined || !isFinite(recuoAtual.z)) {
+        lista.push({ msg: "Informar Z de troca segura do O2000 (G53).", targetKey: "maq_recuoZ" });
+      }
+      if (recuoAtual.xCanal2 === undefined || !isFinite(recuoAtual.xCanal2)) {
+        lista.push({ msg: "Informar X de troca segura do O1000 (G53).", targetKey: "maq_recuoX2" });
+      }
+      if (recuoAtual.zCanal2 === undefined || !isFinite(recuoAtual.zCanal2)) {
+        lista.push({ msg: "Informar Z de troca segura do O1000 (G53).", targetKey: "maq_recuoZ2" });
       }
     }
     const origs = cfg.origens || [];
@@ -4338,36 +4553,63 @@ export const PainelPrograma: React.FC<{
       const T = TM_TIPOS[o.tipo];
       if (maqAtual.perfil === "SIEMENS_TND180") {
         const og = origs[(o.orig || 1) - 1] || origs[0];
-        if (o.cab === "H2" || og?.fuso === "contrafuso") {
-          addOp(o.id, `Op. ${idx + 1} (${T.nome}): TND 180 só tem 1 canal — mudar de H2/contrafuso para H1.`, "cab");
+        if (o.cab === "H2") {
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): TND 180 só tem 1 canal — mudar de H2 para H1.`, "cab", `op_${o.id}_cab`);
+        } else if (og?.fuso === "contrafuso") {
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): TND 180 só tem 1 canal — trocar origem de contrafuso.`, "orig", `op_${o.id}_orig`);
         }
       }
       if (maqAtual.id === "INDEX_ABC") {
         const f = (o.ferr || "").trim().toUpperCase();
         if (!/^T[123]\d{5}$/.test(f)) {
-          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar ferramenta Index 6 dígitos (ex.: T201021 no carro 2, T101011 no carro 1, T301031 no carro 3).`, "ferr");
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar ferramenta Index 6 dígitos (ex.: T201021 no carro 2, T101011 no carro 1, T301031 no carro 3).`, "ferr", `op_${o.id}_ferr`);
         } else {
           const carro = Number(f[1]);
           const pos = parseInt(f.slice(2, 4), 10);
           if (o.cab === "H2" && carro !== 3) {
-            addOp(o.id, `Op. ${idx + 1} (${T.nome}): operação no H2 da Index ABC usa carro 3 (T3xxxxx).`, "ferr");
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): operação no H2 da Index ABC usa carro 3 (T3xxxxx).`, "ferr", `op_${o.id}_ferr`);
           } else if ((o.cab || "H1") === "H1" && carro === 3) {
-            addOp(o.id, `Op. ${idx + 1} (${T.nome}): carro 3 (T3xxxxx) é para H2; no H1 usar carro 2 (T2xxxxx) ou carro 1 (T1xxxxx).`, "ferr");
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): carro 3 (T3xxxxx) é para H2; no H1 usar carro 2 (T2xxxxx) ou carro 1 (T1xxxxx).`, "ferr", `op_${o.id}_ferr`);
           } else if (carro === 1 && (pos === 7 || pos === 8)) {
-            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posições 07 e 08 do carro 1 são reservadas (descarga/síncrono).`, "ferr");
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posições 07 e 08 do carro 1 são reservadas (descarga/síncrono).`, "ferr", `op_${o.id}_ferr`);
           } else if (carro === 2 && o.tipo !== "corte" && pos === 5) {
-            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posição 05 do carro 2 é reservada (tope/alimentação).`, "ferr");
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): posição 05 do carro 2 é reservada (tope/alimentação).`, "ferr", `op_${o.id}_ferr`);
           }
         }
       }
       if (T.params.some((pr) => pr.k === "apz")) {
         if (o.p.apz === undefined || isNaN(o.p.apz) || o.p.apz < 0) {
-          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar folga Z no início do ciclo (mm ≥ 0).`, "apz");
+          addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar folga Z no início do ciclo (mm ≥ 0).`, "apz", `op_${o.id}_apz`);
+        }
+      }
+      if (geo) {
+        if (o.tipo === "furo") {
+          const dBroca = o.p.d ?? 0;
+          if (dBroca <= 0) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar Ø da broca (mm) — operação comentada para evitar colisão.`, "d", `op_${o.id}_d`, true);
+          } else if (geo.intDmin > 0 && dBroca > geo.intDmin + 0.05) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): broca Ø${tmFmt(dBroca)} mm > furo Ø${tmFmt(geo.intDmin)} mm — comentada para evitar colisão.`, "d", `op_${o.id}_d`, true);
+          }
+        }
+        if (TM_OPS_INT_BARRA.includes(o.tipo)) {
+          if (!geo.int.length) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): peça sem furo interno — operação comentada para evitar colisão.`, "cab", `op_${o.id}_cab`, true);
+          } else if ((o.p.bm ?? 0) > 0) {
+            const bInfo = tmCalcMaxBarra(o, geo);
+            if ((o.p.bm ?? 0) > bInfo.dMax + 1e-9) {
+              addOp(o.id, `Op. ${idx + 1} (${T.nome}): barra Ø${tmFmt(o.p.bm)} mm > máx Ø${tmFmt2(bInfo.dMax)} mm — comentada para evitar colisão.`, "bm", `op_${o.id}_bm`, true);
+            }
+          }
         }
       }
     });
     return { pendenciasMaquina: lista, opPendencias: porOp };
-  }, [maqAtual, bD, cfg.cursoCab, cfg.ladoBedameK, cfg.pega2Maq, cfg.estTope, cfg.estBedame, cfg.origens, ops]);
+  }, [maqAtual, bD, geo, cfg.cursoCab, cfg.ladoBedameK, cfg.pega2Maq, cfg.estTope, cfg.estBedame, cfg.transZ, cfg.origens, cfg.recuosPorMaq, ops]);
+  const pendenciasBloqueantes = pendenciasMaquina.some((x) => !x.avisoOp);
+  const irParaPendencia = (item: { msg: string; targetKey: string; opId?: string }) => {
+    if (item.opId) setAberta(item.opId);
+    setFocoAlvo({ key: item.targetKey, seq: Date.now() });
+  };
   const montarCfgMaq = (): StarGerarCfg => ({
     nome: cfg.nome,
     bD,
@@ -4381,6 +4623,15 @@ export const PainelPrograma: React.FC<{
     ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
     estTope: cfg.estTope,
     estBedame: cfg.estBedame,
+    transZ: cfg.transZ,
+    recuoTroca: {
+      modo: recuoAtual.modo,
+      x: recuoAtual.x,
+      z: recuoAtual.z,
+      xCanal2: recuoAtual.xCanal2,
+      zCanal2: recuoAtual.zCanal2,
+      zFrontal: recuoAtual.zFrontal,
+    },
   });
   const gerar = () => {
     if (!geo || barraBloqueio) return;
@@ -4395,7 +4646,7 @@ export const PainelPrograma: React.FC<{
       setAvisoMaq("O gerador desta máquina ainda está em construção (DNA em validação). Por enquanto só a Ergomat TBSy gera programa.");
       return;
     }
-    if (pendenciasMaquina.length > 0) {
+    if (maqAtual.id !== "TBSY" && pendenciasBloqueantes) {
       setMostrarPend(true);
       return;
     }
@@ -4424,12 +4675,12 @@ export const PainelPrograma: React.FC<{
       return;
     }
     setAvisoMaq("");
-    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero }));
+    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z } }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
     if (!aoVivo || !geo) return;
-    if (pendenciasMaquina.length > 0) return;
+    if (maqAtual.id !== "TBSY" && pendenciasBloqueantes) return;
     const t = setTimeout(() => {
       if (
         maqAtual.perfil === "STAR_18iTB" ||
@@ -4449,7 +4700,7 @@ export const PainelPrograma: React.FC<{
         if (!res.erro) onGerar(res, true);
         return;
       }
-      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero }), true);
+      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z } }), true);
     }, 400);
     return () => clearTimeout(t);
   }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina]);
@@ -4483,7 +4734,7 @@ export const PainelPrograma: React.FC<{
       <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-[#0d0d14]">
         <div className="text-sm font-bold text-emerald-400">▶ Programa da peça</div>
         <div className="flex items-center gap-2">
-          <select value={cfg.maq} onChange={(e) => { const v = e.target.value; setCfg((c) => ({ ...c, maq: v })); }} className={inp}>
+          <select value={cfg.maq} onChange={(e) => selecionarMaquina(e.target.value)} className={inp}>
             {MAQUINAS_DNA.map((m) => {
               const excede = m.diamMaxBarra !== undefined && bD > m.diamMaxBarra + 1e-9;
               return (
@@ -4501,7 +4752,11 @@ export const PainelPrograma: React.FC<{
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {/* MÁQUINA ESCOLHIDA NO INÍCIO */}
-        <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/15 p-2">
+        <div
+          ref={(el) => { fieldRefs.current["bloco_maq"] = el; }}
+          tabIndex={-1}
+          className={"rounded-lg border border-emerald-800/60 bg-emerald-950/15 p-2 " + (piscaKey === "bloco_maq" ? "pend-blink-3" : "")}
+        >
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] font-bold text-emerald-300 flex flex-wrap items-center gap-1.5">
               <span>Em qual máquina esta peça vai ser feita?</span>
@@ -4527,7 +4782,7 @@ export const PainelPrograma: React.FC<{
                     key={m.id}
                     type="button"
                     disabled={excede}
-                    onClick={() => { if (!excede) setCfg((c) => ({ ...c, maq: m.id })); }}
+                    onClick={() => { if (!excede) selecionarMaquina(m.id); }}
                     className={
                       "flex items-center justify-between gap-2 px-2 py-1.5 rounded border text-left transition " +
                       (excede
@@ -4549,68 +4804,6 @@ export const PainelPrograma: React.FC<{
                   </button>
                 );
               })}
-            </div>
-          )}
-          {maqAtual.id !== "TBSY" && maqAtual.status === "PRONTA" && (
-            <div className="mt-2 pt-2 border-t border-emerald-900/50 flex flex-wrap items-center gap-3 text-[11px]">
-              {(maqAtual.perfil === "STAR_G266" || maqAtual.id === "STAR_SR20J_N08") && (
-                <label className="flex items-center gap-1.5 text-zinc-300">
-                  <span>Curso cabeçote Z (mm)</span>
-                  <TMOptNum
-                    v={cfg.cursoCab}
-                    set={(n) => setCfg((c) => ({ ...c, cursoCab: n }))}
-                    placeholder="ex: 45"
-                    cls={inp + " w-20 " + (!(cfg.cursoCab !== undefined && cfg.cursoCab > 0) ? "border-amber-400 bg-amber-950/30" : "")}
-                  />
-                </label>
-              )}
-              {maqAtual.perfil === "STAR_G266" && (
-                <label className="flex items-center gap-1.5 text-zinc-300">
-                  <span>Lado bedame (K)</span>
-                  <select
-                    value={cfg.ladoBedameK || ""}
-                    onChange={(e) => setCfg((c) => ({ ...c, ladoBedameK: e.target.value as "" | "0" | "-17" }))}
-                    className={inp + " " + (cfg.ladoBedameK !== "0" && cfg.ladoBedameK !== "-17" ? "border-amber-400 bg-amber-950/30" : "")}
-                  >
-                    <option value="">Escolher…</option>
-                    <option value="0">0 (direito)</option>
-                    <option value="-17">-17 (esquerdo)</option>
-                  </select>
-                </label>
-              )}
-              {maqAtual.canais >= 2 && (
-                <label className="flex items-center gap-1.5 text-zinc-300">
-                  <span>Pega contrafuso (mm)</span>
-                  <TMOptNum
-                    v={cfg.pega2Maq}
-                    set={(n) => setCfg((c) => ({ ...c, pega2Maq: n, ...(n !== undefined && n > 0 ? { pega2: n } : {}) }))}
-                    placeholder="ex: 10"
-                    cls={inp + " w-20 " + (!(cfg.pega2Maq !== undefined && cfg.pega2Maq > 0) ? "border-amber-400 bg-amber-950/30" : "")}
-                  />
-                </label>
-              )}
-              {maqAtual.perfil === "SIEMENS_TND180" && (
-                <>
-                  <label className="flex items-center gap-1.5 text-zinc-300">
-                    <span>Estação tope R2</span>
-                    <TMOptNum
-                      v={cfg.estTope}
-                      set={(n) => setCfg((c) => ({ ...c, estTope: n }))}
-                      placeholder="1-12"
-                      cls={inp + " w-16 " + (!(cfg.estTope !== undefined && cfg.estTope >= 1 && cfg.estTope <= 12) || (cfg.estBedame !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30" : "")}
-                    />
-                  </label>
-                  <label className="flex items-center gap-1.5 text-zinc-300">
-                    <span>Estação bedame R3</span>
-                    <TMOptNum
-                      v={cfg.estBedame}
-                      set={(n) => setCfg((c) => ({ ...c, estBedame: n }))}
-                      placeholder="1-12"
-                      cls={inp + " w-16 " + (!(cfg.estBedame !== undefined && cfg.estBedame >= 1 && cfg.estBedame <= 12) || (cfg.estTope !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30" : "")}
-                    />
-                  </label>
-                </>
-              )}
             </div>
           )}
         </div>
@@ -4669,16 +4862,25 @@ export const PainelPrograma: React.FC<{
                     <option value="principal">Fuso principal</option>
                     <option value="contrafuso">Contrafuso</option>
                   </select>
-                  <select value={og.tipo} onChange={(e) => mud({ tipo: e.target.value as TMOrigem["tipo"] })} className={inp} title="Torno normal: Z negativo entrando na peça | Suíço: Z positivo entrando na peça">
-                    <option value="normal">Torno normal (Z−)</option>
-                    <option value="suico">Suíço (Z+)</option>
-                  </select>
+                  <span className="px-2 py-0.5 rounded border border-zinc-700 bg-zinc-950 text-zinc-300 text-[11px]">
+                    {maqAtual.suico ? "Suíço (Z+)" : "Torno normal (Z−)"}
+                  </span>
                   <select value={face} onChange={(e) => mud({ face: e.target.value as TMOrigem["face"] })} className={inp}>
                     <option value="direita">Zero na face direita</option>
                     <option value="esquerda">Zero na face esquerda</option>
                   </select>
                   <span className="text-zinc-400">desloc. Z</span>
                   {num(desl, (n) => mud({ desl: n }), 0.1, "w-16")}
+                  {k === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => mud({ desl: 0 })}
+                      className="text-zinc-500 hover:text-white text-xs px-1"
+                      title="Zerar deslocamento Z"
+                    >
+                      ✕
+                    </button>
+                  )}
                   {k > 0 && (
                     <button
                       onClick={() => {
@@ -4722,6 +4924,291 @@ export const PainelPrograma: React.FC<{
           </div>
         </div>
 
+        {/* DADOS DA MÁQUINA (só exibe os campos exigidos pela máquina escolhida) */}
+        {maqAtual.status === "PRONTA" && (
+          <div className="rounded-lg border border-amber-700/50 bg-zinc-950/60 p-2">
+            <div className="text-[11px] font-bold text-amber-300 mb-1.5">DADOS DA MÁQUINA ({maqAtual.nome})</div>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {(maqAtual.perfil === "STAR_G266" || maqAtual.id === "STAR_SR20J_N08") && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Curso do cabeçote Z (mm)</span>
+                  <TMOptNum
+                    inputRef={(el) => { fieldRefs.current["maq_cursoCab"] = el; }}
+                    v={cfg.cursoCab}
+                    set={(n) => setCfg((c) => ({ ...c, cursoCab: n }))}
+                    placeholder="ex: 45"
+                    cls={
+                      inp +
+                      " w-20 " +
+                      (!(cfg.cursoCab !== undefined && cfg.cursoCab > 0) ? "border-amber-400 bg-amber-950/30 " : "") +
+                      (piscaKey === "maq_cursoCab" ? "pend-blink-3" : "")
+                    }
+                  />
+                </label>
+              )}
+              {maqAtual.perfil === "STAR_G266" && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Lado do bedame K</span>
+                  <select
+                    ref={(el) => { fieldRefs.current["maq_ladoBedameK"] = el; }}
+                    value={cfg.ladoBedameK || ""}
+                    onChange={(e) => setCfg((c) => ({ ...c, ladoBedameK: e.target.value as "" | "0" | "-17" }))}
+                    className={
+                      inp +
+                      " " +
+                      (cfg.ladoBedameK !== "0" && cfg.ladoBedameK !== "-17" ? "border-amber-400 bg-amber-950/30 " : "") +
+                      (piscaKey === "maq_ladoBedameK" ? "pend-blink-3" : "")
+                    }
+                  >
+                    <option value="">Escolher…</option>
+                    <option value="0">0 = direito</option>
+                    <option value="-17">-17 = esquerdo</option>
+                  </select>
+                </label>
+              )}
+              {maqAtual.id !== "TBSY" && maqAtual.canais >= 2 && (
+                <label className="flex items-center gap-1.5 text-zinc-300">
+                  <span>Distância da pega do contrafuso (mm)</span>
+                  <TMOptNum
+                    inputRef={(el) => { fieldRefs.current["maq_pega2Maq"] = el; }}
+                    v={cfg.pega2Maq}
+                    set={(n) => setCfg((c) => ({ ...c, pega2Maq: n, ...(n !== undefined && n > 0 ? { pega2: n } : {}) }))}
+                    placeholder="ex: 10"
+                    cls={
+                      inp +
+                      " w-20 " +
+                      (!(cfg.pega2Maq !== undefined && cfg.pega2Maq > 0) ? "border-amber-400 bg-amber-950/30 " : "") +
+                      (piscaKey === "maq_pega2Maq" ? "pend-blink-3" : "")
+                    }
+                  />
+                </label>
+              )}
+              {maqAtual.perfil === "SIEMENS_TND180" && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Estação do tope (R2)</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_estTope"] = el; }}
+                      v={cfg.estTope}
+                      set={(n) => setCfg((c) => ({ ...c, estTope: n }))}
+                      placeholder="1-12"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (!(cfg.estTope !== undefined && cfg.estTope >= 1 && cfg.estTope <= 12) || (cfg.estBedame !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_estTope" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Estação do bedame (R3)</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_estBedame"] = el; }}
+                      v={cfg.estBedame}
+                      set={(n) => setCfg((c) => ({ ...c, estBedame: n }))}
+                      placeholder="1-12"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (!(cfg.estBedame !== undefined && cfg.estBedame >= 1 && cfg.estBedame <= 12) || (cfg.estTope !== undefined && Math.round(cfg.estTope) === Math.round(cfg.estBedame)) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_estBedame" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>TRANS Z (zero da máquina)</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_transZ"] = el; }}
+                      v={cfg.transZ}
+                      set={(n) => setCfg((c) => ({ ...c, transZ: n }))}
+                      placeholder="ex: 83"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (!(cfg.transZ !== undefined && isFinite(cfg.transZ)) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_transZ" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              {maqAtual.id === "INDEX_ABC" && (
+                <span className="text-[11px] text-zinc-400">Carro / posição / corretor (6 dígitos, ex.: T201021) ficam em cada operação abaixo.</span>
+              )}
+            </div>
+            {/* Posição de troca segura (recuoTroca) */}
+            <div className="mt-2 pt-2 border-t border-zinc-800/80 flex flex-wrap items-center gap-3 text-xs">
+              <span className="text-[11px] font-semibold text-zinc-300">Posição de troca segura:</span>
+              {maqAtual.id === "TBSY" && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Modo do recuo</span>
+                    <select
+                      value={recuoAtual.modo === "G53" ? "G53" : "G0_ABS"}
+                      onChange={(e) => setRecuoMaq({ modo: e.target.value as "G53" | "G0_ABS" })}
+                      className={inp}
+                    >
+                      <option value="G0_ABS">G0 absoluto</option>
+                      <option value="G53">G53</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>X de troca</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                      v={recuoAtual.x}
+                      set={(n) => setRecuoMaq({ x: n })}
+                      placeholder="vazio"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (recuoAtual.x === undefined || !isFinite(recuoAtual.x) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Z de troca</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoZ"] = el; }}
+                      v={recuoAtual.z}
+                      set={(n) => setRecuoMaq({ z: n })}
+                      placeholder="vazio"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (recuoAtual.z === undefined || !isFinite(recuoAtual.z) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoZ" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              {maqAtual.suico && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>X seguro (mm)</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                      v={recuoAtual.x}
+                      set={(n) => setRecuoMaq({ x: n })}
+                      placeholder="ex: 20"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (!(recuoAtual.x !== undefined && recuoAtual.x > 0) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <span className="text-[11px] text-zinc-400">
+                    Frontal: {recuoAtual.zFrontal === -1 ? "G0Z-1T0 / M1" : "G0Z-5 / M1"} · H2: G28W0
+                  </span>
+                </>
+              )}
+              {maqAtual.perfil === "SIEMENS_TND180" && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>G53 X</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                      v={recuoAtual.x}
+                      set={(n) => setRecuoMaq({ x: n })}
+                      placeholder="150"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (recuoAtual.x === undefined || !isFinite(recuoAtual.x) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>G53 Z</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoZ"] = el; }}
+                      v={recuoAtual.z}
+                      set={(n) => setRecuoMaq({ z: n })}
+                      placeholder="150"
+                      cls={
+                        inp +
+                        " w-20 " +
+                        (recuoAtual.z === undefined || !isFinite(recuoAtual.z) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoZ" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              {maqAtual.id === "INDEX_ABC" && (
+                <>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>O2000 G53 X</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoX"] = el; }}
+                      v={recuoAtual.x}
+                      set={(n) => setRecuoMaq({ x: n })}
+                      placeholder="330"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (recuoAtual.x === undefined || !isFinite(recuoAtual.x) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoX" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Z</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoZ"] = el; }}
+                      v={recuoAtual.z}
+                      set={(n) => setRecuoMaq({ z: n })}
+                      placeholder="160"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (recuoAtual.z === undefined || !isFinite(recuoAtual.z) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoZ" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>O1000 G53 X</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoX2"] = el; }}
+                      v={recuoAtual.xCanal2}
+                      set={(n) => setRecuoMaq({ xCanal2: n })}
+                      placeholder="270"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (recuoAtual.xCanal2 === undefined || !isFinite(recuoAtual.xCanal2) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoX2" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-zinc-300">
+                    <span>Z</span>
+                    <TMOptNum
+                      inputRef={(el) => { fieldRefs.current["maq_recuoZ2"] = el; }}
+                      v={recuoAtual.zCanal2}
+                      set={(n) => setRecuoMaq({ zCanal2: n })}
+                      placeholder="380"
+                      cls={
+                        inp +
+                        " w-16 " +
+                        (recuoAtual.zCanal2 === undefined || !isFinite(recuoAtual.zCanal2) ? "border-amber-400 bg-amber-950/30 " : "") +
+                        (piscaKey === "maq_recuoZ2" ? "pend-blink-3" : "")
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <span className="text-[10px] text-zinc-500">Origem: {maqAtual.recuoTroca.origem || "Não informado"}</span>
+            </div>
+          </div>
+        )}
+
         {/* OPERAÇÕES */}
         <div>
           <div className="flex items-center justify-between mb-1">
@@ -4757,6 +5244,7 @@ export const PainelPrograma: React.FC<{
               const temPendOp = o.ativo && pendOp.length > 0;
               const pendFerr = temPendOp && pendOp.some((x) => x.campo === "ferr");
               const pendCab = temPendOp && pendOp.some((x) => x.campo === "cab");
+              const pendOrig = temPendOp && pendOp.some((x) => x.campo === "orig");
               const pendApz = temPendOp && pendOp.some((x) => x.campo === "apz");
               return (
                 <div
@@ -4782,7 +5270,28 @@ export const PainelPrograma: React.FC<{
                       </div>
                       <div className="text-[10px] text-zinc-400 truncate">{textoRegiao(o)}</div>
                     </button>
-                    <input value={o.ferr} onChange={(e) => setOp(o.id, { ferr: e.target.value.toUpperCase() })} className={inp + " w-16 text-amber-300 " + (pendFerr ? "border-amber-400 bg-amber-950/40" : "")} title={pendFerr ? "Informar código da ferramenta no formato desta máquina (ex: T201021)" : "Ferramenta"} />
+                    <input
+                      ref={(el) => { fieldRefs.current[`op_${o.id}_ferr`] = el; }}
+                      value={o.ferr}
+                      onChange={(e) => setOp(o.id, { ferr: e.target.value.toUpperCase() })}
+                      className={inp + " w-16 text-amber-300 " + (pendFerr ? "border-amber-400 bg-amber-950/40 " : "") + (piscaKey === `op_${o.id}_ferr` ? "pend-blink-3" : "")}
+                      title={pendFerr ? "Informar código da ferramenta no formato desta máquina (ex: T201021)" : "Ferramenta"}
+                    />
+                    {maqAtual.id === "INDEX_ABC" && pendFerr && (() => {
+                      const sugIndex = sugerirFerrIndexABC(o);
+                      return (
+                        <span className="flex items-center gap-1 text-[10px] shrink-0">
+                          <span className="text-zinc-400 font-mono">{sugIndex}</span>
+                          <button
+                            type="button"
+                            onClick={() => setOp(o.id, { ferr: sugIndex })}
+                            className="px-1.5 py-0.5 rounded border border-zinc-600 text-zinc-300 hover:text-white hover:border-cyan-400"
+                          >
+                            usar sugestão
+                          </button>
+                        </span>
+                      );
+                    })()}
                     {T.ciclo && (
                       T.ciclos ? (
                         <select value={o.ciclo ? o.cicloSel || T.ciclos[0] : ""} onChange={(e) => { const v = e.target.value; setOp(o.id, v ? { ciclo: true, cicloSel: v } : { ciclo: false }); }} className={"text-[10px] font-bold px-1 py-0.5 rounded border bg-zinc-950 " + (o.ciclo ? "border-cyan-500 text-cyan-300" : "border-zinc-700 text-zinc-500")} title="Escolha o ciclo desta operação (os campos mudam conforme o ciclo)">
@@ -4795,8 +5304,22 @@ export const PainelPrograma: React.FC<{
                         </button>
                       )
                     )}
-                    <button onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300" : o.cab === "H2" ? "border-purple-500 text-purple-300" : "border-sky-600 text-sky-300")} title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)">{o.cab || "H1"}</button>
-                    <button onClick={() => { const n = (cfg.origens || []).length || 1; setOp(o.id, { orig: ((o.orig || 1) % n) + 1 }); }} className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-cyan-700 text-cyan-300 hover:border-cyan-500" title="Origem (zero peça) desta operação — clique para trocar. Configure na seção ORIGENS">{((cfg.origens || [])[(o.orig || 1) - 1] || { g: "G54" }).g}</button>
+                    <button
+                      ref={(el) => { fieldRefs.current[`op_${o.id}_cab`] = el; }}
+                      onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })}
+                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
+                      title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)"
+                    >
+                      {o.cab || "H1"}
+                    </button>
+                    <button
+                      ref={(el) => { fieldRefs.current[`op_${o.id}_orig`] = el; }}
+                      onClick={() => { const n = (cfg.origens || []).length || 1; setOp(o.id, { orig: ((o.orig || 1) % n) + 1 }); }}
+                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendOrig ? "border-amber-400 bg-amber-950/40 text-amber-300 " : "border-cyan-700 text-cyan-300 hover:border-cyan-500 ") + (piscaKey === `op_${o.id}_orig` ? "pend-blink-3" : "")}
+                      title="Origem (zero peça) desta operação — clique para trocar. Configure na seção ORIGENS"
+                    >
+                      {((cfg.origens || [])[(o.orig || 1) - 1] || { g: "G54" }).g}
+                    </button>
                     <button
                       onClick={() => {
                         const c: TMOp = { ...o, id: o.tipo + "_" + Date.now().toString(36), cor: TM_CORES[ops.length % TM_CORES.length], faixas: o.faixas.map((fx) => [fx[0], fx[1]] as TMFaixa), p: { ...o.p } };
@@ -4824,7 +5347,7 @@ export const PainelPrograma: React.FC<{
                           <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
                           <button onClick={() => setOp(o.id, { faixas: toda(o) })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
-                          <button onClick={() => setOp(o.id, { faixas: [] })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                          <button onClick={() => { setOp(o.id, { faixas: [] }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
                           <button onClick={() => { const t = toda(o); setOp(o.id, { faixas: [...o.faixas, (t.length ? [t[0][0], t[0][1]] : [0, 0]) as TMFaixa] }); }} className="text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-600 text-emerald-300 hover:border-emerald-400" title="Cria um trecho para você DIGITAR o Z de começo e de fim">+ Digitar Z início/fim</button>
                         </div>
                       )}
@@ -4838,9 +5361,9 @@ export const PainelPrograma: React.FC<{
                     return (
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-zinc-400">Começa em Z</span>
-                        {num(sZ * hi, (n) => ajusta(lo, n * sZ), 0.1, "w-20")}
+                        {num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
                         <span className="text-zinc-400">termina em Z</span>
-                        {num(sZ * lo, (n) => ajusta(n * sZ, hi), 0.1, "w-20")}
+                        {num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
                         <button onClick={() => setOp(o.id, { faixas: [] })} className="text-zinc-500 hover:text-red-400" title="Tirar a região">✕</button>
                         {o.faixas.length > 1 && <span className="text-[10px] text-zinc-500">({o.faixas.length} linhas)</span>}
                       </div>
@@ -4860,6 +5383,7 @@ export const PainelPrograma: React.FC<{
                               </select>
                             ) : pr.k === "apz" && maqAtual.id !== "TBSY" ? (
                               <TMOptNum
+                                inputRef={(el) => { fieldRefs.current[`op_${o.id}_apz`] = el; }}
                                 v={o.p.apz}
                                 set={(n) => {
                                   const np = { ...o.p };
@@ -4867,7 +5391,19 @@ export const PainelPrograma: React.FC<{
                                   else np.apz = n;
                                   setOp(o.id, { p: np });
                                 }}
-                                cls={inp + " w-16 " + (pendApz ? "border-amber-400 bg-amber-950/40" : "")}
+                                cls={inp + " w-16 " + (pendApz ? "border-amber-400 bg-amber-950/40 " : "") + (piscaKey === `op_${o.id}_apz` ? "pend-blink-3" : "")}
+                              />
+                            ) : (pr.k === "d" || pr.k === "bm") && maqAtual.id !== "TBSY" ? (
+                              <TMNum
+                                inputRef={(el) => { fieldRefs.current[`op_${o.id}_${pr.k}`] = el; }}
+                                v={o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def}
+                                set={(n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } })}
+                                cls={
+                                  inp +
+                                  " w-16 " +
+                                  (temPendOp && pendOp.some((x) => x.campo === pr.k) ? "border-amber-400 bg-amber-950/40 " : "") +
+                                  (piscaKey === `op_${o.id}_${pr.k}` ? "pend-blink-3" : "")
+                                }
                               />
                             ) : (
                               num(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def, (n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } }), pr.step, "w-16")
@@ -4930,10 +5466,29 @@ export const PainelPrograma: React.FC<{
       )}
       {pendenciasMaquina.length > 0 && (
         <div className={"px-3 py-1.5 border-t text-xs " + (mostrarPend ? "border-amber-500 bg-amber-950/90 text-amber-100" : "border-amber-800/70 bg-amber-950/50 text-amber-200")}>
-          <div className="font-bold text-amber-300">PENDÊNCIAS DA MÁQUINA ({pendenciasMaquina.length}) — preencha os campos em amarelo antes de gerar:</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold text-amber-300">PENDÊNCIAS DA MÁQUINA ({pendenciasMaquina.length}) — clique no item para ir até o campo:</div>
+            {maqAtual.id === "INDEX_ABC" && ops.some((o) => o.ativo && (opPendencias[o.id] || []).some((x) => x.campo === "ferr")) && (
+              <button
+                type="button"
+                onClick={() => setOps((arr) => arr.map((o) => (o.ativo && (opPendencias[o.id] || []).some((x) => x.campo === "ferr") ? { ...o, ferr: sugerirFerrIndexABC(o) } : o)))}
+                className="text-[10px] font-bold px-2 py-0.5 rounded border border-cyan-500/70 bg-cyan-950/50 text-cyan-200 hover:text-white hover:border-cyan-300 shrink-0"
+              >
+                usar todas as sugestões
+              </button>
+            )}
+          </div>
           <ul className="list-disc pl-4 mt-0.5 space-y-0.5 text-[11px] max-h-24 overflow-y-auto">
-            {pendenciasMaquina.map((msg, idx) => (
-              <li key={idx}>{msg}</li>
+            {pendenciasMaquina.map((item, idx) => (
+              <li key={idx}>
+                <button
+                  type="button"
+                  onClick={() => irParaPendencia(item)}
+                  className="text-left underline decoration-amber-400/70 hover:text-white transition"
+                >
+                  {item.msg}
+                </button>
+              </li>
             ))}
           </ul>
         </div>
