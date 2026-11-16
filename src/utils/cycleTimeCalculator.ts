@@ -1017,6 +1017,16 @@ export function calculateCycleTimeDetailed(
     }
   }
 
+  // CORTE AUTOMÁTICO da Star (G266 ... + G300): o macro corta da barra A até o X final com S rpm e F mm/v — entra no tempo total
+  for (const lnC of lines) {
+    const u = lnC.replace(/\([^)]*\)/g, "").toUpperCase();
+    if (!/G266/.test(u)) continue;
+    const vA = parseFloat((u.match(/A(-?[\d.]+)/) || [])[1] || "");
+    const vS = parseFloat((u.match(/S(-?[\d.]+)/) || [])[1] || "");
+    const vX = parseFloat((u.match(/X(-?[\d.]+)/) || [])[1] || "");
+    const vF = parseFloat((u.match(/F(-?[\d.]+)/) || [])[1] || "");
+    if (vA > 0 && vS > 0 && vF > 0 && isFinite(vX)) addFeed((((vA - vX) / 2 + 0.5) / (vF * vS)) * 60);
+  }
   const totalSec = feedSeconds + rapidSeconds + delaySeconds;
   const rows = toolOrder
     .map((k) => {

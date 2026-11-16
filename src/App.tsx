@@ -60,6 +60,7 @@ import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
 import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados } from "./generators/star18iTB";
+import { calculateCycleTimeDetailed } from "./utils/cycleTimeCalculator";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
 import { tmGerarIndexABC } from "./generators/indexABC";
@@ -4720,6 +4721,33 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
   const ehH2Op = (o: TMOp) => !!geo && !!maqAtual.suico && o.cab === "H2" && !!origH2P;
   const zH2Disp = (z: number) => { if (!geo || !origH2P) return z; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - z : z - (geo.zBack + dH); };
   const zFromH2 = (v: number) => { if (!geo || !origH2P) return v; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - v : v + geo.zBack + dH; };
+  // TEMPO DE CADA OPERAÇÃO (mm:ss): calculado pelas linhas que o gerador escreveu para ela
+  const tempoOp = (o: TMOp): number | null => {
+    if (!o.ativo) return null;
+    if (o.tipo === "corte") {
+      // CORTE: da barra até o Ø final, no avanço F e na rotação do corte (G96 limitado pelo G92 / G97 fixa)
+      const fC = Math.max(0.005, o.p.f ?? 0.05);
+      const xfC = o.p.xf ?? -0.5;
+      const r0 = (bD + 1) / 2, r1 = Math.min(r0, xfC / 2);
+      const nFixa = (o.p.mr ?? 1) === 1 ? ((o.p.rpm ?? 0) > 0 ? o.p.rpm : (o.p.vc ?? 100) * 1000 / (Math.PI * Math.max(1, bD))) : 0;
+      if (nFixa > 0 || maqAtual.perfil === "STAR_G266") {
+        const n = nFixa > 0 ? nFixa : Math.min(o.p.lim ?? 3000, ((o.p.vc ?? 100) * 1000) / (Math.PI * Math.max(1, bD)));
+        return ((r0 - r1) / (fC * n)) * 60;
+      }
+      let sC = 0;
+      const passos = 60;
+      for (let k = 0; k < passos; k++) {
+        const rM = r0 - ((r0 - r1) * (k + 0.5)) / passos;
+        const n = Math.min(o.p.lim ?? 3000, ((o.p.vc ?? 100) * 1000) / (Math.PI * Math.max(0.5, 2 * Math.abs(rM))));
+        sC += ((r0 - r1) / passos / (fC * n)) * 60;
+      }
+      return sC;
+    }
+    const b = blocosOpsGerados[o.id];
+    if (!b || !b.length) return null;
+    try { return calculateCycleTimeDetailed(b.map((l) => l.replace(/^\//, "")).join("\n")).totalSeconds; } catch { return null; }
+  };
+  const fmtMMSS = (s: number) => { const tt = Math.max(0, Math.round(s)); return String(Math.floor(tt / 60)).padStart(2, "0") + ":" + String(tt % 60).padStart(2, "0"); };
   // CAMPOS LIGADOS: ao preencher um valor que dá para calcular outro, o app já calcula
   const ligarCalc = (o: TMOp, k: string, n: number): Record<string, number> => {
     const p: Record<string, number> = { ...o.p, [k]: n };
@@ -5654,6 +5682,7 @@ return (
                       <div className="text-xs font-bold truncate flex items-center gap-1.5">
                         <span>{i + 1}. {T.nome}</span>
                         <span className="text-[9px] text-zinc-500">{T.grupo}</span>
+                        {(() => { const sOp = tempoOp(o); return sOp !== null ? <span className="text-[11px] font-mono font-bold text-emerald-400 border border-emerald-800/70 rounded px-1" title="Tempo desta operação (estimado pelo programa gerado)">⏱ {fmtMMSS(sOp)}</span> : null; })()}
                         {barraExcedida && <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-red-950 text-red-300 border border-red-500/60">Barra &gt; furo</span>}
                         {temPendOp && <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-500/60">Pendência</span>}
                       </div>
