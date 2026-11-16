@@ -72,6 +72,7 @@ interface CNCSimulatorProps {
   regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string; ap?: { x: number; z: number }; fundo?: { z: number; x: number } }[];
   fixComando?: { seq: number; zones: FixZone[] } | null; // painel liga/desliga fixações
   opsOcultos?: string[]; // operações com o traço escondido
+  gcodeOutro?: string; // programa do OUTRO canal (H1/H2): desenhado junto para ver as duas usinagens
   canalSim?: number; // canal/cabeçote do programa simulado (1 = Head 1, 2 = Head 2)
   partLayers?: PartLayer[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
@@ -1386,7 +1387,33 @@ export function simularGCodeEColisoes(
   fixFolga = 1,
   canalSim = 1
 ): SimColisaoRelatorio {
-  const { plotList, activeLineIndexes, error } = parseGCodeSim(gcodeText, simInvertZ, partLayers);
+  const parsedSim = parseGCodeSim(gcodeText, simInvertZ, partLayers);
+  const { activeLineIndexes, error } = parsedSim;
+  let plotList = parsedSim.plotList;
+  // CANAL 2 (HEAD 2 / contrafuso): o Z do programa é contado a partir do ZERO DO HEAD 2 (face do corte), entrando na peça.
+  // Para desenhar em cima da peça: Z do gráfico = Z0 H2 − Z do programa (espelhado). Só desenha a usinagem (blocos M75…M76).
+  {
+    const zH2Sim = fixZones.find((f) => typeof f.zH2 === "number")?.zH2;
+    if (canalSim >= 2 && typeof zH2Sim === "number") {
+      const dentro: boolean[] = [];
+      let on = false;
+      gcodeText.split("\n").forEach((ln, i) => {
+        const u = ln.replace(/\([^)]*\)/g, "").toUpperCase();
+        if (/M75(?!\d)/.test(u)) on = true;
+        dentro[i] = on;
+        if (/M76(?!\d)/.test(u)) on = false;
+      });
+      const temBloco = dentro.some(Boolean);
+      plotList = plotList
+        .filter((it) => !temBloco || dentro[Math.floor((it as any).linhaId ?? 0)])
+        .map((it) => {
+          const n: any = { ...it };
+          ["z1", "z2", "zc", "z"].forEach((k) => { if (typeof n[k] === "number") n[k] = zH2Sim - n[k]; });
+          if (n.type === "arc") n.isG3 = !n.isG3;
+          return n;
+        });
+    }
+  }
   const fixHits: SimFixHit[] = [];
   // REGRA DO USUÁRIO: a fixação do Lado 1 só vale para a usinagem do Head 1 (fuso principal)
   // e a pega do Lado 2 (contrafuso) só vale para a usinagem do Head 2 / origem do contrafuso.
@@ -1550,6 +1577,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   fixComando,
   canalSim = 1,
   opsOcultos,
+  gcodeOutro,
   partLayers,
   onInsertPoint,
 }) => {
@@ -2391,6 +2419,30 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     () => simularGCodeEColisoes(gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim),
     [gcodeText, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim]
   );
+  // OUTRO CANAL (ex.: vendo o Canal 1, desenha também a usinagem do Canal 2 no lugar certo da peça)
+  const plotOutro = useMemo(() => {
+    if (!gcodeOutro || !gcodeOutro.trim()) return [] as any[];
+    try {
+      const r2 = simularGCodeEColisoes(gcodeOutro, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim >= 2 ? 1 : 2);
+      // traços ocultos (botão ● / ◌) também valem para o outro canal
+      const norm = (l: string) => l.trim().replace(/^\//, "").replace(/\bG4X/g, "G4U");
+      const L = gcodeOutro.split("\n").map(norm);
+      const oc = new Set<number>();
+      (opsOcultos || []).forEach((id) => {
+        const b = blocosOpsGerados[id];
+        if (!b || !b.length) return;
+        const B = b.map(norm);
+        for (let i = 0; i + B.length <= L.length; i++) {
+          let ok = true;
+          for (let k = 0; k < B.length; k++) { if (L[i + k] !== B[k]) { ok = false; break; } }
+          if (ok) { for (let k = 0; k < B.length; k++) oc.add(i + k); break; }
+        }
+      });
+      return r2.plotList.filter((it: any) => !oc.has(Math.floor(it.linhaId ?? 0))).map((it: any) => ({ ...it, linhaId: 100000 + (it.linhaId ?? 0), outro: true })); // vem DEPOIS do canal ativo no bloco a bloco
+    } catch {
+      return [] as any[];
+    }
+  }, [gcodeOutro, simInvertZ, partLayers, fixZones, fixLado, fixFolga, canalSim, opsOcultos]);
   const [alvoCol, setAlvoCol] = useState<number>(-1); // qual colisão está selecionada (clique no alarme)
   const [alarmeMin, setAlarmeMin] = useState<boolean>(false); // alarme minimizado (só a bolinha)
   const irParaColisao = () => {
@@ -2717,7 +2769,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     let currentAnimationX = plotList.length > 0 ? plotList[0].x1 : 0;
     let currentAnimationZ = plotList.length > 0 ? plotList[0].z1 : 0;
 
-    plotList.forEach((item) => {
+    [...plotList, ...plotOutro].forEach((item) => {
       // If the user just typed and simulation is waiting for Play, don't draw
       if (driverTick === -2) {
         return;
@@ -2741,7 +2793,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           currentAnimationZ = item.z2;
         }
       } else {
-        if (item.linhaId <= driverTick || driverTick === -1) {
+        if ((!(item as any).outro && (item.linhaId <= driverTick || driverTick === -1)) || ((item as any).outro && driverTick !== -1 && item.linhaId <= driverTick)) {
           currentAnimationX = item.x2;
           currentAnimationZ = item.z2;
         }
@@ -3346,6 +3398,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     regiaoModo,
     regiaoClicks,
     linhasOcultasSet,
+    plotOutro,
     cursorStyle,
     canvasSize,
     gcodeText,
@@ -3616,14 +3669,14 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   // Collect lines that actually produce drawing movements for single block stepping
   useEffect(() => {
     const linesWithContent: number[] = [];
-    plotList.forEach((item) => {
+    [...plotList, ...plotOutro].forEach((item) => {
       if (!linesWithContent.includes(item.linhaId)) {
         linesWithContent.push(item.linhaId);
       }
     });
     linesWithContent.sort((a, b) => a - b);
     setLinesWithDrawing(linesWithContent);
-  }, [gcodeText]);
+  }, [gcodeText, plotOutro]); // bloco a bloco: canal ativo e depois o OUTRO canal (H2)
 
   // Reset and clear simulation on code change
   useEffect(() => {
@@ -3656,8 +3709,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
   // Synchronize active line on driver clock tick safely outside state updater to avoid rendering conflicts
   useEffect(() => {
-    if (isDriverActive && driverTick !== -1) {
-      onLineChange(driverTick);
+    if (isDriverActive && driverTick !== -1 && driverTick < 100000) {
+      onLineChange(driverTick); // linhas do outro canal (>= 100000) não mexem no editor
     }
   }, [driverTick, isDriverActive, onLineChange]);
 
@@ -3825,7 +3878,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     }
     const targetLine = linesWithDrawing[nextIdx];
     setDriverTick(targetLine);
-    onLineChange(targetLine);
+    if (targetLine < 100000) onLineChange(targetLine);
   };
 
   return (

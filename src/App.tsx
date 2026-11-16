@@ -2503,7 +2503,7 @@ export default function App() {
                     setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
                     if (r.unicoCanal && !vivo) setLayoutCount(1);
                   }
-                  setActivePaneIdx(0);
+                  setActivePaneIdx((r as any).focoH2 && r.doisCanais ? 1 : 0); // "só esta" no H2 -> mostra o CANAL 2 no gráfico
                   if (!vivo) {
                     setRegiaoSel(null);
                     setShowIniciar(false);
@@ -2614,6 +2614,7 @@ export default function App() {
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
                 opsOcultos={opsOcultos}
+                gcodeOutro={layoutCount >= 2 ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2681,6 +2682,7 @@ export default function App() {
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
                 opsOcultos={opsOcultos}
+                gcodeOutro={layoutCount >= 2 ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -3099,7 +3101,7 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "sx", rot: "Sobremetal X p/ acabamento (Ø) mm", def: 0.2, step: 0.05, so: ["LINHA"] }, { k: "sz", rot: "Sobremetal Z p/ acabamento mm", def: 0.1, step: 0.05, so: ["LINHA"] },
     { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 } ] },
   roscaExt: { nome: "Rosca externa", grupo: "EXTERNO", regiao: true, ciclo: "G76", ferr: "T0404", params: [
-    { k: "rpm", rot: "Rotação rpm", def: 800, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.25, step: 0.01 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "rpm", rot: "Rotação rpm", def: 800, step: 50 }, { k: "nr", rot: "Tipo de rosca", def: 0, step: 1, opcoes: ["Métrica (passo em mm)", "NPT — cônica 1:16, 60°", "BSPT / R — cônica 1:16, 55°", "BSP / G — paralela, 55°", "UNC / UNF / UN — fios por polegada, 60°"] }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05, quando: ["nr", [0]] }, { k: "tpi", rot: "Fios por polegada", def: 18, step: 1, quando: ["nr", [1, 2, 3, 4]] }, { k: "lh", rot: "Sentido da rosca", def: 0, step: 1, opcoes: ["Direita — corta da frente para trás", "Esquerda — corta de trás para a frente"] }, { k: "ne", rot: "Número de entradas", def: 1, step: 1 }, { k: "se", rot: "Como separar as entradas", def: 0, step: 1, opcoes: ["Deslocar o início em Z (qualquer comando, G76 ou G92)", "Mesmo ponto — ângulo Q no G92 (comandos novos; o G76 fica desligado)"], quando: ["ne", [2, 3, 4, 5, 6, 7, 8, 9]] }, { k: "np", rot: "Número de passadas", def: 8, step: 1 }, { k: "q1", rot: "Profundidade da 1ª passada mm (recalcula as passadas)", def: 0, step: 0.01 }, { k: "pm", rot: "Passes de acabamento (mola)", def: 1, step: 1 }, { k: "h", rot: "Altura do filete mm (0 = pela norma)", def: 0, step: 0.01 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   centro: { nome: "Furo de centro", grupo: "INTERNO", regiao: true, ciclo: "", ferr: "T0505", params: [
     { k: "rpm", rot: "Rotação rpm", def: 1500, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "prof", rot: "Profundidade mm", def: 2, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   furo: { nome: "Furação", grupo: "INTERNO", regiao: true, ciclo: "G83", ferr: "T0606", params: [
@@ -3109,7 +3111,7 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
   acabInt: { nome: "Acabamento interno", grupo: "INTERNO", regiao: true, ciclo: "G70", ferr: "T0808", params: [
     { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm (auto: furo da operação anterior)", def: 8, step: 0.1 }, { k: "xff", rot: "Ø final no fundo (0 = auto: até onde a barra alcança)", def: 0, step: 0.5 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   roscaInt: { nome: "Rosca interna", grupo: "INTERNO", regiao: true, ciclo: "G76", ferr: "T0909", params: [
-    { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.2, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "nr", rot: "Tipo de rosca", def: 0, step: 1, opcoes: ["Métrica (passo em mm)", "NPT — cônica 1:16, 60°", "BSPT / R — cônica 1:16, 55°", "BSP / G — paralela, 55°", "UNC / UNF / UN — fios por polegada, 60°"] }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05, quando: ["nr", [0]] }, { k: "tpi", rot: "Fios por polegada", def: 18, step: 1, quando: ["nr", [1, 2, 3, 4]] }, { k: "lh", rot: "Sentido da rosca", def: 0, step: 1, opcoes: ["Direita — corta da frente para trás", "Esquerda — corta de trás para a frente"] }, { k: "ne", rot: "Número de entradas", def: 1, step: 1 }, { k: "se", rot: "Como separar as entradas", def: 0, step: 1, opcoes: ["Deslocar o início em Z (qualquer comando, G76 ou G92)", "Mesmo ponto — ângulo Q no G92 (comandos novos; o G76 fica desligado)"], quando: ["ne", [2, 3, 4, 5, 6, 7, 8, 9]] }, { k: "np", rot: "Número de passadas", def: 8, step: 1 }, { k: "q1", rot: "Profundidade da 1ª passada mm (recalcula as passadas)", def: 0, step: 0.01 }, { k: "pm", rot: "Passes de acabamento (mola)", def: 1, step: 1 }, { k: "h", rot: "Altura do filete mm (0 = pela norma)", def: 0, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   macho: { nome: "Rosca com macho", grupo: "INTERNO", regiao: true, ciclo: "G84", ferr: "T1010", params: [
     { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
@@ -3253,7 +3255,8 @@ function tmNovaOp(tipo: TMOpTipo, faixas: TMFaixa[], i: number, material: string
 }
 
 // região padrão das operações que antes eram "peça toda" (o usuário pode mudar o Começo/Fim)
-function tmFaixaPadrao(tipo: TMOpTipo, geo: TMGeo, p: Record<string, number>): TMFaixa[] | null {
+function tmFaixaPadrao(tipo: TMOpTipo, geo: TMGeo, p: Record<string, number>, cab?: string): TMFaixa[] | null {
+  if (tipo === "face" && cab === "H2") return [[geo.zBack - (p.sobre !== undefined ? p.sobre : 0.5), geo.zBack]]; // H2: face do corte
   if (tipo === "face") return [[geo.zFront, geo.zFront + (p.sobre !== undefined ? p.sobre : 0.5)]];
   if (tipo === "centro") return [[geo.zFront - (p.prof !== undefined ? p.prof : 2), geo.zFront]];
   if (tipo === "corte") return [[geo.zBack, geo.zBack]];
@@ -4690,7 +4693,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     setOps((arr) => arr.map((o) => {
       if (o.id !== sel.opId) return o;
       const faixas: TMFaixa[] = [[Math.min(z1, rz), Math.max(z1, rz)]];
-      if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY } };
+      if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY, ...(o.tipo === "face" ? { xi: Math.round(Math.max(pXY.xI, pXY.xF) * 1000) / 1000, xf: Math.min(pXY.xI, pXY.xF) < 0.5 ? -1.6 : Math.round(Math.min(pXY.xI, pXY.xF) * 1000) / 1000 } : {}) } }; // faceamento: X do clique vira Ø inicial / Ø final
       const p = xDeep !== null ? { ...o.p, xff: Math.round(xDeep * 100) / 100, xffClk: 1 } : (o.p as any).xffClk ? { ...o.p, xff: 0, xffClk: 0 } : o.p;
       return { ...o, faixas, p: { ...p, ...pXY } };
     }));
@@ -4712,14 +4715,32 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     if (regiaoSel && regiaoSel.opId === id && regiaoSel.modo === modo) setRegiaoSel(null);
     else setRegiaoSel({ opId: id, modo });
   };
+  // HEAD 2 (suíço): o Z da região é mostrado a partir do ZERO DO HEAD 2 (face do corte), como no programa do canal 2
+  const origH2P = (cfg.origens || []).find((og: TMOrigem, j: number) => j > 0 && og.fuso === "contrafuso");
+  const ehH2Op = (o: TMOp) => !!geo && !!maqAtual.suico && o.cab === "H2" && !!origH2P;
+  const zH2Disp = (z: number) => { if (!geo || !origH2P) return z; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - z : z - (geo.zBack + dH); };
+  const zFromH2 = (v: number) => { if (!geo || !origH2P) return v; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - v : v + geo.zBack + dH; };
+  // CAMPOS LIGADOS: ao preencher um valor que dá para calcular outro, o app já calcula
+  const ligarCalc = (o: TMOp, k: string, n: number): Record<string, number> => {
+    const p: Record<string, number> = { ...o.p, [k]: n };
+    if (o.tipo === "roscaExt" || o.tipo === "roscaInt") {
+      const tR = Math.round(p.nr ?? 0);
+      const pR = tR === 0 ? (p.passo ?? 1.5) : 25.4 / Math.max(1, p.tpi ?? 18);
+      const a55 = tR === 2 || tR === 3;
+      const hR = (p.h ?? 0) > 0 ? p.h : tR === 1 ? 0.8 * pR : a55 ? 0.640327 * pR : pR * (o.tipo === "roscaInt" ? 0.5413 : 0.6134);
+      if (k === "q1" && n > 0) p.np = Math.max(1, Math.ceil((hR / n) ** 2 - 1e-9)); // 1ª passada -> nº de passadas
+      else if (k !== "q1") p.q1 = Math.round((hR / Math.sqrt(Math.max(1, Math.round(p.np ?? 8)))) * 1000) / 1000; // passadas/passo/altura -> 1ª passada
+    }
+    return p;
+  };
   const textoRegiao = (o: TMOp) => {
     if (!TM_TIPOS[o.tipo].regiao) return "peça toda";
-    if (!o.faixas.length) return geo && tmFaixaPadrao(o.tipo, geo, o.p) ? "padrão da peça (abra para mudar)" : "sem região";
-    return o.faixas.map((fx) => "Z" + tmFmt(zDisp(Math.max(fx[0], fx[1]))) + "→Z" + tmFmt(zDisp(Math.min(fx[0], fx[1])))).join("  ");
+    if (!o.faixas.length) return geo && tmFaixaPadrao(o.tipo, geo, o.p, o.cab) ? "padrão da peça (abra para mudar)" : "sem região";
+    return o.faixas.map((fx) => (ehH2Op(o) ? "Z" + tmFmt(zH2Disp(Math.min(fx[0], fx[1]))) + "→Z" + tmFmt(zH2Disp(Math.max(fx[0], fx[1]))) + " (H2)" : "Z" + tmFmt(zDisp(Math.max(fx[0], fx[1]))) + "→Z" + tmFmt(zDisp(Math.min(fx[0], fx[1]))))).join("  ");
   };
   const toda = (o: TMOp): TMFaixa[] => {
     if (!geo) return [];
-    const pad = tmFaixaPadrao(o.tipo, geo, o.p);
+    const pad = tmFaixaPadrao(o.tipo, geo, o.p, o.cab);
     if (pad) return pad;
     const grupo = TM_TIPOS[o.tipo].grupo;
     if (grupo === "INTERNO") return geo.int.length ? [[geo.intZmin, geo.intZmax]] : [];
@@ -4964,7 +4985,7 @@ const avisosLados: string[] = (() => {
         return;
       }
       setAvisoMaq("");
-      onGerar(res);
+      onGerar({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any);
       return;
     }
     setAvisoMaq("");
@@ -4990,7 +5011,7 @@ const avisosLados: string[] = (() => {
                 ? tmGerarIndexABC
                 : tmGerarStar18iTB;
         const res = gerFn(ops as unknown as StarTMOp[], geo as unknown as StarTMGeo, montarCfgMaq());
-        if (!res.erro) onGerar(res, true);
+        if (!res.erro) onGerar({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any, true);
         return;
       }
       onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
@@ -5668,7 +5689,7 @@ return (
                         </select>
                       ) : (
                         <button onClick={() => setOp(o.id, { ciclo: !o.ciclo })} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (o.ciclo ? "border-cyan-500 text-cyan-300" : "border-zinc-700 text-zinc-500")} title="Usar ciclo ou escrever linha a linha">
-                          {o.ciclo ? T.ciclo : "sem ciclo"}
+                          {(o.tipo === "roscaExt" || o.tipo === "roscaInt") && Math.round(o.p.ne ?? 1) > 1 && Math.round(o.p.se ?? 0) === 1 ? "G92 (Q)" : o.ciclo ? T.ciclo : o.tipo === "roscaExt" || o.tipo === "roscaInt" ? "G92" : "sem ciclo"}
                         </button>
                       )
                     )}
@@ -5755,10 +5776,12 @@ return (
                     return (
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-zinc-400">Começa em Z</span>
-                        {num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
+                        {ehH2Op(o) ? num(zH2Disp(lo), (n) => ajusta(zFromH2(n), hi), 0.1, "w-20") : num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
+                                {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento começa (0 = fora do bruto)">X Ø</span>{num(o.p.xi ?? 0, (n) => setOp(o.id, { p: { ...o.p, xi: n } }), 0.1, "w-16")}</>}
                                 {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta começa (0 = automático pelo Z)">X Ø</span>{num(o.p.xI ?? 0, (n) => setOp(o.id, { p: { ...o.p, xI: n } }), 0.1, "w-16")}</>}
                         <span className="text-zinc-400">termina em Z</span>
-                        {num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
+                        {ehH2Op(o) ? num(zH2Disp(hi), (n) => ajusta(lo, zFromH2(n)), 0.1, "w-20") : num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
+                                {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento termina (centro = -1,6)">X Ø</span>{num(o.p.xf ?? -1.6, (n) => setOp(o.id, { p: { ...o.p, xf: n } }), 0.1, "w-16")}</>}
                                 {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta termina (0 = automático pelo Z)">X Ø</span>{num(o.p.xF ?? 0, (n) => setOp(o.id, { p: { ...o.p, xF: n } }), 0.1, "w-16")}</>}
                                 {(o.tipo === "desbInt" || o.tipo === "acabInt") && <><span className="text-zinc-400" title="Ø final no fundo (0 = até onde a barra alcança)">X Ø fundo</span>{num(o.p.xff ?? 0, (n) => setOp(o.id, { p: { ...o.p, xff: n, xffClk: 0 } }), 0.1, "w-16")}</>}
                         <button onClick={() => setOp(o.id, { faixas: [] })} className="text-zinc-500 hover:text-red-400" title="Tirar a região">✕</button>
@@ -5794,7 +5817,7 @@ return (
                               <TMNum
                                 inputRef={(el) => { fieldRefs.current[`op_${o.id}_${pr.k}`] = el; }}
                                 v={o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def}
-                                set={(n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } })}
+                                set={(n) => setOp(o.id, { p: ligarCalc(o, pr.k, n) })}
                                 cls={
                                   inp +
                                   " w-16 " +
@@ -5803,12 +5826,24 @@ return (
                                 }
                               />
                             ) : (
-                              num(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def, (n) => setOp(o.id, { p: { ...o.p, [pr.k]: n } }), pr.step, "w-16")
+                              num(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def, (n) => setOp(o.id, { p: ligarCalc(o, pr.k, n) }), pr.step, "w-16")
                             )}
                           </label>
                         ))}
                       </div>
-                      {barraInfo && (
+                      {(o.tipo === "roscaExt" || o.tipo === "roscaInt") && (() => {
+                              const tR = Math.round(o.p.nr ?? 0);
+                              const pR = tR === 0 ? (o.p.passo ?? 1.5) : 25.4 / Math.max(1, o.p.tpi ?? 18);
+                              const a55 = tR === 2 || tR === 3;
+                              const hR = (o.p.h ?? 0) > 0 ? o.p.h : tR === 1 ? 0.8 * pR : a55 ? 0.640327 * pR : pR * (o.tipo === "roscaInt" ? 0.5413 : 0.6134);
+                              const nR = Math.max(1, Math.round(o.p.np ?? 8));
+                              return (
+                                <div className="text-[11px] mt-1.5 px-2 py-1 rounded border bg-zinc-950/80 border-zinc-800 text-zinc-300">
+                                  Passo <b className="text-white">{tmFmt2(pR)} mm</b>{tR > 0 ? <> ({o.p.tpi ?? 18} fios/pol)</> : null}{Math.round(o.p.ne ?? 1) > 1 ? <> · <b className="text-white">{Math.round(o.p.ne ?? 1)} entradas</b> → avanço F <b className="text-white">{tmFmt2(pR * Math.round(o.p.ne ?? 1))} mm</b></> : null} · altura do filete <b className="text-white">{tmFmt2(hR)} mm</b> · ângulo {a55 ? "55°" : "60°"} · 1º passe <b className="text-white">{tmFmt2(hR / Math.sqrt(nR))} mm</b> ({nR} passadas, área constante + {Math.round(o.p.pm ?? 1)} de acab.) · cone: <b className="text-white">pela linha mais longa da região</b> (ignora chanfro/raio nas pontas)
+                                </div>
+                              );
+                            })()}
+                            {barraInfo && (
                         <div className={"text-[11px] mt-1.5 px-2 py-1 rounded border " + (barraExcedida ? "bg-red-950/60 border-red-500/70 text-red-200" : "bg-zinc-950/80 border-zinc-800 text-zinc-300")}>
                           <div>
                             Ø máx. de barra p/ esta seleção: <span className="font-bold text-white">{tmFmt2(barraInfo.dMax)} mm</span>{" "}
