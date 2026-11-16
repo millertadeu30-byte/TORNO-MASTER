@@ -63,6 +63,7 @@ export interface StarGerarCfg {
   zero?: { face: "direita" | "esquerda"; offsetZ: number };
   maqId?: string;
   pega2?: number;
+  soloId?: string; // simular só esta operação (as outras ficam só no cálculo)
   cursoCab?: number;
   ladoBedameK?: number;
   estTope?: number;
@@ -650,7 +651,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const acabExtOp = ativos.find((o) => o.tipo === "acabExt" && (o.cab || "H1") === "H1");
   const ferramentasUsadas: { tNum: number; desc: string; vu: number }[] = [];
 
-  const gerarOpLinhas = (op: StarTMOp, canal: "H1" | "H2"): string[] => {
+  const gerarOpLinhas = (op: StarTMOp, canal: "H1" | "H2"): string[] => { const rOp = espelharXLinhas(gerarOpLinhasBase(op, canal), (op.p.espX ?? 0) === 1); blocosOpsGerados[op.id] = rOp; return rOp; };
+  const gerarOpLinhasBase = (op: StarTMOp, canal: "H1" | "H2"): string[] => {
     const lines: string[] = [];
     const p = op.p;
     const fxs = op.faixas.length ? op.faixas : faixaPadraoStar(op.tipo, geo, p) || [];
@@ -683,8 +685,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         lines.push(`(PENDENCIA: ${desc} - INFORMAR DIAMETRO DA BROCA - OPERACAO COMENTADA)`);
         return lines;
       }
-      if (geo.intDmin > 0 && dBroca > geo.intDmin + 0.05) {
-        lines.push(`(PENDENCIA: ${desc} - BROCA D${fmt(dBroca)} MAIOR QUE FURO D${fmt(geo.intDmin)} - OPERACAO COMENTADA)`);
+      // menor Ø interno DENTRO da região da furação (não o menor furo da peça inteira)
+      const dLimFuro = (() => { let mm = Infinity; for (const q of geo.int) { if (Math.abs(q.zA - q.zB) < 1e-6) continue; const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB); for (const fr of (op.faixas || [])) { const a = Math.max(lo, Math.min(fr[0], fr[1])), b = Math.min(hi, Math.max(fr[0], fr[1])); if (b - a < 1e-6) continue; const xz = (z: number) => q.xa + ((z - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa); mm = Math.min(mm, xz(a), xz(b)); } } return isFinite(mm) ? mm : geo.intDmin; })();
+      if (dLimFuro > 0 && dBroca > dLimFuro + 0.05) {
+        lines.push(`(PENDENCIA: ${desc} - BROCA D${fmt(dBroca)} MAIOR QUE FURO D${fmt(dLimFuro)} - OPERACAO COMENTADA)`);
         return lines;
       }
     }
@@ -693,7 +697,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         lines.push(`(PENDENCIA: ${desc} - SEM PERFIL INTERNO NA REGIAO - OPERACAO COMENTADA)`);
         return lines;
       }
-      const dSegChk = op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
+      const dSegChk = (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin; // furo já aberto (pré-furo da operação anterior) vale para TODAS as internas
       const bm = p.bm ?? 0;
       const fb = p.fb ?? 0.5;
       if (bm > 0 && bm + fb > dSegChk + (op.tipo === "desbInt" ? 2 * Math.max(0.05, p.ap ?? 1) : 0) + 1e-6) {
@@ -770,6 +774,107 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         const chave = JSON.stringify(fxs);
         if (op.tipo === "desbExt") {
           const apDesb = Math.max(0.05, (p.ap ?? 1.5) > 0 ? p.ap : 1.5);
+          // REBAIXOS / MERGULHOS (mesma regra consolidada da TBSy): "Entrar nos rebaixos = 1" -> depois do desbaste por fora
+          // (com ou sem ciclo) desbasta os rebaixos entrando pela rampa já usinada, sempre no sentido do cabeçote,
+          // respeitando o ângulo da pastilha e o raio da ponta. O que a pastilha não alcança fica para o bedame.
+          const fazerRebaixos = () => {
+            if (p.real !== 1) return;
+            const angR = (p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27;
+            const rpR = p.rp ?? 0.4;
+            const alvo = compensarRaio(limitaMergulho(perfilMono(s, false, true).pts, angR), rpR, false);
+            const env = compensarRaio(perfilMono(s, false, false).pts, rpR, false);
+            const U = Math.max(0, p.u ?? 0.4);
+            const Wd = Math.max(0, p.w ?? 0.1);
+            const fR = p.f ?? 0.25;
+            const valEm = (lst: { x: number; z: number }[], z: number) => {
+              let v = -Infinity;
+              for (let i = 0; i < lst.length - 1; i++) {
+                const a = lst[i], b = lst[i + 1];
+                const lo = Math.min(a.z, b.z), hi = Math.max(a.z, b.z);
+                if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+                v = Math.max(v, hi - lo < 1e-9 ? Math.max(a.x, b.x) : a.x + ((z - a.z) / (b.z - a.z)) * (b.x - a.x));
+              }
+              return v;
+            };
+            const comSobre = (lst: { x: number; z: number }[], z: number) => {
+              let m = -Infinity;
+              [-Wd, -Wd / 2, 0, Wd / 2, Wd].forEach((dz) => { m = Math.max(m, valEm(lst, z + dz)); });
+              return m + U;
+            };
+            const passo = 0.02;
+            const zS0 = s[0].zA, zFimR = s[s.length - 1].zB;
+            const ZG: number[] = [];
+            for (let z = zS0; z >= zFimR - 1e-9 && ZG.length < 20000; z -= passo) ZG.push(z);
+            const TA = ZG.map((z) => comSobre(alvo, z));
+            const MA = ZG.map((z) => comSobre(env, z));
+            const dAp = Math.max(0.02, 2 * apDesb);
+            const r1 = Math.min(1, dAp * 0.8);
+            const xSafe = bD + 1;
+            const rebs: [number, number][] = [];
+            let ini = -1;
+            ZG.forEach((_z, i) => {
+              const fundo = TA[i] < MA[i] - 0.02;
+              if (fundo && ini < 0) ini = i;
+              if ((!fundo || i === ZG.length - 1) && ini >= 0) { rebs.push([ini, fundo ? i : i - 1]); ini = -1; }
+            });
+            if (rebs.length) lines.push("(MERGULHO LIMITADO A " + fmt(angR) + " GRAUS - O QUE A PASTILHA NAO ALCANCA SOBRA PARA O BEDAME)");
+            rebs.forEach(([i0, i1], ir) => {
+              const idx: number[] = [];
+              for (let i = i0; i <= i1; i++) idx.push(i);
+              const topo = Math.max(...idx.map((i) => MA[i]));
+              const fundoMin = Math.min(...idx.map((i) => TA[i]));
+              lines.push("(REBAIXO " + (ir + 1) + " Z" + fmt(zCoord(ZG[i0])) + " A Z" + fmt(zCoord(ZG[i1])) + " - ENTRA PELA RAMPA, SEMPRE NO SENTIDO DO CABECOTE)");
+              lines.push("G0X" + fmt(xSafe));
+              lines.push("G0Z" + fmt(zCoord(ZG[i0])));
+              let curX = MA[i0] + 0.5;
+              let curZi = i0;
+              lines.push("G0X" + fmt(curX));
+              let L = topo;
+              let g = 0;
+              while (g++ < 500 && L > fundoMin + 1e-6) {
+                const prevL = L;
+                L = Math.max(fundoMin, L - dAp);
+                const runs: [number, number][] = [];
+                let a = -1;
+                idx.forEach((i, k) => {
+                  const corta = TA[i] < L - 1e-6 && MA[i] > L + 1e-6;
+                  if (corta && a < 0) a = i;
+                  if ((!corta || k === idx.length - 1) && a >= 0) { runs.push([a, corta ? i : i - 1]); a = -1; }
+                });
+                runs.forEach(([ia, ib]) => {
+                  let ie = ia;
+                  let gIe = 0;
+                  while (gIe++ < 500 && ie - 1 >= i0 && TA[ie - 1] < prevL - 1e-6) ie--;
+                  if (ie - 1 >= i0) ie--;
+                  const xEnt = Math.min(prevL, TA[ie]);
+                  let H = Math.max(prevL, curX);
+                  for (let i = Math.min(curZi, ie); i <= Math.max(curZi, ie); i++) H = Math.max(H, TA[i] + 0.5);
+                  H = Math.min(H, xSafe);
+                  lines.push("G0X" + fmt(H));
+                  lines.push("G0Z" + fmt(zCoord(ZG[ie])));
+                  lines.push("G0X" + fmt(xEnt + 0.2));
+                  lines.push("G1X" + fmt(xEnt) + "F" + fmt(fR));
+                  const ramp: { x: number; z: number }[] = [{ x: xEnt, z: ZG[ie] }];
+                  for (let i = ie + 1; i <= ia; i++) ramp.push({ x: Math.max(L, Math.min(prevL, TA[i])), z: ZG[i] });
+                  ramp.push({ x: L, z: ZG[ia] });
+                  const rs: { x: number; z: number }[] = [];
+                  ramp.forEach((q) => {
+                    if (rs.length >= 2) {
+                      const u = rs[rs.length - 2], v = rs[rs.length - 1];
+                      if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4) rs.pop();
+                    }
+                    rs.push(q);
+                  });
+                  for (let k = 1; k < rs.length; k++) lines.push("G1X" + fmt(rs[k].x) + "Z" + fmt(zCoord(rs[k].z)));
+                  lines.push("G1Z" + fmt(zCoord(ZG[ib])));
+                  curX = Math.min(L + r1, prevL);
+                  curZi = ib;
+                  lines.push("G0X" + fmt(curX) + "(SOBE EM G0 - AREA JA USINADA)");
+                });
+              }
+              lines.push("G0X" + fmt(xSafe) + "(SAI DO REBAIXO POR CIMA)");
+            });
+          };
           if (op.ciclo) {
             const n1 = nIdx * 100;
             const n2 = n1 + 50;
@@ -779,6 +884,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             lines.push("G71P" + n1 + "Q" + n2 + "U" + fmt(p.u ?? 0.4) + "W" + fmt(-(p.w ?? 0.1)) + "F" + fmt(p.f ?? 0.25));
             const fAc = acabExtOp ? acabExtOp.p.f ?? 0.1 : 0.1;
             emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", fAc, { n1, n2, xSaida: xSai });
+            fazerRebaixos();
           } else {
             const uOff = Math.max(0, p.u ?? 0.4);
             const wOff = Math.max(0, p.w ?? 0.1);
@@ -786,13 +892,17 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             const rawOff = rawMono.map((q) => ({ x: q.x + uOff, z: q.z + wOff }));
             const compOff = compensarRaio(rawOff, p.rp ?? 0.4, false);
             const xMin = Math.min(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
+            // degraus retos da peça (+ sobremetal): o passe PARA neles (ex.: Ø28,4 + 0,4 = Ø28,8), igual à TBSy
+            const platE = Array.from(new Set(compOff.filter((q, k) => k < compOff.length - 1 && Math.abs(compOff[k + 1].x - q.x) < 2e-3 && Math.abs(compOff[k + 1].z - q.z) > 0.05).map((q) => Math.round(q.x * 1000) / 1000)));
             let xp = bD;
             let gXp = 0;
             while (gXp++ < 1000 && xp > xMin + 1e-6) {
-              const nx = Math.max(xMin, xp - 2 * apDesb);
+              let nx = Math.max(xMin, xp - 2 * apDesb);
+              const plS = platE.filter((pv) => pv < xp - 1e-6 && pv > nx + 1e-6);
+              if (plS.length) nx = Math.max(...plS);
               if (nx >= xp - 1e-6) break;
               xp = nx;
-              const zlComp = zOndeAlvo(compOff, xp + 1e-6, false);
+              const zlComp = zOndeAlvo(compOff, xp + 0.005, false); // tolerância: o passe no diâmetro reto (+ sobremetal) vai até o fim do degrau, não para no começo dele
               const zlRaw = zOndeAlvo(rawOff, xp + 1e-6, false);
               const zl = Math.max(zlComp, zlRaw);
               if (zl >= pts[0].z - 1e-4) continue;
@@ -803,6 +913,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               lines.push("G1X" + fmt(xRet) + "Z" + fmt(zEndS - 0.5));
               lines.push("G0Z" + fmt(zStartS));
             }
+            fazerRebaixos();
           }
         } else {
           const c = ciclosH1["E" + chave + (real ? "R" : "")];
@@ -810,7 +921,21 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
           if (op.ciclo && c && mesmoRaio) {
             lines.push("G70P" + c.p + "Q" + c.q);
           } else {
-            emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.1, { xSaida: xSai });
+            const ptsAc = cortarPerfilPontos(pts, (p.xI ?? 0) > 0 ? { x: p.xI, z: Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1]))) } : undefined, (p.xF ?? 0) > 0 ? { x: p.xF, z: Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1]))) } : undefined);
+              const zHiAc = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+              // clicou FORA da peça (no ar): a ferramenta chega em G0 exatamente ali, sem tocar, e entra em G1 no perfil
+              const cliqueFora = (p.xI ?? 0) > 0 && p.xI / 2 > rPecaExtStar(geo, zHiAc) + 0.01;
+              if ((cliqueFora || ptsAc !== pts) && ptsAc.length >= 2) {
+                // começa EXATAMENTE no ponto escolhido: chega em G0 0,5 mm fora da peça (do lado livre) e entra em G1
+                const apA = cliqueFora ? { x: p.xI, z: zHiAc } : aproximacaoExternaStar(ptsAc, geo);
+                lines.push("(COMECA NO PONTO ESCOLHIDO X" + fmt(apA.x) + " Z" + fmt(zCoord(apA.z)) + " - TERMINA X" + fmt(ptsAc[ptsAc.length - 1].x) + " Z" + fmt(zCoord(ptsAc[ptsAc.length - 1].z)) + ")");
+                lines.push("G0Z" + fmt(zCoord(apA.z)));
+                lines.push("G0X" + fmt(apA.x));
+                lines.push("G1X" + fmt(ptsAc[0].x) + "Z" + fmt(zCoord(ptsAc[0].z)) + "F" + fmt(p.f ?? 0.1));
+                emitirContornoArcos(lines, ptsAc, zCoord, fmt, "fanuc", p.f ?? 0.1, { xSaida: xSai, emitStart: false });
+              } else {
+                emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.1, { xSaida: xSai });
+              }
           }
         }
       }
@@ -868,7 +993,127 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
           const xStart = bD + 1;
           emitSpindle(lines, p, bD, 1, acionada);
           let primeiroMov = true;
-          planos.forEach((pl) => {
+          planos.forEach((pl, ip) => {
+            // SEM CICLO (mesma regra consolidada da TBSy): segue o perfil, só onde tem material que sobrou,
+            // bedame com lado de referência, sobremetal X/Z, incremento por passada, pica-pau, anda em Z sempre no X maior
+            // e respeita o ponto de aproximação X/Z digitado na operação
+            if (!op.ciclo) {
+              const cc = canais[ip];
+              if (!cc) return;
+              const Lb = larg;
+              const ladoEsq = p.ref === 1;
+              const sx = p.sx ?? 0.2;
+              const sz = p.sz ?? 0.1;
+              const inc = (p.inc ?? 0) > 0 ? p.inc : Math.max(Lb * 0.8, 0.1);
+              const xiq = (q: { zA: number; zB: number; xa: number; xb: number }, zz: number) => (q.zA - q.zB < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((q.zA - zz) / (q.zA - q.zB)) * (q.xb - q.xa));
+              const maxEntre = (zL: number, zR: number) => {
+                let mm = 0;
+                if (zL < geo.zBack - largCorte - 1e-6) mm = bD;
+                for (const q of geo.ext) {
+                  const a = Math.min(zR, q.zA);
+                  const b = Math.max(zL, q.zB);
+                  if (a - b < -1e-6) continue;
+                  mm = Math.max(mm, xiq(q, a), xiq(q, b));
+                }
+                return mm;
+              };
+              const zProg = (zR: number) => (ladoEsq ? zR - Lb : zR);
+              const xSeg = pl.xSeg;
+              const zIniR = cc.zStart;
+              const naTraseira = Math.abs(cc.zEnd - geo.zBack) < 1e-3;
+              const zFimR = Math.min(cc.zStart, naTraseira ? Math.max(cc.zEnd, geo.zBack - largCorte + Lb + sz) : cc.zEnd + Lb);
+              const posR: number[] = [];
+              let gPos = 0;
+              // no lado do corte: os passos normais vão só até o bedame encostar no fim da peça;
+              // só a ÚLTIMA posição entra na largura do corte (onde ainda tem barra)
+              const zLimNormal = naTraseira ? Math.max(zFimR, Math.min(cc.zStart, cc.zEnd + Lb)) : zFimR;
+              for (let zz = zIniR; gPos++ < 5000 && zz > zLimNormal + 1e-6; zz -= inc) posR.push(zz);
+              if (zLimNormal > zFimR + 1e-6) posR.push(zLimNormal);
+              posR.push(zFimR);
+              // posições ENCOSTADAS nas faces (parede + sobremetal Z): o bedame começa colado na face, sem invadir
+              // (ex.: face em Z13,7 + 0,1 -> bedame de 4 mm ocupa Z13,8 a Z17,8)
+              geo.ext.forEach((q) => {
+                if (Math.abs(q.zA - q.zB) > 0.02) return;
+                const zw = q.zA;
+                [zw - sz - 0.002, zw + Lb + sz + 0.002].forEach((zc) => { if (zc <= zIniR + 1e-6 && zc >= zFimR - 1e-6) posR.push(zc); });
+              });
+              posR.sort((pa, pb) => pb - pa);
+              const posU = posR.filter((zp, k) => k === 0 || Math.abs(zp - posR[k - 1]) > 0.01);
+              const passoX = (p.pk ?? 0) > 0 ? 2 * p.pk : 1e9;
+              const fz = p.f ?? 0.05;
+              // MATERIAL QUE SOBROU: nível em cada Z depois das operações anteriores (desbaste/acabamento externos do mesmo cabeçote)
+              const iOp = ativos.indexOf(op);
+              const antes = ativos.slice(0, iOp > 0 ? iOp : 0).filter((o) => (o.tipo === "desbExt" || o.tipo === "acabExt") && (o.cab ?? "H1") === canal);
+              const valEmP = (lst: { x: number; z: number }[], z: number) => {
+                let vv = -Infinity;
+                for (let i = 0; i < lst.length - 1; i++) {
+                  const a = lst[i], b = lst[i + 1];
+                  const lo = Math.min(a.z, b.z), hi = Math.max(a.z, b.z);
+                  if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+                  vv = Math.max(vv, hi - lo < 1e-9 ? Math.max(a.x, b.x) : a.x + ((z - a.z) / (b.z - a.z)) * (b.x - a.x));
+                }
+                return vv;
+              };
+              const perfisAntes = antes.map((o) => {
+                const po = o.p;
+                const fxo = o.faixas.length ? o.faixas : faixaPadraoStar(o.tipo, geo, po) || [];
+                const so = subIntervalos(geo.ext, fxo);
+                if (!so.length) return null;
+                const realO = po.real === 1;
+                const angO = realO ? ((po.ang ?? 0) > 0 ? po.ang : PASTILHA_ANG[po.pas ?? 2] ?? 27) : 90;
+                const ptsO = compensarRaio(limitaMergulho(perfilMono(so, false, realO).pts, angO), po.rp ?? 0.4, false);
+                // o sobremetal deixado pelo desbaste é do acabamento: para o canal conta como já usinado até o sobremetal do canal
+                const sobre = o.tipo === "desbExt" ? Math.min(Math.max(0, po.u ?? 0.4), sx) : 0;
+                return { ptsO, sobre, zMax: Math.max(...so.map((q) => q.zA)), zMin: Math.min(...so.map((q) => q.zB)) };
+              }).filter((x): x is { ptsO: { x: number; z: number }[]; sobre: number; zMax: number; zMin: number } => !!x);
+              const nivel = (z: number) => {
+                let n = bD;
+                for (const pa of perfisAntes) {
+                  if (z > pa.zMax + 1e-6 || z < pa.zMin - 1e-6) continue;
+                  const vv = valEmP(pa.ptsO, z);
+                  if (vv > -Infinity) n = Math.min(n, vv + pa.sobre);
+                }
+                return n;
+              };
+              const nivelSpan = (zR: number) => {
+                let n = -Infinity;
+                for (let zz = zR - Lb - sz; zz <= zR + sz + 1e-9; zz += 0.05) n = Math.max(n, nivel(zz));
+                return n;
+              };
+              const uteis = posU.filter((zR) => nivelSpan(zR) > maxEntre(zR - Lb - sz, zR + sz) + sx + 0.05);
+              if (!uteis.length) { lines.push("(CANAL Z" + fmt(zCoord(zIniR)) + " A Z" + fmt(zCoord(zFimR)) + ": NADA PARA CORTAR - JA USINADO)"); return; }
+              lines.push("(CANAL SEM CICLO - BEDAME L" + fmt(Lb) + " - REFERENCIA LADO " + (ladoEsq ? "2" : "1 - FRENTE") + " - SOBREMETAL X" + fmt(sx) + " Z" + fmt(sz) + ")");
+              const apX = (p.ax ?? 0) > 0 ? Math.max(p.ax, xSeg) : bD + 1;
+              const apZ = (p.ax ?? 0) > 0 && p.az !== undefined ? p.az : zCoord(zProg(uteis[0]));
+              if (primeiroMov) {
+                primeiroMov = false;
+                if (apZ > zFrontClear + 1e-4) { g0Inicial(apX, zFrontClear); lines.push("G0Z" + fmt(apZ)); } else g0Inicial(apX, apZ);
+              } else {
+                lines.push("G0X" + fmt(apX));
+                lines.push("G0Z" + fmt(apZ));
+              }
+              const xSegC = Math.max(xSeg, bD + 1); // X seguro do canal nunca abaixo da barra
+              lines.push("G0X" + fmt(Math.max(xSegC, nivelSpan(uteis[0]) + 1.0)));
+              uteis.forEach((zR, kU) => {
+                const d = maxEntre(zR - Lb - sz, zR + sz) + sx;
+                lines.push("G0Z" + fmt(zCoord(zProg(zR))) + "(ANDA EM Z SEMPRE NO X MAIOR)");
+                let x = nivelSpan(zR) + 1.0; // G0 até 1 mm (no X) acima do material que sobrou, depois G1
+                lines.push("G0X" + fmt(x));
+                let gPk = 0;
+                while (gPk++ < 2000 && x > d + 1e-6) {
+                  const nx = Math.max(d, x - passoX);
+                  lines.push("G1X" + fmt(nx) + "F" + fmt(fz));
+                  if (nx >= x - 1e-6) break;
+                  x = nx;
+                  if (x > d + 1e-6) { lines.push("G0X" + fmt(x + 0.5) + "(PICA-PAU)"); lines.push("G1X" + fmt(x)); }
+                }
+                // sobe só 1 mm acima do material que ainda existe na próxima posição (o resto já foi usinado); no fim volta ao X seguro
+                const zNx = uteis[kU + 1];
+                lines.push("G0X" + fmt(zNx === undefined ? xSegC : Math.max(nivelSpan(zNx), d) + 1.0));
+              });
+              lines.push("G0X" + fmt(xSegC));
+              return;
+            }
             pl.grupos.forEach((g) => {
               const ziS = zCoord(g[0].z);
               const zfS = zCoord(g[g.length - 1].z);
@@ -980,7 +1225,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       const zIniS = zCoord(zIni);
       const zFimS = zCoord(zFim);
       const zEntry = zIniS - aprox;
-      const qMm = Math.max(0.5, p.q ?? 5);
+      const qMm = (p.q ?? 5) > 0 ? Math.max(0.1, p.q) : 5; // igual à TBSy
       lines.push("G99G97S" + Math.round(p.rpm ?? 1200) + "M3");
       g0FrontalSeguro(0, zEntry);
       if (op.ciclo) {
@@ -989,6 +1234,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         lines.push("G80");
       } else {
         let zCur = zIniS;
+        // 1º Z para ENCABEÇAR com avanço próprio; depois segue o pica-pau / avanço normal
+        if ((p.z1 ?? 0) > 0) { zCur = Math.min(zFimS, zIniS + p.z1); lines.push("G1Z" + fmt(zCur) + "F" + fmt(p.f1 ?? 0.05) + "(ENCABECAR)"); }
         let g = 0;
         while (g++ < 500 && zCur < zFimS - 1e-6) {
           zCur = Math.min(zFimS, zCur + qMm);
@@ -1008,12 +1255,15 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       lines.push("G80");
       if (zEntry > zFrontClear + 1e-4) lines.push("G0Z" + fmt(zFrontClear));
     } else if (op.tipo === "desbInt" || op.tipo === "acabInt") {
-      const s = subIntervalos(geo.int, fxs);
+      const s0Int = subIntervalos(geo.int, fxs);
+        const zFundoS0 = s0Int.length ? Math.min(...s0Int.map((q) => Math.min(q.zA, q.zB))) : 0;
+        // a FACE do fundo NÃO entra no contorno: quem faceia o fundo é o bloco FUNDO (respeita a barra, a folga e o recuo X)
+        const s = s0Int.filter((q) => !(Math.abs(q.zA - q.zB) < 1e-6 && Math.abs(q.zA - zFundoS0) < 1e-4));
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbInt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
         const pts = compensarRaio(limitaMergulho(perfilMono(s, true, real).pts, angM), p.rp ?? 0.4, true);
-        const dSeg = op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
+        const dSeg = (op.tipo === "desbInt" || op.tipo === "acabInt") && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin; // furo já aberto (pré-furo da operação anterior)
         const xEnt = Math.max(1, dSeg - ((p.fi ?? 1) > 0 ? p.fi : 1));
         const zStartS = zCoord(pts[0].z) - aprox;
         emitSpindle(lines, p, Math.max(dSeg, 2), 0, acionada);
@@ -1056,12 +1306,134 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             }
           }
         } else {
+          // ACABAMENTO sem desbaste antes: tira primeiro o CONE da ponta da broca (senão o contorno bate no fundo), depois faz o contorno
+          const emitirConeAntes = () => {
+            if (!((p.cn0 ?? 0) === 1 && p.zp0 !== undefined && dSeg > 0)) return;
+            const zFundoC = Math.min(...s.map((q) => Math.min(q.zA, q.zB)));
+            const xsC: number[] = [];
+            for (const q of geo.int) {
+              if (Math.abs(q.zA - q.zB) < 1e-6) continue;
+              if (Math.abs(q.zA - zFundoC) < 1e-4) xsC.push(q.xa);
+              if (Math.abs(q.zB - zFundoC) < 1e-4) xsC.push(q.xb);
+            }
+            const xInC = xsC.length >= 2 ? Math.min(...xsC) : 0;
+            const angC = (p.pa0 ?? 120) > 0 ? (p.pa0 ?? 120) : 120;
+            const tgC = Math.tan(((angC / 2) * Math.PI) / 180);
+            const zPontaC = p.zp0 ?? zFundoC;
+            const zOmbroC = zPontaC + dSeg / 2 / tgC;
+            if (!(zOmbroC > zFundoC + 0.01)) return;
+            const bmC = p.bm ?? 0;
+            if (!(bmC > 0)) { lines.push("(PENDENCIA: CONE DA PONTA DA BROCA NO FUNDO - INFORMAR O DIAMETRO DA BARRA PARA FACEAR SEM BATER)"); return; }
+            const xAlvoC = Math.max(xInC, 2 * bmC - dSeg + (p.fb ?? 0.5) + Math.max(0, p.fi ?? 1), (p.xff ?? 0) > 0 ? p.xff : -Infinity);
+            const xIniC = dSeg;
+            const apInC = p.ap ?? 1;
+            const apZC = Math.max(0.05, apInC > 0 ? apInC : 1);
+            const rBC = (zg: number) => Math.max(0, (zg - zPontaC) * tgC);
+            lines.push("(CONE DA PONTA DA BROCA " + fmt(angC) + " GRAUS: MATERIAL DE Z" + fmt(zCoord(zOmbroC)) + " ATE Z" + fmt(zCoord(zFundoC)) + " - PASSES LONGITUDINAIS ANTES DO CONTORNO)");
+            lines.push("G0X" + fmt(xEnt));
+            lines.push("G0Z" + fmt(zCoord(zOmbroC) - 0.5));
+            const nPC = Math.max(1, Math.ceil((xIniC - xAlvoC) / (2 * apZC) - 1e-6));
+            for (let k = 0; k <= nPC; k++) {
+              const xpC = xAlvoC + ((xIniC - xAlvoC) * k) / nPC;
+              const zcC = zPontaC + xpC / 2 / tgC;
+              if (k > 0) lines.push("G0Z" + fmt(zCoord(zOmbroC) - 0.5));
+              lines.push("G0X" + fmt(xpC));
+              lines.push("G0Z" + fmt(zCoord(Math.min(zcC, zOmbroC)) - 0.5));
+              lines.push("G1Z" + fmt(zCoord(zFundoC)) + "F" + fmt(p.f ?? 0.08));
+              lines.push("G1X" + fmt(Math.max(0.5, xpC - 1)) + "Z" + fmt(zCoord(zFundoC) - 0.5));
+            }
+            lines.push("G0Z" + fmt(zCoord(zOmbroC) - 0.5));
+            lines.push("G0X" + fmt(xEnt));
+            lines.push("G0Z" + fmt(zStartS));
+          };
+          if (op.tipo === "acabInt") emitirConeAntes();
           const c = ciclosH1["I" + chave + (real ? "R" : "")];
           const mesmoRaio = !!c && Math.abs((c.rp ?? 0.4) - (p.rp ?? 0.4)) < 1e-6;
           if (op.ciclo && c && mesmoRaio) {
             lines.push("G70P" + c.p + "Q" + c.q);
           } else {
             emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.08, { xSaida: xEnt });
+          }
+        }
+        // FUNDO DO FURO (face no fim da região, Head 1): faceia a partir do furo JÁ ABERTO (pré-furo) para o centro
+        // até onde a barra deixa sem a COSTA da ferramenta pegar na parede: Ø mín = 2 x Ø barra − Ø aberto + folga
+        if (canal === "H1") {
+          const faces = s.filter((q) => Math.abs(q.zA - q.zB) < 1e-6);
+          const zFundo = Math.min(...s.map((q) => Math.min(q.zA, q.zB)));
+          const fF = faces.find((q) => Math.abs(q.zA - zFundo) < 1e-4) || (() => {
+          // a face do fundo é o degrau entre dois trechos do furo (o Ø muda no mesmo Z)
+          const xsF: number[] = [];
+          for (const q of geo.int) {
+            if (Math.abs(q.zA - q.zB) < 1e-6) continue;
+            if (Math.abs(q.zA - zFundo) < 1e-4) xsF.push(q.xa);
+            if (Math.abs(q.zB - zFundo) < 1e-4) xsF.push(q.xb);
+          }
+          if (xsF.length < 2) return undefined;
+          const loF = Math.min(...xsF), hiF = Math.max(...xsF);
+          return hiF - loF > 0.05 ? { zA: zFundo, zB: zFundo, xa: loF, xb: hiF } : undefined;
+        })();
+          if (fF) {
+            const xIn = Math.min(fF.xa, fF.xb);
+            const xOut = Math.max(fF.xa, fF.xb);
+            const dAberto = dSeg;
+            const bmB = p.bm ?? 0;
+            const fbB = p.fb ?? 0.5;
+            const sobreZ = op.tipo === "desbInt" ? Math.max(0, p.w ?? 0.1) : 0;
+            const sobreX = op.tipo === "desbInt" ? Math.max(0, p.u ?? 0.3) : 0;
+            if (!(bmB > 0)) {
+              lines.push("(FUNDO Z" + fmt(zCoord(zFundo)) + ": INFORMAR O DIAMETRO DA BARRA PARA CALCULAR ATE ONDE FACEIA - FUNDO NAO USINADO)");
+            } else {
+              const xMinBarra = 2 * bmB - dAberto + fbB + Math.max(0, p.fi ?? 1); // costa da barra não passa da parede do outro lado (com folga e recuo X)
+              const xAlvo = Math.max(xIn, xMinBarra, (p.xff ?? 0) > 0 ? p.xff : -Infinity);
+              const xIni = Math.min(xOut, dAberto) - sobreX;
+              if (xAlvo < xIni - 0.05) {
+                const zF = zCoord(zFundo + sobreZ);
+                lines.push("(FUNDO Z" + fmt(zCoord(zFundo)) + ": FACEIA DE D" + fmt(xIni) + " ATE D" + fmt(xAlvo) + (xAlvo > xIn + 0.01 ? " - LIMITE PELA BARRA D" + fmt(bmB) + " NO FURO ABERTO D" + fmt(dAberto) : "") + ")");
+                // PONTA DA BROCA (furação anterior foi com a PONTA no fundo): o Ø cheio só existe até o OMBRO da broca;
+            // entre o ombro e a ponta sobra um anel CÔNICO de material -> faceia em passes de Z (sem bater o fundo de uma vez)
+            const temCone = (p.cn0 ?? 0) === 1 && p.zp0 !== undefined && dAberto > 0;
+            const angPonta = (p.pa0 ?? 120) > 0 ? (p.pa0 ?? 120) : 120;
+            const tgP = Math.tan(((angPonta / 2) * Math.PI) / 180);
+            const zPontaG = p.zp0 ?? zFundo;
+            const zOmbroG = zPontaG + dAberto / 2 / tgP;
+            const zAlvoG = zFundo + sobreZ;
+            const rBrocaEm = (zg: number) => Math.max(0, (zg - zPontaG) * tgP);
+            let saiuCone = false;
+            if (op.tipo === "desbInt" && temCone && zOmbroG > zAlvoG + 0.01) {
+              const apInG = p.ap ?? 1;
+              const apZ = Math.max(0.05, apInG > 0 ? apInG : 1);
+              // LONGITUDINAL (nunca transversal): passes em Z, do Ø menor para o maior, cada um até o fundo
+              const nP = Math.max(1, Math.ceil((xIni - xAlvo) / (2 * apZ) - 1e-6));
+              lines.push("(CONE DA PONTA DA BROCA " + fmt(angPonta) + " GRAUS: MATERIAL DE Z" + fmt(zCoord(zOmbroG)) + " ATE Z" + fmt(zCoord(zFundo)) + " - PASSES LONGITUDINAIS D" + fmt(xAlvo) + " ATE D" + fmt(xIni) + ")");
+              for (let k = 0; k <= nP; k++) {
+                const xp = xAlvo + ((xIni - xAlvo) * k) / nP;
+                const zcG = zPontaG + xp / 2 / tgP; // onde a broca deixou material neste Ø
+                if (k > 0) lines.push("G0Z" + fmt(zCoord(zOmbroG) - 0.5));
+                lines.push("G0X" + fmt(xp));
+                lines.push("G0Z" + fmt(zCoord(Math.min(zcG, zOmbroG)) - 0.5));
+                lines.push("G1Z" + fmt(zCoord(zAlvoG)) + "F" + fmt(p.f ?? 0.1));
+                lines.push("G1X" + fmt(Math.max(0.5, xp - 1)) + "Z" + fmt(zCoord(zAlvoG) - 0.5));
+              }
+              saiuCone = true;
+            } else if (op.tipo === "acabInt" && lines.length >= 2 && lines[lines.length - 2] === "G1X" + fmt(xEnt)) {
+              // ACABAMENTO: o contorno já chegou no canto do fundo -> segue em G1 descendo a face (sem recuar em Z)
+              lines.splice(lines.length - 2, 1);
+              lines.push("G1X" + fmt(xAlvo));
+            } else {
+              lines.push("G0X" + fmt(xEnt));
+              lines.push("G0Z" + fmt(zF - 0.5));
+              lines.push("G0X" + fmt(xIni));
+              lines.push("G1Z" + fmt(zF) + "F" + fmt(p.f ?? 0.1));
+              lines.push("G1X" + fmt(xAlvo));
+            }
+                if (!saiuCone) {
+              lines.push("G0Z" + fmt(zF - 0.3));
+              // sai reto em Z (o furo é sempre maior que o Ø do fundo daqui para a frente) - sem subir X
+            }
+              } else {
+                lines.push("(FUNDO Z" + fmt(zCoord(zFundo)) + ": BARRA D" + fmt(bmB) + " NO FURO D" + fmt(dAberto) + " NAO ALCANCA FACEAR - SO ATE D" + fmt(xMinBarra) + ")");
+              }
+            }
           }
         }
         lines.push("G0Z" + fmt(zFrontClear));
@@ -1113,6 +1485,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
 }
 
 export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg): StarGerarResult {
+  // simular só um acabamento: linha a linha (o G70 dependeria do G71 do desbaste, que não vai para o programa)
+  if (cfg.soloId) ops = ops.map((o) => (o.id === cfg.soloId && (o.tipo === "acabExt" || o.tipo === "acabInt") ? { ...o, ciclo: false } : o));
   const nmBruto = (cfg.nome || "PECA").trim().toUpperCase().replace(/[^A-Z0-9_\- ]/g, "_");
   const nm = nmBruto || "PECA";
   const mProg = nm.match(/^O(\d{4,})$/);
@@ -1167,6 +1541,7 @@ export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerar
   h1.push("M27");
 
   opsH1.forEach((op) => {
+    if (cfg.soloId && op.id !== cfg.soloId) return; // simular só esta operação
     const linhasOp = gerarOpLinhas(op, "H1");
     linhasOp.forEach((l) => h1.push(l));
   });
@@ -1174,11 +1549,11 @@ export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerar
   h1.push("T100(BEDAME)");
   h1.push("/M25");
   h1.push(`G99G97S${rpmCorte}M3`);
-  h1.push(`G0X${fmt(bD + 1)}Z${fmt(compCorte + largCorte)}T1`);
+  h1.push(corteOp && (!cfg.soloId || corteOp.id === cfg.soloId) ? `G0X${fmt(bD + 1)}Z${fmt(compCorte + largCorte)}T1` : "(CORTE DESTICADO NA ARVORE - SEM MOVIMENTO DE CORTE - CONFERIR)");
   h1.push(sincPega);
   h1.push("M82");
   h1.push("M40");
-  h1.push(`G1X-1.5F${fmt(fCorte)}`);
+  if (corteOp && (!cfg.soloId || corteOp.id === cfg.soloId)) h1.push(`G1X-1.5F${fmt(fCorte)}`);
   h1.push("M41");
   h1.push("M83");
   h1.push("M5");
@@ -1213,6 +1588,7 @@ export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerar
   h2.push("M20");
 
   opsH2.forEach((op) => {
+    if (cfg.soloId && op.id !== cfg.soloId) return;
     const linhasOp = gerarOpLinhas(op, "H2");
     if (!linhasOp.length) return;
     h2.push("/M75");
@@ -1258,3 +1634,96 @@ export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerar
     doisCanais: true,
   };
 }
+
+// ESPELHO X (por operação): a ferramenta trabalha do OUTRO lado do centro (X negativo).
+// Troca o sinal de X/U (e dos recuos), troca G2<->G3, inverte o sobremetal U do G71/G73 e o R de cone (G90/G92/G76).
+// Não mexe: profundidade do G71 (1ª linha), raios R de arco, comentários.
+export function espelharXLinhas(linhas: string[], ligar: boolean): string[] {
+  if (!ligar || !linhas.length) return linhas;
+  const out: string[] = ["(ESPELHO X - FERRAMENTA DO OUTRO LADO DO CENTRO / X NEGATIVO)"];
+  for (const l of linhas) {
+    if (/^\s*[#(%]/.test(l)) { out.push(l); continue; }
+    const ci = l.indexOf("(");
+    const code = ci >= 0 ? l.slice(0, ci) : l;
+    const com = ci >= 0 ? l.slice(ci) : "";
+    const up = code.toUpperCase();
+    const manterU = /G71/.test(up) && !/P\d/.test(up); // G71U(prof.)R(retração): não inverte
+    const rCone = /G9[02]|G76/.test(up) && /X/.test(up); // R de cone só nos ciclos de rosca/G90 com X
+    let c = code.replace(/([XUR])(-?)(\d+\.?\d*|\.\d+)/g, (m: string, w: string, sg: string, v: string) => {
+      if (w === "U" && manterU) return m;
+      if (w === "R" && !rCone) return m;
+      if (parseFloat(v) === 0) return m;
+      return w + (sg ? "" : "-") + v;
+    });
+    c = c.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m: string, pre: string, d: string) => pre + "G" + (d === "2" ? "3" : "2"));
+    out.push(c + com);
+  }
+  return out;
+}
+
+// Corta o perfil para começar/terminar no PONTO escolhido (X e Z) — segue a linha da peça entre eles
+function cortarPerfilPontos(pts: StarTMPt[], a?: { x: number; z: number }, b?: { x: number; z: number }): StarTMPt[] {
+  if (pts.length < 2 || (!a && !b)) return pts;
+  const proj = (q: { x: number; z: number }) => {
+    let best = { d: Infinity, i: 0, t: 0, x: pts[0].x, z: pts[0].z };
+    for (let i = 0; i < pts.length - 1; i++) {
+      const A = pts[i], B = pts[i + 1];
+      const ar = A.x / 2, br = B.x / 2, qr = q.x / 2;
+      const dr = br - ar, dz = B.z - A.z;
+      const L2 = dr * dr + dz * dz;
+      let tt = L2 > 1e-12 ? ((qr - ar) * dr + (q.z - A.z) * dz) / L2 : 0;
+      tt = Math.max(0, Math.min(1, tt));
+      const pr = ar + tt * dr, pz = A.z + tt * dz;
+      const d = Math.hypot(qr - pr, q.z - pz);
+      if (d < best.d - 1e-9) best = { d, i, t: tt, x: 2 * pr, z: pz };
+    }
+    return best;
+  };
+  const L = pts.length - 1;
+  const ini = a ? proj(a) : { d: 0, i: 0, t: 0, x: pts[0].x, z: pts[0].z };
+  const fim = b ? proj(b) : { d: 0, i: L - 1, t: 1, x: pts[L].x, z: pts[L].z };
+  if (ini.i + ini.t >= fim.i + fim.t - 1e-9) return pts;
+  if (ini.i === 0 && ini.t < 1e-6 && fim.i === L - 1 && fim.t > 1 - 1e-6) return pts;
+  const out: StarTMPt[] = [{ ...pts[0], x: ini.x, z: ini.z }];
+  for (let k = ini.i + 1; k <= fim.i; k++) out.push(pts[k]);
+  out.push({ ...pts[0], x: fim.x, z: fim.z });
+  return out;
+}
+
+// Ponto de chegada 0,5 mm FORA da peça, do lado livre da linha onde começa (externo)
+function aproximacaoExternaStar(pts: StarTMPt[], geo: StarTMGeo): { x: number; z: number } {
+  const p0 = pts[0], p1 = pts[1];
+  const r0 = p0.x / 2;
+  let dr = p1.x / 2 - r0, dz = p1.z - p0.z;
+  const Ln = Math.hypot(dr, dz) || 1;
+  dr /= Ln; dz /= Ln;
+  const rPeca = (z: number) => {
+    let m = 0;
+    for (const q of geo.ext) {
+      const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB);
+      if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+      const xv = hi - lo < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((z - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa);
+      m = Math.max(m, xv / 2);
+    }
+    return m;
+  };
+  const cands = [{ r: r0 + 0.5 * dz, z: p0.z - 0.5 * dr }, { r: r0 - 0.5 * dz, z: p0.z + 0.5 * dr }];
+  const fora = cands.filter((c) => c.r > rPeca(c.z) + 1e-3);
+  const esc = fora.length ? fora.reduce((u, v) => (u.r >= v.r ? u : v)) : { r: r0 + 0.5, z: p0.z };
+  return { x: Math.max(2 * esc.r, 0.5), z: esc.z };
+}
+
+// raio da peça (externo) num Z — maior valor (na face pega o lado maior)
+function rPecaExtStar(geo: StarTMGeo, z: number): number {
+  let m = 0;
+  for (const q of geo.ext) {
+    const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB);
+    if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+    const xv = hi - lo < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((z - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa);
+    m = Math.max(m, xv / 2);
+  }
+  return m;
+}
+
+// Linhas geradas por operação (id -> linhas). O painel usa para OCULTAR o traço de uma ferramenta no simulador.
+export const blocosOpsGerados: Record<string, string[]> = {};

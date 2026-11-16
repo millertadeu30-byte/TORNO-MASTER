@@ -29,6 +29,8 @@ export function validarSincronismoStarG266(h1Lines: string[], h2Lines: string[])
 }
 
 export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg): StarGerarResult {
+  // simular só um acabamento: linha a linha (o G70 dependeria do G71 do desbaste, que não vai para o programa)
+  if (cfg.soloId) ops = ops.map((o) => (o.id === cfg.soloId && (o.tipo === "acabExt" || o.tipo === "acabInt") ? { ...o, ciclo: false } : o));
   const nmBruto = (cfg.nome || "PECA").trim().toUpperCase().replace(/[^A-Z0-9_\- ]/g, "_");
   const nm = nmBruto || "PECA";
   const mProg = nm.match(/^O(\d{4,})$/);
@@ -69,12 +71,14 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
 
   const linhasOpsH1: string[] = [];
   opsH1.forEach((op) => {
+    if (cfg.soloId && op.id !== cfg.soloId) return; // simular só esta operação
     const linhasOp = gerarOpLinhas(op, "H1");
     linhasOp.forEach((l) => linhasOpsH1.push(l.replace(/\bG4X/g, "G4U")));
   });
 
   const linhasOpsH2: string[][] = [];
   opsH2.forEach((op) => {
+    if (cfg.soloId && op.id !== cfg.soloId) return;
     const linhasOp = gerarOpLinhas(op, "H2");
     if (linhasOp.length) {
       linhasOpsH2.push(linhasOp.map((l) => l.replace(/\bG4X/g, "G4U")));
@@ -141,14 +145,15 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   h1.push("/M25");
   h1.push(`G50S${limCorte}`);
   h1.push(`G99G97M3S${rpmCorte}`);
-  h1.push("G0X[#531+1]Z#521T1");
+  // corte desticado na árvore: mantém sincronismos, mas sem movimento de corte (nada desenhado no gráfico)
+  h1.push(corteOp && (!cfg.soloId || corteOp.id === cfg.soloId) ? "G0X[#531+1]Z#521T1" : "(CORTE DESTICADO NA ARVORE - SEM MOVIMENTO DE CORTE - CONFERIR)");
   h1.push("M82");
   h1.push("M301");
   h1.push("M302");
   h1.push("M303");
   h1.push("M40");
   h1.push("M304");
-  h1.push(`G1X-1.5F${fmtStar(fCorte)}`);
+  if (corteOp && (!cfg.soloId || corteOp.id === cfg.soloId)) h1.push(`G1X-1.5F${fmtStar(fCorte)}`);
   h1.push("M305");
   h1.push("M41");
   h1.push("M83");

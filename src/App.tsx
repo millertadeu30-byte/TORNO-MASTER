@@ -59,7 +59,7 @@ import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
-import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg } from "./generators/star18iTB";
+import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados } from "./generators/star18iTB";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
 import { tmGerarIndexABC } from "./generators/indexABC";
@@ -340,6 +340,7 @@ export default function App() {
   const [regiaoPick, setRegiaoPick] = useState<{ seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null>(null);
   const [regiaoLimparSeq, setRegiaoLimparSeq] = useState<number>(0);
   const [painelRegioes, setPainelRegioes] = useState<TMRegiao[]>([]);
+  const [opsOcultos, setOpsOcultos] = useState<string[]>([]); // operações com o traço oculto no simulador
   const [fixComando, setFixComando] = useState<{ seq: number; zones: TMFixZone[] } | null>(null);
   const [editorTexts, setEditorTexts] = useState<string[]>(() => {
     const saved = localStorage.getItem("cnc_autoSaveTexts");
@@ -2489,6 +2490,7 @@ export default function App() {
                 pick={regiaoPick}
                 onLimparRegiao={() => setRegiaoLimparSeq((n) => n + 1)}
                 onRegioes={setPainelRegioes}
+              onOcultos={setOpsOcultos}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
                 onGerar={(r, vivo) => {
                   if (r.doisCanais) {
@@ -2611,6 +2613,7 @@ export default function App() {
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
+                opsOcultos={opsOcultos}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2677,6 +2680,7 @@ export default function App() {
                       regioes={showIniciar ? painelRegioes : undefined}
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
+                opsOcultos={opsOcultos}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -3072,7 +3076,7 @@ const TM_CORES = ["#22d3ee", "#a3e635", "#f472b6", "#fb923c", "#c084fc", "#facc1
 
 const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean; ciclo: string; ferr: string; params: TMParam[]; ciclos?: string[] }> = {
   face: { nome: "Faceamento", grupo: "EXTERNO", regiao: true, ciclo: "G94", ciclos: ["G94", "G72", "G75", "G74"], ferr: "T0101", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.15, step: 0.01 }, { k: "sobre", rot: "Sobremetal face mm", def: 0.5, step: 0.1 }, { k: "ap", rot: "Prof. por passe Z mm", def: 1.5, step: 0.1, so: ["LINHA", "G94"] }, { k: "xi", rot: "Ø inicial X (0 = fora do bruto)", def: 0, step: 0.1 }, { k: "xf", rot: "Ø final X (centro = -1.6)", def: -1.6, step: 0.1 },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.15, step: 0.01 }, { k: "sobre", rot: "Sobremetal face mm", def: 0.5, step: 0.1 }, { k: "ap", rot: "Prof. por passe Z mm", def: 1.5, step: 0.1, so: ["LINHA", "G94"] }, { k: "xi", rot: "Ø inicial X (0 = fora do bruto)", def: 0, step: 0.1 }, { k: "xf", rot: "Ø final X (centro = -1.6)", def: -1.6, step: 0.1 },
     { k: "pw", rot: "Passe W (prof. por passe) mm", def: 1, step: 0.1, so: ["G72"] }, { k: "ru", rot: "Sobremetal U (X) mm", def: 0, step: 0.05, so: ["G72"] }, { k: "rw", rot: "Sobremetal W (Z) mm", def: 0, step: 0.05, so: ["G72"] },
     { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G72", "G75", "G74"] },
     { k: "pp", rot: "Pica-pau mm", def: 1, step: 0.1, so: ["G75", "G74"], rotPor: { G75: "Pica-pau em X (P) mm", G74: "Pica-pau em Z (Q) mm" } },
@@ -3081,17 +3085,17 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75", "G74"], opcoes: ["Automático", "Canal (sem alívio)", "Faceamento"] },
     { k: "larg", rot: "Largura da ferramenta mm (para a conta)", def: 3, step: 0.1, so: ["G75", "G74"] }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   desbExt: { nome: "Desbaste externo", grupo: "EXTERNO", regiao: true, ciclo: "G71", ferr: "T0101", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   acabExt: { nome: "Acabamento externo", grupo: "EXTERNO", regiao: true, ciclo: "G70", ferr: "T0202", params: [
-    { k: "vc", rot: "Vc m/min", def: 220, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 220, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   canal: { nome: "Canal", grupo: "EXTERNO", regiao: true, ciclo: "G75", ferr: "T0303", params: [
-    { k: "vc", rot: "Vc m/min", def: 120, step: 5 }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
-    { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (frente, Z+)", "Lado 2 (placa, Z-)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
+    { k: "vc", rot: "Vc m/min", def: 120, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
+    { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (lado do Z0 / frente da peça)", "Lado 2 (lado da placa ou da bucha)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
     { k: "sx", rot: "Sobremetal X p/ acabamento (Ø) mm", def: 0.2, step: 0.05, so: ["LINHA"] }, { k: "sz", rot: "Sobremetal Z p/ acabamento mm", def: 0.1, step: 0.05, so: ["LINHA"] },
     { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   canalInt: { nome: "Canal interno", grupo: "INTERNO", regiao: true, ciclo: "G75", ferr: "T1010", params: [
-    { k: "vc", rot: "Vc m/min", def: 120, step: 5 }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
-    { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (frente, Z+)", "Lado 2 (placa, Z-)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
+    { k: "vc", rot: "Vc m/min", def: 120, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
+    { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (lado do Z0 / frente da peça)", "Lado 2 (lado da placa ou da bucha)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
     { k: "sx", rot: "Sobremetal X p/ acabamento (Ø) mm", def: 0.2, step: 0.05, so: ["LINHA"] }, { k: "sz", rot: "Sobremetal Z p/ acabamento mm", def: 0.1, step: 0.05, so: ["LINHA"] },
     { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 } ] },
   roscaExt: { nome: "Rosca externa", grupo: "EXTERNO", regiao: true, ciclo: "G76", ferr: "T0404", params: [
@@ -3099,17 +3103,17 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
   centro: { nome: "Furo de centro", grupo: "INTERNO", regiao: true, ciclo: "", ferr: "T0505", params: [
     { k: "rpm", rot: "Rotação rpm", def: 1500, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "prof", rot: "Profundidade mm", def: 2, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   furo: { nome: "Furação", grupo: "INTERNO", regiao: true, ciclo: "G83", ferr: "T0606", params: [
-    { k: "rpm", rot: "Rotação rpm", def: 1200, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "d", rot: "Ø broca mm", def: 8, step: 0.1 }, { k: "q", rot: "Pica-pau Q mm", def: 5, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "rpm", rot: "Rotação rpm", def: 1200, step: 50 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "d", rot: "Ø broca mm", def: 8, step: 0.1 }, { k: "pa", rot: "Ângulo da ponta da broca ° (o cone fica no fundo)", def: 120, step: 1 }, { k: "q", rot: "Pica-pau Q mm", def: 5, step: 0.5 }, { k: "z1", rot: "1º Z para encabeçar (mm de profundidade, 0 = não)", def: 0, step: 0.5, so: ["LINHA"] }, { k: "f1", rot: "Avanço do 1º Z (encabeçar) mm/v", def: 0.05, step: 0.01, so: ["LINHA"] }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   desbInt: { nome: "Desbaste interno", grupo: "INTERNO", regiao: true, ciclo: "G71", ferr: "T0707", params: [
-    { k: "vc", rot: "Vc m/min", def: 150, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.2, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.3, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 150, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.2, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.3, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "d0", rot: "Ø pré-furo mm (auto: furo da operação anterior)", def: 8, step: 0.1 }, { k: "xff", rot: "Ø final no fundo (0 = auto: até onde a barra alcança)", def: 0, step: 0.5 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   acabInt: { nome: "Acabamento interno", grupo: "INTERNO", regiao: true, ciclo: "G70", ferr: "T0808", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5 }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm", def: 8, step: 0.1 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.08, step: 0.01 }, { k: "d0", rot: "Ø pré-furo mm (auto: furo da operação anterior)", def: 8, step: 0.1 }, { k: "xff", rot: "Ø final no fundo (0 = auto: até onde a barra alcança)", def: 0, step: 0.5 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "fi", rot: "Recuo X interno Ø mm (afasta da parede)", def: 1, step: 0.1 }, { k: "bm", rot: "Diâmetro máximo da barra mm (0 = não conferir)", def: 0, step: 0.5 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   roscaInt: { nome: "Rosca interna", grupo: "INTERNO", regiao: true, ciclo: "G76", ferr: "T0909", params: [
     { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "h", rot: "Altura filete mm (0=auto)", def: 0, step: 0.01 }, { k: "q", rot: "1º passe mm", def: 0.2, step: 0.01 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   macho: { nome: "Rosca com macho", grupo: "INTERNO", regiao: true, ciclo: "G84", ferr: "T1010", params: [
     { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
-    { k: "vc", rot: "Vc m/min", def: 100, step: 5 }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S rpm (0 = calcula pela Vc)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 100, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
 };
 
 const tmFmt = (n: number) => {
@@ -3503,7 +3507,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G00 Z50.0; (RECUO - PREENCHER POSICAO DE TROCA NA MAQUINA)");
     }
   };
-  const ativos = ops.filter((o) => o.ativo);
+  const ativos = ops.filter((o) => o.ativo).map((o) => ((cfg as any).soloId && o.id === (cfg as any).soloId && (o.tipo === "acabExt" || o.tipo === "acabInt") ? { ...o, ciclo: false } : o)); // simular só um acabamento: linha a linha (sem G70 do desbaste)
   const corteOp = ativos.find((o) => o.tipo === "corte");
   const largCorte = corteOp ? corteOp.p.larg : 3;
   const acabExt = ativos.find((o) => o.tipo === "acabExt");
@@ -3547,8 +3551,14 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   };
 
   const marcas: { ini: number; op: TMOp }[] = []; // onde começa cada operação no programa (para aplicar a origem)
+  // SIMULAR SÓ ESTA OPERAÇÃO: as outras continuam no cálculo, mas as linhas delas saem do programa
+  const soloIdT = (cfg as any).soloId as string | undefined;
+  let soloPrev: { ini: number; op: TMOp } | null = null;
+  const soloCorta = () => { if (soloIdT && soloPrev && soloPrev.op.id !== soloIdT) { out.length = soloPrev.ini; marcas.pop(); } soloPrev = null; };
   ativos.forEach((op, i) => {
     const T = TM_TIPOS[op.tipo];
+    soloCorta();
+    soloPrev = { ini: out.length, op };
     marcas.push({ ini: out.length, op });
     pendAp = null;
     const p = op.p;
@@ -3738,6 +3748,107 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
           W("G71 U" + f(p.ap) + " R0.5;");
           W("G71 P" + n1 + " Q" + n2 + " U" + f(p.u) + " W" + f(p.w) + " F" + p.f + ";");
           contorno(pts, fAc, xSai, n1, n2, passa, real);
+              // REBAIXOS TAMBÉM COM CICLO: o G71 do Fanuc só desbasta por fora (perfil que só cresce); com "Entrar nos rebaixos = 1"
+              // os rebaixos são desbastados logo depois, entrando pela rampa já usinada, com o mesmo ângulo de mergulho e raio da ponta.
+              if (p.real === 1) {
+                const angR = (p.ang ?? 0) > 0 ? p.ang : TM_PASTILHA_ANG[p.pas ?? 2] ?? 27;
+                const pts = tmCompensar(tmLimitaMergulho(tmPerfil(s, false, true).pts, angR), p.rp ?? 0.4, false);
+                const mono = tmCompensar(tmPerfil(s, false, false).pts, p.rp ?? 0.4, false);
+                W("(REBAIXOS APOS O G71 - MERGULHO LIMITADO A " + f(angR) + " GRAUS - O QUE A PASTILHA NAO ALCANCA SOBRA PARA O BEDAME);");
+                {
+            const valEm = (lst: TMPt[], z: number) => {
+              let v = -Infinity;
+              for (let i = 0; i < lst.length - 1; i++) {
+                const a = lst[i];
+                const b = lst[i + 1];
+                const lo = Math.min(a.z, b.z);
+                const hi = Math.max(a.z, b.z);
+                if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+                v = Math.max(v, hi - lo < 1e-9 ? Math.max(a.x, b.x) : a.x + ((z - a.z) / (b.z - a.z)) * (b.x - a.x));
+              }
+              return v;
+            };
+            const comSobre = (lst: TMPt[], z: number) => {
+              let m = -Infinity;
+              [-p.w, -p.w / 2, 0, p.w / 2, p.w].forEach((dz) => { m = Math.max(m, valEm(lst, z + dz)); });
+              return m + p.u;
+            };
+            const passo = 0.02;
+            const zFimR = s[s.length - 1].zB;
+            const ZG: number[] = [];
+            for (let z = zS; z >= zFimR - 1e-9; z -= passo) ZG.push(z);
+            const TA = ZG.map((z) => comSobre(pts, z)); // alvo (perfil que a pastilha alcança + sobremetal)
+            const MA = ZG.map((z) => comSobre(mono, z)); // envelope já desbastado por fora
+            const dAp = Math.max(0.02, 2 * ((p.ap ?? 1) > 0 ? p.ap : 1));
+            const r1 = Math.min(1, dAp * 0.8);
+            const rebs: [number, number][] = [];
+            let ini = -1;
+            ZG.forEach((_z, i) => {
+              const fundo = TA[i] < MA[i] - 0.02;
+              if (fundo && ini < 0) ini = i;
+              if ((!fundo || i === ZG.length - 1) && ini >= 0) { rebs.push([ini, fundo ? i : i - 1]); ini = -1; }
+            });
+            rebs.forEach(([i0, i1], ir) => {
+              const idx: number[] = [];
+              for (let i = i0; i <= i1; i++) idx.push(i);
+              const topo = Math.max(...idx.map((i) => MA[i]));
+              const fundoMin = Math.min(...idx.map((i) => TA[i]));
+              W("(REBAIXO " + (ir + 1) + " Z" + f(ZG[i0]) + " A Z" + f(ZG[i1]) + " - ENTRA PELA RAMPA, SEMPRE NO SENTIDO DA PLACA);");
+              W("G00 X" + f(bD + fol2) + ";");
+              W("G00 Z" + f(ZG[i0]) + ";");
+              let curX = MA[i0] + 0.5;
+              let curZi = i0;
+              W("G00 X" + f(curX) + ";");
+              let L = topo;
+              let g = 0;
+              while (g++ < 500 && L > fundoMin + 1e-6) {
+                const prevL = L;
+                L = Math.max(fundoMin, L - dAp);
+                const runs: [number, number][] = [];
+                let a = -1;
+                idx.forEach((i, k) => {
+                  const corta = TA[i] < L - 1e-6 && MA[i] > L + 1e-6;
+                  if (corta && a < 0) a = i;
+                  if ((!corta || k === idx.length - 1) && a >= 0) { runs.push([a, corta ? i : i - 1]); a = -1; }
+                });
+                runs.forEach(([ia, ib]) => {
+                  // entrada: volta pela rampa até onde ela alcança o nível anterior (área já usinada)
+                  let ie = ia;
+                  let gIe = 0;
+                  while (gIe++ < 500 && ie - 1 >= i0 && TA[ie - 1] < prevL - 1e-6) ie--;
+                  if (ie - 1 >= i0) ie--;
+                  const xEnt = Math.min(prevL, TA[ie]);
+                  // viagem segura: acima do perfil e do nível anterior entre onde está e a entrada
+                  let H = Math.max(prevL, curX);
+                  for (let i = Math.min(curZi, ie); i <= Math.max(curZi, ie); i++) H = Math.max(H, TA[i] + 0.5);
+                  H = Math.min(H, bD + fol2);
+                  W("G00 X" + f(H) + ";");
+                  W("G00 Z" + f(ZG[ie]) + ";");
+                  W("G00 X" + f(xEnt + 0.2) + ";");
+                  W("G01 X" + f(xEnt) + " F" + p.f + ";");
+                  const ramp: TMPt[] = [{ x: xEnt, z: ZG[ie] }];
+                  for (let i = ie + 1; i <= ia; i++) ramp.push({ x: Math.max(L, Math.min(prevL, TA[i])), z: ZG[i] });
+                  ramp.push({ x: L, z: ZG[ia] });
+                  const rs: TMPt[] = [];
+                  ramp.forEach((q) => {
+                    if (rs.length >= 2) {
+                      const u = rs[rs.length - 2];
+                      const v = rs[rs.length - 1];
+                      if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4) rs.pop();
+                    }
+                    rs.push(q);
+                  });
+                  for (let k = 1; k < rs.length; k++) W("G01 X" + f(rs[k].x) + " Z" + f(rs[k].z) + ";");
+                  W("G01 Z" + f(ZG[ib]) + ";");
+                  curX = Math.min(L + r1, prevL);
+                  curZi = ib;
+                  W("G01 X" + f(curX) + "; (SOBE DENTRO DA AREA JA USINADA)");
+                });
+              }
+              W("G00 X" + f(bD + fol2) + "; (SAI DO REBAIXO POR CIMA)");
+            });
+          }
+              }
         } else {
           // SEM CICLO - 1) desbaste por fora até o envelope (o diâmetro só cresce indo para a placa)
           const mono = real ? tmCompensar(tmPerfil(s, false, false).pts, p.rp ?? 0.4, false) : pts;
@@ -4052,6 +4163,8 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         } else {
           let z = Math.min(zF, zIni);
           const qVal = Math.max(0.1, (p.q ?? 5) > 0 ? p.q : 5);
+          // 1º Z para ENCABEÇAR com avanço próprio; depois segue o pica-pau / avanço normal
+          if ((p.z1 ?? 0) > 0) { const z1 = Math.max(zFim, z - p.z1); W("G01 Z" + f(z1) + " F" + (p.f1 ?? 0.05) + "; (ENCABECAR)"); z = z1; }
           let gFuro = 0;
           while (gFuro++ < 2000 && z > zFim + 1e-6) {
             z = Math.max(zFim, z - qVal);
@@ -4103,6 +4216,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     }
   });
   alvo = out;
+  soloCorta();
   const fimOps = out.length;
   W("");
   if (modoG53) {
@@ -4215,8 +4329,8 @@ function tmCalcMaxBarra(o: TMOp, geo: TMGeo | null): { dMax: number; dMinInt: nu
 }
 const tmFmt2 = (n: number) => n.toFixed(2).replace(".", ",");
 
-export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string };
-export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number; gContra?: string[] };
+export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string; fundo?: { z: number; x: number }; ap?: { x: number; z: number } };
+export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number; gContra?: string[]; zH2?: number; oculta?: boolean };
 
 function sugerirFerrIndexABC(o: TMOp): string {
   if (o.cab === "H2") {
@@ -4268,10 +4382,11 @@ export const PainelPrograma: React.FC<{
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
   onLimparRegiao: () => void;
   onRegioes: (r: TMRegiao[]) => void;
+  onOcultos?: (ids: string[]) => void;
   onFix: (z: TMFixZone[]) => void;
   onGerar: (r: { textos: [string, string]; nomes: [string, string]; doisCanais?: boolean; unicoCanal?: boolean }, vivo?: boolean) => void;
   onClose: () => void;
-}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onFix, onGerar, onClose }) => {
+}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onOcultos, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
     try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
   };
@@ -4325,6 +4440,7 @@ export const PainelPrograma: React.FC<{
     try { const v = JSON.parse(localStorage.getItem("cnc_ops_painel") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
   });
   const [aberta, setAberta] = useState<string | null>(null);
+  const [soloOp, setSoloOp] = useState<string | null>(null); // "simular só esta operação" (não mexe nos ticados)
   const [addTipo, setAddTipo] = useState<string>("");
   const [confSugerir, setConfSugerir] = useState<boolean>(false); // "sugerir de novo" pede Sim/Não no próprio painel
   const [aoVivo, setAoVivo] = useState<boolean>(true); // programa e gráfico atualizam sozinhos a cada mudança
@@ -4337,6 +4453,8 @@ export const PainelPrograma: React.FC<{
   const [piscaKey, setPiscaKey] = useState<string | null>(null);
   const fieldRefs = useRef<Record<string, HTMLElement | null>>({});
   const primeiroRef = useRef<number | null>(null);
+  const primeiroXRef = useRef<number | null>(null);
+  const primeiroXaRef = useRef<number | null>(null); // X (Ø) do 1º clique do Começo/Fim // Ø clicado na FACE do fundo (Começo/Fim interno)
   useEffect(() => { try { localStorage.setItem("cnc_painel_cfg", JSON.stringify(cfg)); } catch {} }, [cfg]);
   useEffect(() => { try { localStorage.setItem("cnc_ops_painel", JSON.stringify(ops)); } catch {} }, [ops]);
   useEffect(() => { setAvisoMaq(""); setMostrarPend(false); }, [cfg.maq]);
@@ -4442,9 +4560,42 @@ export const PainelPrograma: React.FC<{
     );
   }, [partZero.face, partZero.offsetZ, partProfile, geo]);
 
+  // PRÉ-FURO AUTOMÁTICO: operações internas usam o furo já aberto pela furação ANTERIOR que cobre a região
+  // (ex.: furou com broca Ø13,5 de Z0 a Z11 -> o desbaste interno nessa região começa de Ø13,5)
+  useEffect(() => {
+    let mudou = false;
+    const novas = ops.map((o, i) => {
+      if (!o.ativo || !["desbInt", "acabInt", "canalInt", "roscaInt"].includes(o.tipo) || !o.faixas.length) return o;
+      const lo = Math.min(...o.faixas.map((fx) => Math.min(fx[0], fx[1])));
+      const hi = Math.max(...o.faixas.map((fx) => Math.max(fx[0], fx[1])));
+      let pre = 0;
+      let zPonta = 0; // Z (geo) onde a PONTA da broca parou
+      let angP = 120; // ângulo da ponta da broca
+      let coneTirado = false; // um desbaste interno ANTERIOR (com barra informada) já faceou o cone
+      ops.slice(0, i).forEach((an) => {
+        if (!an.ativo || !an.faixas.length) return;
+        const alo = Math.min(...an.faixas.map((fx) => Math.min(fx[0], fx[1])));
+        const ahi = Math.max(...an.faixas.map((fx) => Math.max(fx[0], fx[1])));
+        if (an.tipo === "furo" && (an.p.d ?? 0) > 0) {
+          if (alo <= lo + 0.01 && ahi >= hi - 0.01 && an.p.d >= pre) { pre = an.p.d; zPonta = alo; angP = (an.p.pa ?? 0) > 0 ? an.p.pa : 120; coneTirado = false; }
+        } else if (an.tipo === "desbInt" && pre > 0 && (an.p.bm ?? 0) > 0 && alo <= lo + 0.01) coneTirado = true;
+      });
+      const cn = pre > 0 && !coneTirado ? 1 : 0;
+      if (pre > 0 && (o.p.d0auto !== pre || o.p.zp0 !== zPonta || o.p.pa0 !== angP || (o.p.cn0 ?? -1) !== cn)) {
+        mudou = true;
+        return { ...o, p: { ...o.p, ...(o.p.d0auto !== pre ? { d0: pre, d0auto: pre } : {}), zp0: zPonta, pa0: angP, cn0: cn } };
+      }
+      return o;
+    });
+    if (mudou) setOps(novas);
+  }, [ops]);
+
+  // traço oculto no simulador (botão ● / ◌ de cada operação)
+  useEffect(() => { if (onOcultos) onOcultos(ops.filter((o) => (o.p.oc ?? 0) === 1).map((o) => o.id)); }, [ops]);
+
   // regiões pintadas na peça
   useEffect(() => {
-    onRegioes(ops.filter((o) => o.ativo && TM_TIPOS[o.tipo].regiao).map((o) => ({ cor: o.cor, faixas: o.faixas.map((fx) => [zDisp(fx[0]), zDisp(fx[1])] as [number, number]), grupo: TM_TIPOS[o.tipo].grupo, ativa: aberta === o.id || (regiaoSel ? regiaoSel.opId === o.id : false) })));
+    onRegioes(ops.filter((o) => o.ativo && TM_TIPOS[o.tipo].regiao).map((o) => ({ cor: o.cor, faixas: o.faixas.map((fx) => [zDisp(fx[0]), zDisp(fx[1])] as [number, number]), grupo: TM_TIPOS[o.tipo].grupo, ativa: aberta === o.id || (regiaoSel ? regiaoSel.opId === o.id : false), fundo: TM_TIPOS[o.tipo].grupo === "INTERNO" && (o.p.xff ?? 0) > 0 && o.faixas.length ? { z: zDisp(Math.min(...o.faixas.map((fx) => Math.min(fx[0], fx[1])))), x: o.p.xff } : undefined, ap: (o.p.ax ?? 0) > 0 && !(maqAtual.suico && o.cab === "H2") ? { x: o.p.ax, z: o.p.az ?? 0 } : undefined })));
   }, [ops, aberta, regiaoSel, sZ, geo, deslH1]);
 
   // fixações ligadas/desligadas viram zonas FIX no simulador
@@ -4456,8 +4607,18 @@ export const PainelPrograma: React.FC<{
     if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD });
     if (cfg.l2) z.push({ lado: 2, za: zPega2(Math.min(cfg.ini2 || 0, cfg.pega2)), zb: zPega2(cfg.pega2), d: bD });
     const gC = (cfg.origens || []).filter((o) => o.fuso === "contrafuso").map((o) => o.g);
-onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))).map((q) => ({ ...q, gContra: gC })));
-  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, cfg.ini2, bD, ops, sZ, deslH1, cfg.origens]);
+// zero do Head 2 (origem do contrafuso) para o marcador no gráfico
+const oc = (cfg.origens || []).find((o: TMOrigem, j: number) => j > 0 && o.fuso === "contrafuso");
+let zH2: number | undefined;
+if (oc) {
+const f1 = Math.abs(zDisp(geo.zFront) - deslH1) <= Math.abs(zDisp(geo.zBack) - deslH1) ? geo.zFront : geo.zBack;
+const f2 = f1 === geo.zFront ? geo.zBack : geo.zFront;
+const dIn = Math.sign(f2 - f1) || 1;
+const zz = oc.face === partZero.face ? f1 + dIn * (oc.desl || 0) : f2 - dIn * (oc.desl || 0);
+zH2 = zDisp(zz);
+}
+onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))).map((q) => ({ ...q, gContra: gC, zH2, oculta: cfg.fixOculta === true })));
+  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, cfg.ini2, bD, ops, sZ, deslH1, cfg.origens, partZero.face, cfg.fixOculta]);
 
   // toque na peça (vem do simulador) vira região da operação escolhida
   useEffect(() => {
@@ -4475,9 +4636,12 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       const faceFront = frontEhOrig1 ? partZero.face : nomeOutra;
       const faceBack = frontEhOrig1 ? nomeOutra : partZero.face;
       const dF = Math.abs(zc - geo.zFront), dB = Math.abs(zc - geo.zBack);
-      const face = (dF <= dB ? faceFront : faceBack) as TMOrigem["face"];
-      let desl = Math.min(dF, dB);
-      desl = desl < 0.3 ? 0 : Math.round(desl * 1000) / 1000;
+      const pertoFront = dF <= dB;
+      const face = (pertoFront ? faceFront : faceBack) as TMOrigem["face"];
+      // deslocamento COM SINAL: positivo = para dentro da peça a partir da face; negativo = fora da peça (ex.: toque no eixo X0 antes da face)
+      const sentidoDentro = Math.sign((pertoFront ? geo.zBack : geo.zFront) - (pertoFront ? geo.zFront : geo.zBack)) || 1;
+      let desl = (zc - (pertoFront ? geo.zFront : geo.zBack)) * sentidoDentro;
+      desl = Math.abs(desl) < 0.3 ? 0 : Math.round(desl * 1000) / 1000;
       setCfg((c) => ({ ...c, origens: (c.origens || []).map((x: TMOrigem, j: number) => (j === k ? { ...x, face, desl } : x)) }));
       setRegiaoSel(null);
       return;
@@ -4492,10 +4656,44 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       }));
       return;
     }
-    if (primeiroRef.current === null) { primeiroRef.current = r.z; return; }
+    // COMEÇO/FIM em operação INTERNA: clique numa FACE do furo (ex.: fundo Z11) prende o Z exatamente na face
+    // e guarda o Ø clicado -> vira "Ø final no fundo" (o fundo é faceado só até onde você clicou)
+    const opSelRg = ops.find((o) => o.id === sel.opId);
+    const ehIntRg = !!opSelRg && TM_TIPOS[opSelRg.tipo].grupo === "INTERNO" && !!geo;
+    let rz = r.z;
+    let faceX: number | null = null;
+    if (ehIntRg && geo) {
+      // a face (degrau) é onde um trecho do furo termina e o próximo começa com outro Ø
+      const pontas: { z: number; x: number }[] = [];
+      for (const q of geo.int) {
+        if (Math.abs(q.zA - q.zB) < 1e-6) continue;
+        pontas.push({ z: q.zA, x: q.xa }, { z: q.zB, x: q.xb });
+      }
+      const perto = pontas.filter((pp) => Math.abs(pp.z - r.z) <= 0.15).sort((u, v) => Math.abs(u.z - r.z) - Math.abs(v.z - r.z));
+      if (perto.length) {
+        const zf = perto[0].z;
+        const xs = pontas.filter((pp) => Math.abs(pp.z - zf) < 1e-4).map((pp) => pp.x);
+        const lo = Math.min(...xs), hi = Math.max(...xs);
+        if (hi - lo > 0.05 && r.x >= lo - 0.1 && r.x <= hi + 0.1) { rz = zf; faceX = Math.max(lo, Math.min(hi, r.x)); }
+      }
+    }
+    if (primeiroRef.current === null) { primeiroRef.current = rz; primeiroXRef.current = faceX; primeiroXaRef.current = r.x; return; }
     const z1 = primeiroRef.current;
+    const x1 = primeiroXRef.current;
+    const x1a = primeiroXaRef.current ?? r.x;
+    primeiroXaRef.current = null;
+    const pXY = z1 >= rz ? { xI: Math.round(x1a * 1000) / 1000, xF: Math.round(r.x * 1000) / 1000 } : { xI: Math.round(r.x * 1000) / 1000, xF: Math.round(x1a * 1000) / 1000 }; // X do começo (frente) e do fim
     primeiroRef.current = null;
-    setOps((arr) => arr.map((o) => (o.id === sel.opId ? { ...o, faixas: [[Math.min(z1, r.z), Math.max(z1, r.z)]] } : o)));
+    primeiroXRef.current = null;
+    const zDeep = Math.min(z1, rz);
+    const xDeep = Math.abs(rz - zDeep) < 1e-9 && faceX !== null ? faceX : Math.abs(z1 - zDeep) < 1e-9 ? x1 : null;
+    setOps((arr) => arr.map((o) => {
+      if (o.id !== sel.opId) return o;
+      const faixas: TMFaixa[] = [[Math.min(z1, rz), Math.max(z1, rz)]];
+      if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY } };
+      const p = xDeep !== null ? { ...o.p, xff: Math.round(xDeep * 100) / 100, xffClk: 1 } : (o.p as any).xffClk ? { ...o.p, xff: 0, xffClk: 0 } : o.p;
+      return { ...o, faixas, p: { ...p, ...pXY } };
+    }));
     setRegiaoSel(null);
   }, [pick ? pick.seq : -1]);
 
@@ -4656,8 +4854,8 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
           const dBroca = o.p.d ?? 0;
           if (dBroca <= 0) {
             addOp(o.id, `Op. ${idx + 1} (${T.nome}): informar Ø da broca (mm) — operação comentada para evitar colisão.`, "d", `op_${o.id}_d`, true);
-          } else if (geo.intDmin > 0 && dBroca > geo.intDmin + 0.05) {
-            addOp(o.id, `Op. ${idx + 1} (${T.nome}): broca Ø${tmFmt(dBroca)} mm > furo Ø${tmFmt(geo.intDmin)} mm — comentada para evitar colisão.`, "d", `op_${o.id}_d`, true);
+          } else if (((dLimFuroA) => dLimFuroA > 0 && dBroca > dLimFuroA + 0.05)((() => { let mm = Infinity; for (const q of geo.int) { if (Math.abs(q.zA - q.zB) < 1e-6) continue; const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB); for (const fr of (o.faixas || [])) { const a = Math.max(lo, Math.min(fr[0], fr[1])), b = Math.min(hi, Math.max(fr[0], fr[1])); if (b - a < 1e-6) continue; const xz = (z: number) => q.xa + ((z - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa); mm = Math.min(mm, xz(a), xz(b)); } } return isFinite(mm) ? mm : geo.intDmin; })())) {
+            addOp(o.id, `Op. ${idx + 1} (${T.nome}): broca Ø${tmFmt(dBroca)} mm > menor Ø interno da região — comentada para evitar colisão.`, "d", `op_${o.id}_d`, true);
           }
         }
         if (TM_OPS_INT_BARRA.includes(o.tipo)) {
@@ -4676,7 +4874,9 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
   }, [maqAtual, bD, geo, cfg.cursoCab, cfg.ladoBedameK, cfg.pega2Maq, cfg.estTope, cfg.estBedame, cfg.transZ, cfg.origens, cfg.recuosPorMaq, ops]);
   const pendenciasBloqueantes = pendenciasMaquina.some((x) => !x.avisoOp);
 // GUIA: zero + fixações precisam ser confirmados antes de liberar operações e o botão Gerar
-const [preparoOk, setPreparoOk] = useState<string>("");
+// fica guardado junto da configuração: voltar do programa para o painel não pede para confirmar de novo
+const preparoOk: string = (cfg as any).preparoOk || "";
+const setPreparoOk = (v: string) => setCfg((c) => ({ ...c, preparoOk: v }));
 const sigPreparo = JSON.stringify([maqAtual.id, geo ? [geo.zFront, geo.zBack] : null, partZero.face, partZero.offsetZ, cfg.l1, cfg.l2, cfg.pega1, cfg.saida, cfg.pega2, cfg.ini2]);
 const preparoConfirmado = !!geo && preparoOk === sigPreparo;
 // AVISOS HEAD 1 x HEAD 2: a pega do contrafuso (Lado 2) tem que estar usinada no lado 1 e nada externo do lado 2 pode entrar nela
@@ -4710,6 +4910,7 @@ const avisosLados: string[] = (() => {
     origens: cfg.origens,
     zero: partZero,
     maqId: maqAtual.id,
+    soloId: soloOp || undefined,
     pega2: maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? cfg.pega2Maq : cfg.pega2,
     cursoCab: cfg.cursoCab,
     ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
@@ -4767,7 +4968,7 @@ const avisosLados: string[] = (() => {
       return;
     }
     setAvisoMaq("");
-    onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
+    onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
@@ -4792,10 +4993,10 @@ const avisosLados: string[] = (() => {
         if (!res.erro) onGerar(res, true);
         return;
       }
-      onGerar(tmGerar(ops, geo, { nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
+      onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
     }, 400);
     return () => clearTimeout(t);
-  }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina]);
+  }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina, soloOp]);
   // arrastar operação para cima / para baixo na árvore
   const soltarEm = (alvoId: string) => {
     if (!arrastando || arrastando === alvoId) return;
@@ -5059,7 +5260,7 @@ return (
         </div>
         {/* FIXAÇÕES */}
         <div className="rounded-lg border border-red-900/60 p-2">
-          <div className="text-[11px] font-bold text-red-300 mb-1">FIXAÇÕES (zona proibida)</div>
+          <div className="flex items-center justify-between mb-1"><span className="text-[11px] font-bold text-red-300">FIXAÇÕES (zona proibida)</span><button type="button" onClick={() => setCfg((c) => ({ ...c, fixOculta: !c.fixOculta }))} title="Só esconde o desenho das fixações no gráfico; a conferência de colisão continua valendo" className={"text-[10px] px-2 py-0.5 rounded border " + (cfg.fixOculta ? "border-amber-600 text-amber-300" : "border-zinc-700 text-zinc-400 hover:text-white")}>{cfg.fixOculta ? "👁 mostrar no desenho" : "🙈 ocultar do desenho"}</button></div>
           <div className="flex flex-wrap items-center gap-2 text-xs mb-1">
             {sw(cfg.l1, () => setCfg({ ...cfg, l1: !cfg.l1 }), "Lado 1")}
             {maqAtual.suico ? <span className="text-zinc-400" title="Torno suíço: o lado 1 é a bucha de guia / pinça do cabeçote. A zona proibida começa na linha de corte (barra atrás da peça).">bucha de guia (automática)</span> : <><span className="text-zinc-400">placa: pega</span>{num(cfg.pega1, (n) => setCfg({ ...cfg, pega1: n }), 0.5, "w-14")}</>}
@@ -5472,6 +5673,32 @@ return (
                       )
                     )}
                     <button
+                            type="button"
+                            onClick={() => setOp(o.id, { p: { ...o.p, oc: (o.p.oc ?? 0) === 1 ? 0 : 1 } })}
+                            className={"text-[10px] px-1 py-0.5 rounded " + ((o.p.oc ?? 0) === 1 ? "text-amber-400 opacity-90" : "text-zinc-600 hover:text-zinc-300 opacity-60")}
+                            title={(o.p.oc ?? 0) === 1 ? "Traço desta ferramenta OCULTO no simulador — clique para mostrar" : "Ocultar o traço desta ferramenta no simulador (o programa não muda)"}
+                          >
+                            {(o.p.oc ?? 0) === 1 ? "◌" : "●"}
+                          </button>
+                          {["face", "desbExt", "acabExt", "canal", "canalInt", "roscaExt", "desbInt", "acabInt", "roscaInt"].includes(o.tipo) && (
+                            <button
+                              type="button"
+                              onClick={() => setOp(o.id, { p: { ...o.p, espX: (o.p.espX ?? 0) === 1 ? 0 : 1 } })}
+                              className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + ((o.p.espX ?? 0) === 1 ? "border-fuchsia-400 bg-fuchsia-900/50 text-fuchsia-200" : "border-zinc-700 text-zinc-500 hover:text-white")}
+                              title="Espelhar X: a ferramenta trabalha do OUTRO lado do centro (X negativo). Inverte os X, os recuos, G2/G3, o sobremetal U e o R de cone dos ciclos. Clique de novo para voltar."
+                            >
+                              {(o.p.espX ?? 0) === 1 ? "−X" : "±X"}
+                            </button>
+                          )}
+                          <button
+                      type="button"
+                      onClick={() => setSoloOp(soloOp === o.id ? null : o.id)}
+                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (soloOp === o.id ? "border-emerald-400 bg-emerald-900/50 text-emerald-200" : "border-zinc-700 text-zinc-500 hover:text-white")}
+                      title="Simular só esta operação: o gráfico mostra só ela (os ticados não mudam). Clique de novo para voltar ao normal."
+                    >
+                      {soloOp === o.id ? "🎯 só esta" : "🎯"}
+                    </button>
+                    <button
                       ref={(el) => { fieldRefs.current[`op_${o.id}_cab`] = el; }}
                       onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })}
                       className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
@@ -5529,8 +5756,11 @@ return (
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-zinc-400">Começa em Z</span>
                         {num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
+                                {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta começa (0 = automático pelo Z)">X Ø</span>{num(o.p.xI ?? 0, (n) => setOp(o.id, { p: { ...o.p, xI: n } }), 0.1, "w-16")}</>}
                         <span className="text-zinc-400">termina em Z</span>
                         {num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
+                                {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta termina (0 = automático pelo Z)">X Ø</span>{num(o.p.xF ?? 0, (n) => setOp(o.id, { p: { ...o.p, xF: n } }), 0.1, "w-16")}</>}
+                                {(o.tipo === "desbInt" || o.tipo === "acabInt") && <><span className="text-zinc-400" title="Ø final no fundo (0 = até onde a barra alcança)">X Ø fundo</span>{num(o.p.xff ?? 0, (n) => setOp(o.id, { p: { ...o.p, xff: n, xffClk: 0 } }), 0.1, "w-16")}</>}
                         <button onClick={() => setOp(o.id, { faixas: [] })} className="text-zinc-500 hover:text-red-400" title="Tirar a região">✕</button>
                         {o.faixas.length > 1 && <span className="text-[10px] text-zinc-500">({o.faixas.length} linhas)</span>}
                       </div>
@@ -5584,6 +5814,24 @@ return (
                             Ø máx. de barra p/ esta seleção: <span className="font-bold text-white">{tmFmt2(barraInfo.dMax)} mm</span>{" "}
                             <span className="text-zinc-400">(menor Ø interno {tmFmt2(barraInfo.dMinInt)} − folga {tmFmt2(barraInfo.folga)})</span>
                           </div>
+                                {(o.tipo === "desbInt" || o.tipo === "acabInt") && (() => {
+                                  // FUNDO: a ponta faceia indo para o centro e a COSTA da barra vai para o outro lado do furo
+                                  const Dab = (o.p.d0 ?? 0) > 0 ? o.p.d0 : barraInfo.dMinInt;
+                                  const fbI = o.p.fb ?? 0.5;
+                                  const fiI = Math.max(0, o.p.fi ?? 1);
+                                  const bmI = o.p.bm ?? 0;
+                                  const alvoI = (o.p.xff ?? 0) > 0 ? o.p.xff : 0;
+                                  const limI = 2 * bmI - Dab + fbI + fiI;
+                                  const barraAlvo = (alvoI + Dab - fbI - fiI) / 2;
+                                  return (
+                                    <div className="text-zinc-400 mt-0.5">
+                                      Fundo (furo aberto Ø{tmFmt2(Dab)}):{" "}
+                                      {bmI > 0 ? (limI >= Dab - 0.05 ? <span className="font-bold text-red-300">barra Ø{tmFmt2(bmI)} NÃO faceia o fundo</span> : <>barra Ø{tmFmt2(bmI)} faceia até <span className="font-bold text-white">Ø{tmFmt2(Math.max(0, limI))}</span></>) : "informe o Ø da barra"}
+                                      {alvoI > 0 && <> · para chegar no Ø{tmFmt2(alvoI)} use barra de no máx. <span className="font-bold text-white">Ø{tmFmt2(Math.max(0, barraAlvo))}</span></>}
+                                      <span className="text-zinc-500"> (Ø mín = 2×barra − Ø furo + folga + recuo X)</span>
+                                    </div>
+                                  );
+                                })()}
                           {barraExcedida && (
                             <div className="text-red-400 font-bold mt-0.5">
                               Barra maior que o furo na operação {i + 1}
@@ -5677,6 +5925,15 @@ return (
           Ao vivo
         </label>
         <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>
+        <button
+          type="button"
+          disabled={!geo || !!barraBloqueio || !preparoConfirmado}
+          onClick={gerar}
+          title="Refaz o programa e o gráfico com as mudanças das operações (para conferir trajetórias, mergulhos e colisões)"
+          className={"text-xs font-bold px-3 py-1.5 rounded-lg border " + (!geo || barraBloqueio || !preparoConfirmado ? "border-zinc-800 text-zinc-600 cursor-not-allowed" : "border-cyan-700 text-cyan-300 hover:text-white hover:border-cyan-400")}
+        >
+          ↻ Recalcular
+        </button>
         <button
           disabled={!geo || !!barraBloqueio || !preparoConfirmado}
           onClick={gerar}

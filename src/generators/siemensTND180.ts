@@ -293,6 +293,7 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
   const opsPrincipais = ativos.filter((o) => o.tipo !== "corte");
 
   opsPrincipais.forEach((op) => {
+    if ((cfg as any).soloId && op.id !== (cfg as any).soloId) return; // simular só esta operação
     const p = op.p;
     const fxs = op.faixas.length ? op.faixas : faixaPadraoSiemens(op.tipo, geo, p) || [];
     if (!fxs.length) return;
@@ -311,8 +312,10 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
         W(`;PENDENCIA: ${desc} - INFORMAR DIAMETRO DA BROCA`);
         return;
       }
-      if (geo.intDmin > 0 && dBroca > geo.intDmin + 0.05) {
-        W(`;PENDENCIA: ${desc} - BROCA D${fmt(dBroca)} MAIOR QUE FURO D${fmt(geo.intDmin)}`);
+      // menor Ø interno DENTRO da região da furação (não o menor furo da peça inteira)
+      const dLimFuro = (() => { let mm = Infinity; for (const q of geo.int) { if (Math.abs(q.zA - q.zB) < 1e-6) continue; const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB); for (const fr of (op.faixas || [])) { const a = Math.max(lo, Math.min(fr[0], fr[1])), b = Math.min(hi, Math.max(fr[0], fr[1])); if (b - a < 1e-6) continue; const xz = (z: number) => q.xa + ((z - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa); mm = Math.min(mm, xz(a), xz(b)); } } return isFinite(mm) ? mm : geo.intDmin; })();
+      if (dLimFuro > 0 && dBroca > dLimFuro + 0.05) {
+        W(`;PENDENCIA: ${desc} - BROCA D${fmt(dBroca)} MAIOR QUE FURO D${fmt(dLimFuro)}`);
         return;
       }
     }
@@ -321,7 +324,7 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
         W(`;PENDENCIA: ${desc} - SEM PERFIL INTERNO NA REGIAO`);
         return;
       }
-      const dSegChk = op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
+      const dSegChk = (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin; // furo já aberto (pré-furo da operação anterior) vale para TODAS as internas
       const bm = p.bm ?? 0;
       const fb = p.fb ?? 0.5;
       if (bm > 0 && bm + fb > dSegChk + (op.tipo === "desbInt" ? 2 * Math.max(0.05, p.ap ?? 1) : 0) + 1e-6) {
@@ -386,19 +389,124 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
         if (zStart < zFrontClear - 1e-4) W(`G0Z${fmt(zStart)}`);
         if (op.tipo === "desbExt") {
           const apDesb = Math.max(0.05, (p.ap ?? 1.5) > 0 ? p.ap : 1.5);
+          // REBAIXOS / MERGULHOS (mesma regra consolidada da TBSy): "Entrar nos rebaixos = 1" -> depois do desbaste por fora
+          // (com ou sem ciclo) desbasta os rebaixos entrando pela rampa já usinada, sempre no sentido do cabeçote,
+          // respeitando o ângulo da pastilha e o raio da ponta. O que a pastilha não alcança fica para o bedame.
+          const fazerRebaixos = () => {
+            if (p.real !== 1) return;
+            const angR = (p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27;
+            const rpR = p.rp ?? 0.4;
+            const alvo = compensarRaio(limitaMergulho(perfilMono(s, false, true), angR), rpR, false);
+            const env = compensarRaio(perfilMono(s, false, false), rpR, false);
+            const U = Math.max(0, p.u ?? 0.4);
+            const Wd = Math.max(0, p.w ?? 0.1);
+            const fR = p.f ?? 0.25;
+            const valEm = (lst: { x: number; z: number }[], z: number) => {
+              let v = -Infinity;
+              for (let i = 0; i < lst.length - 1; i++) {
+                const a = lst[i], b = lst[i + 1];
+                const lo = Math.min(a.z, b.z), hi = Math.max(a.z, b.z);
+                if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+                v = Math.max(v, hi - lo < 1e-9 ? Math.max(a.x, b.x) : a.x + ((z - a.z) / (b.z - a.z)) * (b.x - a.x));
+              }
+              return v;
+            };
+            const comSobre = (lst: { x: number; z: number }[], z: number) => {
+              let m = -Infinity;
+              [-Wd, -Wd / 2, 0, Wd / 2, Wd].forEach((dz) => { m = Math.max(m, valEm(lst, z + dz)); });
+              return m + U;
+            };
+            const passo = 0.02;
+            const zS0 = s[0].zA, zFimR = s[s.length - 1].zB;
+            const ZG: number[] = [];
+            for (let z = zS0; z >= zFimR - 1e-9 && ZG.length < 20000; z -= passo) ZG.push(z);
+            const TA = ZG.map((z) => comSobre(alvo, z));
+            const MA = ZG.map((z) => comSobre(env, z));
+            const dAp = Math.max(0.02, 2 * apDesb);
+            const r1 = Math.min(1, dAp * 0.8);
+            const xSafe = bD + 2;
+            const rebs: [number, number][] = [];
+            let ini = -1;
+            ZG.forEach((_z, i) => {
+              const fundo = TA[i] < MA[i] - 0.02;
+              if (fundo && ini < 0) ini = i;
+              if ((!fundo || i === ZG.length - 1) && ini >= 0) { rebs.push([ini, fundo ? i : i - 1]); ini = -1; }
+            });
+            if (rebs.length) W("; MERGULHO LIMITADO A " + fmt(angR) + " GRAUS - O QUE A PASTILHA NAO ALCANCA SOBRA PARA O BEDAME");
+            rebs.forEach(([i0, i1], ir) => {
+              const idx: number[] = [];
+              for (let i = i0; i <= i1; i++) idx.push(i);
+              const topo = Math.max(...idx.map((i) => MA[i]));
+              const fundoMin = Math.min(...idx.map((i) => TA[i]));
+              W("; REBAIXO " + (ir + 1) + " Z" + fmt(zS(ZG[i0])) + " A Z" + fmt(zS(ZG[i1])) + " - ENTRA PELA RAMPA, SEMPRE NO SENTIDO DA PLACA");
+              W("G0X" + fmt(xSafe));
+              W("G0Z" + fmt(zS(ZG[i0])));
+              let curX = MA[i0] + 0.5;
+              let curZi = i0;
+              W("G0X" + fmt(curX));
+              let L = topo;
+              let g = 0;
+              while (g++ < 500 && L > fundoMin + 1e-6) {
+                const prevL = L;
+                L = Math.max(fundoMin, L - dAp);
+                const runs: [number, number][] = [];
+                let a = -1;
+                idx.forEach((i, k) => {
+                  const corta = TA[i] < L - 1e-6 && MA[i] > L + 1e-6;
+                  if (corta && a < 0) a = i;
+                  if ((!corta || k === idx.length - 1) && a >= 0) { runs.push([a, corta ? i : i - 1]); a = -1; }
+                });
+                runs.forEach(([ia, ib]) => {
+                  let ie = ia;
+                  let gIe = 0;
+                  while (gIe++ < 500 && ie - 1 >= i0 && TA[ie - 1] < prevL - 1e-6) ie--;
+                  if (ie - 1 >= i0) ie--;
+                  const xEnt = Math.min(prevL, TA[ie]);
+                  let H = Math.max(prevL, curX);
+                  for (let i = Math.min(curZi, ie); i <= Math.max(curZi, ie); i++) H = Math.max(H, TA[i] + 0.5);
+                  H = Math.min(H, xSafe);
+                  W("G0X" + fmt(H));
+                  W("G0Z" + fmt(zS(ZG[ie])));
+                  W("G0X" + fmt(xEnt + 0.2));
+                  W("G1X" + fmt(xEnt) + "F" + fmt(fR));
+                  const ramp: { x: number; z: number }[] = [{ x: xEnt, z: ZG[ie] }];
+                  for (let i = ie + 1; i <= ia; i++) ramp.push({ x: Math.max(L, Math.min(prevL, TA[i])), z: ZG[i] });
+                  ramp.push({ x: L, z: ZG[ia] });
+                  const rs: { x: number; z: number }[] = [];
+                  ramp.forEach((q) => {
+                    if (rs.length >= 2) {
+                      const u = rs[rs.length - 2], v = rs[rs.length - 1];
+                      if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4) rs.pop();
+                    }
+                    rs.push(q);
+                  });
+                  for (let k = 1; k < rs.length; k++) W("G1X" + fmt(rs[k].x) + "Z" + fmt(zS(rs[k].z)));
+                  W("G1Z" + fmt(zS(ZG[ib])));
+                  curX = Math.min(L + r1, prevL);
+                  curZi = ib;
+                  W("G1X" + fmt(curX) + " ;SOBE DENTRO DA AREA JA USINADA");
+                });
+              }
+              W("G0X" + fmt(xSafe) + " ;SAI DO REBAIXO POR CIMA");
+            });
+          };
           const uOff = Math.max(0, p.u ?? 0.4);
           const wOff = Math.max(0, p.w ?? 0.1);
           const rawMono = perfilMono(s, false, false);
           const rawOff = rawMono.map((q) => ({ x: q.x + uOff, z: q.z + wOff }));
           const compOff = compensarRaio(rawOff, p.rp ?? 0.4, false);
           const xMin = Math.min(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
+            // degraus retos da peça (+ sobremetal): o passe PARA neles (ex.: Ø28,4 + 0,4 = Ø28,8), igual à TBSy
+            const platE = Array.from(new Set(compOff.filter((q, k) => k < compOff.length - 1 && Math.abs(compOff[k + 1].x - q.x) < 2e-3 && Math.abs(compOff[k + 1].z - q.z) > 0.05).map((q) => Math.round(q.x * 1000) / 1000)));
           let xp = bD;
           let gXp = 0;
           while (gXp++ < 1000 && xp > xMin + 1e-6) {
-            const nx = Math.max(xMin, xp - 2 * apDesb);
+            let nx = Math.max(xMin, xp - 2 * apDesb);
+            const plS = platE.filter((pv) => pv < xp - 1e-6 && pv > nx + 1e-6);
+            if (plS.length) nx = Math.max(...plS);
             if (nx >= xp - 1e-6) break;
             xp = nx;
-            const zlComp = zOndeAlvo(compOff, xp + 1e-6, false);
+            const zlComp = zOndeAlvo(compOff, xp + 0.005, false); // tolerância: o passe no diâmetro reto (+ sobremetal) vai até o fim do degrau, não para no começo dele
             const zlRaw = zOndeAlvo(rawOff, xp + 1e-6, false);
             const zl = Math.max(zlComp, zlRaw);
             if (zl >= pts[0].z - 1e-4) continue;
@@ -410,6 +518,7 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
             W(`G0Z${fmt(zStart)}`);
           }
           W(`G0X${fmt(bD + 2)}`);
+          fazerRebaixos();
         } else {
           W(`G0X${fmt(pts[0].x)}`);
           emitirContornoSiemens(out, pts, zS, p.f ?? 0.1);

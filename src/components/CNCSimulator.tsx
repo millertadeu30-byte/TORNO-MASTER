@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
+import { blocosOpsGerados } from "../generators/star18iTB";
 import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge, Lock, Unlock } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 import { calculateCycleTimeDetailed, formatCycleTime, loadMachineParams, saveMachineParams, MachineParams } from "../utils/cycleTimeCalculator";
@@ -7,6 +8,8 @@ import { CycleTimePanel } from "./CycleTimePanel";
 
 export type FixZone = {
   gContra?: string[]; // origens (G54..G59) do contrafuso: linhas nelas contam como Lado 2
+  oculta?: boolean; // só esconde o desenho (a conferência de colisão continua)
+  zH2?: number; // posição (Z do gráfico) do zero do Head 2 / contrafuso, para desenhar o marcador
   lado: 1 | 2;
   za: number;
   zb: number;
@@ -66,8 +69,9 @@ interface CNCSimulatorProps {
   regiaoModo?: "cf" | "linha" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
   regiaoLimparSeq?: number; // incrementa quando o usuário limpa a seleção para apagar as marquinhas
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
-  regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string }[];
+  regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string; ap?: { x: number; z: number }; fundo?: { z: number; x: number } }[];
   fixComando?: { seq: number; zones: FixZone[] } | null; // painel liga/desliga fixações
+  opsOcultos?: string[]; // operações com o traço escondido
   canalSim?: number; // canal/cabeçote do programa simulado (1 = Head 1, 2 = Head 2)
   partLayers?: PartLayer[]; // Peça e bruto do STEP
   onInsertPoint?: (x: number, z: number) => void; // PG: ponto tocado no perfil vai para o programa
@@ -1545,6 +1549,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   regioes,
   fixComando,
   canalSim = 1,
+  opsOcultos,
   partLayers,
   onInsertPoint,
 }) => {
@@ -1618,6 +1623,24 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   useEffect(() => {
     try { localStorage.setItem("cnc_showToolpath", showToolpath ? "1" : "0"); } catch {}
   }, [showToolpath]);
+  // linhas do programa que pertencem às operações ocultas (acha o bloco de linhas de cada operação no texto)
+  const linhasOcultasSet = useMemo(() => {
+    if (!opsOcultos || !opsOcultos.length || !gcodeText) return null;
+    const norm = (l: string) => l.trim().replace(/^\//, "").replace(/\bG4X/g, "G4U");
+    const L = gcodeText.split("\n").map(norm);
+    const set = new Set<number>();
+    opsOcultos.forEach((id) => {
+      const b = blocosOpsGerados[id];
+      if (!b || !b.length) return;
+      const B = b.map(norm);
+      for (let i = 0; i + B.length <= L.length; i++) {
+        let ok = true;
+        for (let k = 0; k < B.length; k++) { if (L[i + k] !== B[k]) { ok = false; break; } }
+        if (ok) { for (let k = 0; k < B.length; k++) set.add(i + k); break; }
+      }
+    });
+    return set.size ? set : null;
+  }, [opsOcultos, gcodeText]);
   const [pgMsg, setPgMsg] = useState<string | null>(null);
   // ===== FIXAÇÃO (zona proibida): onde a peça é presa no lado 1 e no lado 2 =====
   const [fixMode, setFixMode] = useState<boolean>(false);
@@ -2467,6 +2490,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
 
     // ===== FIXAÇÃO (atrás da peça): blocos CINZAS (pinça / bucha / castanha) + cota + apenas contorno fino tracejado vermelho =====
     fixZones.forEach((f) => {
+      if (f.oculta) return;
       const ativa = f.lado === fixLado;
       const isBucha = f.tipo === "bucha" || !!f.infinito;
       const fol = ativa && !isBucha ? fixFolga : 0;
@@ -2602,6 +2626,50 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       ctx.font = "bold 10px monospace";
       ctx.fillText("Z0", originX + 9, originY - 9);
       ctx.restore();
+      // PONTO DE APROXIMAÇÃO da operação aberta (X Ø e Z digitados): a ferramenta começa aqui
+      {
+        const apP = (regioes || []).find((rg) => rg.ativa && rg.ap)?.ap;
+        if (apP) {
+          const px = originX + apP.z * zoom * zDirSign;
+          const py = originY - (apP.x / 2) * zoom;
+          ctx.save();
+          ctx.strokeStyle = "#e879f9";
+          ctx.fillStyle = "#e879f9";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(px - 7, py); ctx.lineTo(px + 7, py); ctx.moveTo(px, py - 7); ctx.lineTo(px, py + 7); ctx.stroke();
+          ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.stroke();
+          ctx.font = "bold 10px monospace";
+          ctx.fillText("APROX X" + apP.x + " Z" + apP.z, px + 8, py - 8);
+          ctx.restore();
+        }
+      }
+      // MARCADOR DO ZERO DO HEAD 2 (contrafuso)
+      {
+        const zH2z = fixZones.find((f) => typeof f.zH2 === "number")?.zH2;
+        if (typeof zH2z === "number") {
+          const hx = originX + zH2z * zoom * zDirSign;
+          ctx.save();
+          ctx.strokeStyle = "#f59e0b";
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.moveTo(hx, 20);
+          ctx.lineTo(hx, canvas.height - 20);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.arc(hx, originY, 6, 0, Math.PI * 2);
+          ctx.fillStyle = "#3b2503";
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#f59e0b";
+          ctx.beginPath(); ctx.moveTo(hx, originY); ctx.arc(hx, originY, 6, 0, Math.PI / 2); ctx.closePath(); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(hx, originY); ctx.arc(hx, originY, 6, Math.PI, Math.PI * 1.5); ctx.closePath(); ctx.fill();
+          ctx.font = "bold 10px monospace";
+          ctx.fillText("Z0 H2", hx + 9, originY + 16);
+          ctx.restore();
+        }
+      }
     }
 
     // DESENHO do usuário (Linha / Círculo / Arco / Ponto / Cotas)
@@ -2678,7 +2746,8 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           currentAnimationZ = item.z2;
         }
       }
-      if (!showToolpath) return; // traços de usinagem desligados (botão no canto de baixo do simulador)
+      if (!showToolpath) return;
+        if (linhasOcultasSet && linhasOcultasSet.has(Math.floor(item.linhaId))) return; // traço desta ferramenta oculto no painel // traços de usinagem desligados (botão no canto de baixo do simulador)
 
       ctx.beginPath();
       
@@ -2826,6 +2895,18 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           // cada linha é individual: linha em pé (face) só pinta se a região for exatamente ela (Z igual nas duas pontas);
           // linha deitada/inclinada só pinta se estiver DENTRO da região, sem pegar as faces das pontas
           const ehFace = Math.abs(s.a.z - s.b.z) < 1e-6;
+          // FUNDO escolhido por clique: pinta a face só do furo aberto até o Ø clicado
+          if (ehFace && rg.fundo && Math.abs(zm - rg.fundo.z) < 1e-3) {
+            const xHi = Math.max(s.a.x, s.b.x);
+            const xLo = Math.max(Math.min(s.a.x, s.b.x), Math.min(xHi, rg.fundo.x));
+            for (const sgn of [1, -1]) {
+              ctx.beginPath();
+              ctx.moveTo(originX + zm * zoom * zDirSign, originY - sgn * (xHi / 2) * zoom);
+              ctx.lineTo(originX + zm * zoom * zDirSign, originY - sgn * (xLo / 2) * zoom);
+              ctx.stroke();
+            }
+            return;
+          }
           if (!rg.faixas.some(([za, zb]) => {
             const lo = Math.min(za, zb);
             const hi = Math.max(za, zb);
@@ -3264,6 +3345,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     regioes,
     regiaoModo,
     regiaoClicks,
+    linhasOcultasSet,
     cursorStyle,
     canvasSize,
     gcodeText,
@@ -3334,7 +3416,42 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         }
         return;
       }
-      const g = findPickSnap(mx, my, cnv, 45);
+      // Começo/Fim: projeta o toque na LINHA da peça mais perto (ponto exato onde clicou);
+          // só "gruda" no canto se o toque estiver a menos de 8 px dele
+          if (partLayers && partLayers.length) {
+            const pecaP = partLayers.find((Lr) => Lr.id === "peca") || partLayers[0];
+            const zDirP = simInvertZ ? -1 : 1;
+            const oXP = cnv.width / 2 + 50 + panX;
+            const oYP = cnv.height / 2 + 50 + panY;
+            let bdP = 45;
+            let bestP: { x: number; y: number } | null = null;
+            for (const c of pecaP.curves) {
+              for (const sgn of [1, -1]) {
+                for (let i = 0; i < c.length; i++) {
+                  const vx = oXP + c[i].z * zoom * zDirP, vy = oYP - sgn * (c[i].x / 2) * zoom;
+                  const dv = Math.hypot(mx - vx, my - vy);
+                  if (dv < 8 && dv < bdP) { bdP = dv; bestP = { x: vx, y: vy }; }
+                }
+              }
+            }
+            if (!bestP) {
+              for (const c of pecaP.curves) {
+                for (const sgn of [1, -1]) {
+                  for (let i = 0; i < c.length - 1; i++) {
+                    const res = getDistanceToSegment(mx, my, oXP + c[i].z * zoom * zDirP, oYP - sgn * (c[i].x / 2) * zoom, oXP + c[i + 1].z * zoom * zDirP, oYP - sgn * (c[i + 1].x / 2) * zoom);
+                    if (res.distance < bdP) { bdP = res.distance; bestP = { x: res.x, y: res.y }; }
+                  }
+                }
+              }
+            }
+            if (bestP) {
+              const clickWP = skToWorld(bestP.x, bestP.y, T);
+              setRegiaoClicks((prev) => [...prev, clickWP]);
+              onRegiaoPick({ z: (bestP.x - oXP) / (zoom * zDirP), x: (Math.abs(oYP - bestP.y) / zoom) * 2 });
+              return;
+            }
+          }
+          const g = findPickSnap(mx, my, cnv, 45);
       if (g) {
         const clickW = skToWorld(g.canvasX, g.canvasY, T);
         setRegiaoClicks((prev) => [...prev, clickW]);
@@ -3545,7 +3662,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   }, [driverTick, isDriverActive, onLineChange]);
 
   // Synchronize driverTick when activeLine changes externally (e.g. user clicked editor)
+  // Só quando a LINHA muda de verdade: código novo (operação ticada / "Ao vivo") mantém o desenho completo, igual ao Stop
+  const linhaAntRef = useRef<number | null>(null);
   useEffect(() => {
+    const linhaMudou = linhaAntRef.current !== activeLine;
+    linhaAntRef.current = activeLine;
+    if (!linhaMudou) return;
     if (!isDriverActive && activeLine >= 0 && Math.floor(activeLine) !== Math.floor(driverTick)) {
        // Find the closest line in linesWithDrawing
        const match = linesWithDrawing.find(l => Math.floor(l) === Math.floor(activeLine));
