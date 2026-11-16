@@ -1214,7 +1214,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         const cone = Math.abs(kCone) > 1e-4;
         const dPerfilEm = (zProg: number) => dIniR + kCone * (zProg - zcIR);
         const sgR = interno ? 1 : -1;
-        const xStart = interno ? Math.max(2, (p.d0 ?? 0) > 0 ? p.d0 - 2 : Math.min(dIniR, dFimR) - 2) : Math.max(dIniR, dFimR) + 3;
+        const xStartAuto = interno ? Math.max(2, (p.d0 ?? 0) > 0 ? p.d0 - 2 : Math.min(dIniR, dFimR) - 2) : Math.max(dIniR, dFimR) + 3;
+        // Ø de recuo de cada passe: o usuário pode editar (0 = automático)
+        const xStart = (p.xr ?? 0) > 0 ? p.xr : xStartAuto;
+        const xRecuoRuim = (p.xr ?? 0) > 0 && (interno ? p.xr > Math.min(dIniR, dFimR) - 0.2 : p.xr < Math.max(dIniR, dFimR) + 0.2);
         const rpmRosca = Math.round(p.rpm ?? (interno ? 600 : 800));
         const zEntry = zCoord(zIni) - aprox;
         // ESQUERDA: começa ATRÁS da rosca e corta para a frente. Folga atrás limitada pelo ressalto (não bate no degrau)
@@ -1240,6 +1243,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         const nomesR = ["METRICA", "NPT", "BSPT", "BSP", "UN"];
         lines.push("(ROSCA " + (esquerda ? "ESQUERDA " : "") + (nomesR[tipoR] || "METRICA") + " PASSO " + fmt(passo) + (tipoR > 0 ? " = " + fmt(p.tpi ?? 18) + " FIOS/POL" : "") + " ALTURA " + fmt(h) + (cone ? " CONICA " + ((interno ? -kCone : kCone) > 0 ? "SUBINDO" : "DESCENDO") : " PARALELA") + " - " + nPR + " PASSADAS + " + nMola + " ACAB." + (nEnt > 1 ? " - " + nEnt + " ENTRADAS, AVANCO " + fmt(avancoR) : "") + ")");
         if (esquerda && Math.abs(zIniCiclo - zcFR) < passo) lines.push("(ATENCAO: POUCA FOLGA ATRAS DA ROSCA ESQUERDA - " + fmt(Math.abs(zIniCiclo - zcFR)) + " MM - CONFERIR SAIDA)");
+        if (xRecuoRuim) lines.push("(ATENCAO: O DE RECUO X" + fmt(xStart) + " ESTA DENTRO DO MATERIAL DA ROSCA - CONFERIR)");
         lines.push("G99G97S" + rpmRosca + "M3");
         if (interno) {
           g0FrontalSeguro(xStart, zEntry);
