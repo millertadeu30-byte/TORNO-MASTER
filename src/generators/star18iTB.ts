@@ -835,6 +835,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
           // respeitando o ângulo da pastilha e o raio da ponta. O que a pastilha não alcança fica para o bedame.
           const fazerRebaixos = () => {
             if (p.real !== 1) return;
+          const iniRb = lines.length; // limpeza no fim: tira G0 repetido / para onde já está
             const angR = (p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27;
             const rpR = p.rp ?? 0.4;
             const alvo = compensarRaio(limitaMergulho(perfilMono(s, false, true).pts, angR), rpR, false);
@@ -880,7 +881,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               const topo = Math.max(...idx.map((i) => MA[i]));
               const fundoMin = Math.min(...idx.map((i) => TA[i]));
               lines.push("(REBAIXO " + (ir + 1) + " Z" + fmt(zCoord(ZG[i0])) + " A Z" + fmt(zCoord(ZG[i1])) + " - ENTRA PELA RAMPA, SEMPRE NO SENTIDO DO CABECOTE)");
-              if (ir === 0) lines.push("G0X" + fmt(xSafe)); // entre rebaixos já está numa altura segura (acima do perfil desbastado)
+              if (ir === 0) { let hT0 = -Infinity; for (let i = 0; i <= i0; i++) hT0 = Math.max(hT0, MA[i] + 0.5); lines.push("G0X" + fmt(Math.min(xSafe, hT0))); } // só 0,5 mm acima do perfil já desbastado (sem subir até a barra)
               lines.push("G0Z" + fmt(zCoord(ZG[i0])));
               let curX = MA[i0] + 0.5;
               let curZi = i0;
@@ -893,7 +894,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 const runs: [number, number][] = [];
                 let a = -1;
                 idx.forEach((i, k) => {
-                  const corta = TA[i] < L - 1e-6 && MA[i] > L + 1e-6;
+                  const corta = TA[i] < L + 1e-6 && MA[i] > L + 1e-6; // inclui o próprio fundo (rebaixo mais raso que 1 passe também é cortado)
                   if (corta && a < 0) a = i;
                   if ((!corta || k === idx.length - 1) && a >= 0) { runs.push([a, corta ? i : i - 1]); a = -1; }
                 });
@@ -938,7 +939,23 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             } else lines.push("G0X" + fmt(xSafe) + "(SAI DO REBAIXO POR CIMA)");
           }
             });
-          };
+            {
+            let cx: number | null = null, cz: number | null = null;
+            const novas: string[] = [];
+            for (const l of lines.slice(iniRb)) {
+              const m0 = /^G0(X(-?[\d.]+))?(Z(-?[\d.]+))?(\(.*\))?$/.exec(l);
+              if (m0 && (m0[2] !== undefined || m0[4] !== undefined)) {
+                const nx = m0[2] !== undefined ? parseFloat(m0[2]) : cx, nz = m0[4] !== undefined ? parseFloat(m0[4]) : cz;
+                if (nx !== null && nz !== null && cx !== null && cz !== null && Math.abs(nx - cx) < 1e-4 && Math.abs(nz - cz) < 1e-4 && !m0[5]) continue;
+                cx = nx; cz = nz; novas.push(l); continue;
+              }
+              const mx = /X(-?[\d.]+)/.exec(l), mz = /Z(-?[\d.]+)/.exec(l);
+              if (/^G[01]/.test(l)) { if (mx) cx = parseFloat(mx[1]); if (mz) cz = parseFloat(mz[1]); }
+              novas.push(l);
+            }
+            lines.splice(iniRb, lines.length - iniRb, ...novas);
+          }
+        };
           if (op.ciclo) {
             const n1 = nIdx * 100;
             const n2 = n1 + 50;
