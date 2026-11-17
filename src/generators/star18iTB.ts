@@ -675,8 +675,12 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const espIvH2 = (lst: StarTMIntervalo[]): StarTMIntervalo[] => lst.map((q) => ({ zA: sFH2 - q.zB, zB: sFH2 - q.zA, xa: q.xb, xb: q.xa })).reverse();
   const geoEspH2: StarTMGeo = { ...geo, ext: espIvH2(geo.ext), int: espIvH2(geo.int), intZmin: sFH2 - geo.intZmax, intZmax: sFH2 - geo.intZmin };
   // RESTO DE OPERAÇÃO: Ø que a operação nº "rs" deixou em cada Z (externo). null = do bruto
-  const perfilRestoExt = (opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
-    const nRs = Math.round(opAtual.p.rs ?? 0);
+  // RESTO com VÁRIAS operações ("6,7"): lista dos nº digitados no campo (0 / vazio = do bruto)
+  const listaRs = (o: StarTMOp): number[] => {
+    const txt = (o as any).rsTxt !== undefined && String((o as any).rsTxt).trim() !== "" ? String((o as any).rsTxt) : String(o.p.rs ?? 0).replace(".", ","); // 6.7 digitado como número = "6,7"
+    return Array.from(new Set(txt.split(/[,;\s+]+/).map((t) => parseInt(t, 10)).filter((n) => n > 0)));
+  };
+  const restoExtUm = (nRs: number, opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
     if (!(nRs > 0)) return null;
     const ref = ops[nRs - 1];
     if (!ref || !ref.ativo || ref === opAtual || !(ref.tipo === "desbExt" || ref.tipo === "acabExt" || ref.tipo === "canal" || ref.tipo === "face")) return null;
@@ -705,9 +709,15 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     };
     return { nivel: (z: number) => { if (z > zMax + 1e-6 || z < zMin - 1e-6) return bD; const v = valEm(z); return v > -Infinity ? Math.min(bD, v + sobre) : bD; }, nome: "OP " + nRs };
   };
+  // VÁRIAS operações: o material que sobrou é o que NENHUMA delas tirou (externo: o menor Ø que alguma deixou em cada Z)
+  const perfilRestoExt = (opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
+    const rs = listaRs(opAtual).map((n) => restoExtUm(n, opAtual, canal, geoC, espH2)).filter((r): r is { nivel: (z: number) => number; nome: string } => !!r);
+    if (!rs.length) return null;
+    if (rs.length === 1) return rs[0];
+    return { nivel: (z: number) => Math.min(...rs.map((r) => r.nivel(z))), nome: rs.map((r) => r.nome).join(" + ") };
+  };
   // RESTO DE OPERAÇÃO (interno): menor Ø já ABERTO pela operação nº "rs" (furação / desbaste / acabamento interno). null = do bruto
-  const perfilRestoInt = (opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): { dMin: number; nome: string } | null => {
-    const nRs = Math.round(opAtual.p.rs ?? 0);
+  const restoIntUm = (nRs: number, opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): { dMin: number; nome: string } | null => {
     if (!(nRs > 0)) return null;
     const ref = ops[nRs - 1];
     if (!ref || !ref.ativo || ref === opAtual || (ref.cab ?? "H1") !== (opAtual.cab ?? "H1")) return null;
@@ -720,6 +730,12 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const dPerf = Math.min(...so.filter((q) => Math.abs(q.zA - q.zB) > 1e-6).map((q) => Math.min(q.xa, q.xb)));
     const sobre = ref.tipo === "desbInt" ? Math.max(0, ref.p.u ?? 0.3) : 0;
     return isFinite(dPerf) ? { dMin: Math.max(0.5, dPerf - sobre), nome: "OP " + nRs } : null;
+  };
+  // VÁRIAS operações (interno): vale o MAIOR furo que alguma delas já abriu
+  const perfilRestoInt = (opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): { dMin: number; nome: string } | null => {
+    const rs = listaRs(opAtual).map((n) => restoIntUm(n, opAtual, geoC, espH2)).filter((r): r is { dMin: number; nome: string } => !!r);
+    if (!rs.length) return null;
+    return { dMin: Math.max(...rs.map((r) => r.dMin)), nome: rs.map((r) => r.nome).join(" + ") };
   };
   const gerarOpLinhasBase = (opIn: StarTMOp, canal: "H1" | "H2"): string[] => {
     const espH2 = canal === "H2" && !h2NaFrente;
@@ -1793,8 +1809,8 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         // FUNDO DO FURO (face no fim da região, Head 1): faceia a partir do furo JÁ ABERTO (pré-furo) para o centro
         // até onde a barra deixa sem a COSTA da ferramenta pegar na parede: Ø mín = 2 x Ø barra − Ø aberto + folga
         if (canal === "H1" || espH2) {
-          const faces = s.filter((q) => Math.abs(q.zA - q.zB) < 1e-6);
-          const zFundo = Math.min(...s.map((q) => Math.min(q.zA, q.zB)));
+          const faces = s0Int.filter((q) => Math.abs(q.zA - q.zB) < 1e-6); // a face do fundo saiu do contorno (s), mas é ELA que o bloco FUNDO faceia
+          const zFundo = Math.min(zFundoS0, ...s.map((q) => Math.min(q.zA, q.zB)));
           const fF = faces.find((q) => Math.abs(q.zA - zFundo) < 1e-4) || (() => {
           // a face do fundo é o degrau entre dois trechos do furo (o Ø muda no mesmo Z)
           const xsF: number[] = [];
@@ -1803,6 +1819,8 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             if (Math.abs(q.zA - zFundo) < 1e-4) xsF.push(q.xa);
             if (Math.abs(q.zB - zFundo) < 1e-4) xsF.push(q.xb);
           }
+          // FURO CEGO: só a parede chega no fundo e nada do furo passa dele -> a face do fundo vai do centro (Ø0) até a parede
+          if (xsF.length === 1 && zFundo > geo.zBack + 1e-3 && !geo.int.some((q) => Math.min(q.zA, q.zB) < zFundo - 1e-4)) return { zA: zFundo, zB: zFundo, xa: 0, xb: xsF[0] };
           if (xsF.length < 2) return undefined;
           const loF = Math.min(...xsF), hiF = Math.max(...xsF);
           return hiF - loF > 0.05 ? { zA: zFundo, zB: zFundo, xa: loF, xb: hiF } : undefined;
