@@ -5710,10 +5710,21 @@ return (
         {!preparoConfirmado && <div className="rounded-lg border border-zinc-800 p-2 text-[11px] text-zinc-400">🔒 ÁRVORE DE OPERAÇÕES bloqueada — primeiro defina o ZERO e as FIXAÇÕES e clique em "Zero e fixações conferidos" no guia lá em cima. Assim as operações já nascem respeitando onde a peça está presa.</div>}
         <div className={preparoConfirmado ? "" : "hidden"}>
           <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 cursor-pointer" title="Ticar / desticar todas as operações">
               <input type="checkbox" className="w-3 h-3 opacity-70" checked={ops.length > 0 && ops.every((o) => o.ativo)} ref={(el) => { if (el) el.indeterminate = ops.some((o) => o.ativo) && !ops.every((o) => o.ativo); }} onChange={(e) => { const v = e.target.checked; setOps((arr) => arr.map((o) => ({ ...o, ativo: v }))); }} />
               <span className="text-[11px] font-bold text-amber-300">ÁRVORE DE OPERAÇÕES — LADO 1</span>
             </label>
+              {/* ticar só H1 ou só H2 (o geral acima continua ligando tudo) */}
+              <label className="flex items-center gap-1 cursor-pointer" title="Ticar / desticar só as operações do H1">
+                <input type="checkbox" className="w-3 h-3 opacity-70" checked={ops.some((o) => (o.cab || "H1") === "H1") && ops.filter((o) => (o.cab || "H1") === "H1").every((o) => o.ativo)} ref={(el) => { if (el) { const g = ops.filter((o) => (o.cab || "H1") === "H1"); el.indeterminate = g.some((o) => o.ativo) && !g.every((o) => o.ativo); } }} onChange={(e) => { const v = e.target.checked; setOps((arr) => arr.map((o) => ((o.cab || "H1") === "H1" ? { ...o, ativo: v } : o))); }} />
+                <span className="text-[10px] font-bold px-1 rounded border text-cyan-300 border-cyan-700">H1</span>
+              </label>
+              <label className="flex items-center gap-1 cursor-pointer" title="Ticar / desticar só as operações do H2">
+                <input type="checkbox" className="w-3 h-3 opacity-70" checked={ops.some((o) => (o.cab || "H1") === "H2") && ops.filter((o) => (o.cab || "H1") === "H2").every((o) => o.ativo)} ref={(el) => { if (el) { const g = ops.filter((o) => (o.cab || "H1") === "H2"); el.indeterminate = g.some((o) => o.ativo) && !g.every((o) => o.ativo); } }} onChange={(e) => { const v = e.target.checked; setOps((arr) => arr.map((o) => ((o.cab || "H1") === "H2" ? { ...o, ativo: v } : o))); }} />
+                <span className="text-[10px] font-bold px-1 rounded border text-purple-300 border-purple-700">H2</span>
+              </label>
+            </div>
             {/* confirmação dentro do painel (o confirm() do navegador é bloqueado na prévia do AI Studio) */}
             {geo && (confSugerir ? (
               <span className="flex items-center gap-1 text-[10px]">
