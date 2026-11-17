@@ -1930,6 +1930,12 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
     return calculateCycleTimeDetailed(gcodeText, undefined, undefined, machineParams);
   }, [gcodeText, machineParams]);
 
+  // TEMPO DO OUTRO CANAL (H1/H2) para mostrar TC total, H1 e H2 em mm:ss
+  const outroCycleSec = useMemo(() => {
+    if (!gcodeOutro || !gcodeOutro.trim()) return 0;
+    try { return calculateCycleTimeDetailed(gcodeOutro, undefined, undefined, machineParams).totalSeconds; } catch { return 0; }
+  }, [gcodeOutro, machineParams]);
+  const mmss = (sec: number) => { const tt = Math.max(0, Math.round(sec)); return String(Math.floor(tt / 60)).padStart(2, "0") + ":" + String(tt % 60).padStart(2, "0"); };
   const adjustedCycleTimeSec = useMemo(() => {
     return cycleTimeDetails.totalSeconds * (cycleTimeFactor / 100);
   }, [cycleTimeDetails, cycleTimeFactor]);
@@ -3922,8 +3928,21 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
               title={`Tempo de Ciclo Calibrado: ${formattedCycleTimeTenths}\n• Usinagem em Corte (G1/G2/G3/Ciclos): ${(cycleTimeDetails.feedSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Movimentos Rápidos (G00): ${(cycleTimeDetails.rapidSeconds * (cycleTimeFactor / 100)).toFixed(1)}s\n• Trocas e Pausas (T/M/G4): ${(cycleTimeDetails.delaySeconds * (cycleTimeFactor / 100)).toFixed(1)}s`}
             >
               <Clock size={13} className="text-amber-400 animate-pulse shrink-0" />
-              <span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight shrink-0">Tempo Ciclo:</span>
-              <span className="text-amber-300 font-black text-xs tracking-widest shrink-0">{formattedCycleTimeTenths}</span>
+              {(() => {
+                  const fat = cycleTimeFactor / 100;
+                  const sAt = adjustedCycleTimeSec;
+                  const sOu = outroCycleSec * fat;
+                  if (!(sOu > 0)) return (<><span className="text-[10px] text-zinc-400 uppercase font-sans tracking-tight shrink-0">TC</span><span className="text-amber-300 font-black text-xs tracking-widest shrink-0">{mmss(sAt)}</span></>);
+                  const sH1 = canalSim >= 2 ? sOu : sAt;
+                  const sH2 = canalSim >= 2 ? sAt : sOu;
+                  return (
+                    <span className="flex items-center gap-1.5 shrink-0" title="TC = tempo da peça (H1 e H2 trabalham ao mesmo tempo: vale o maior). H1 = Canal 1 · H2 = Canal 2">
+                      <span className="text-[10px] text-zinc-400 font-sans">TC</span><span className="text-amber-300 font-black text-xs">{mmss(Math.max(sH1, sH2))}</span>
+                      <span className="text-[10px] text-sky-400 font-sans">H1</span><span className="text-sky-300 font-bold text-[11px]">{mmss(sH1)}</span>
+                      <span className="text-[10px] text-purple-400 font-sans">H2</span><span className="text-purple-300 font-bold text-[11px]">{mmss(sH2)}</span>
+                    </span>
+                  );
+                })()}
             </div>
 
             <span className="hidden sm:inline-block w-[1px] h-3.5 bg-zinc-800 my-auto" />

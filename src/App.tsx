@@ -2615,7 +2615,7 @@ export default function App() {
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
                 opsOcultos={opsOcultos}
-                gcodeOutro={layoutCount >= 2 ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
+                gcodeOutro={layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "") ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -2683,7 +2683,7 @@ export default function App() {
                       fixComando={fixComando}
                       canalSim={activePaneIdx + 1}
                 opsOcultos={opsOcultos}
-                gcodeOutro={layoutCount >= 2 ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
+                gcodeOutro={layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "") ? editorTexts[activePaneIdx === 0 ? 1 : 0] : undefined}
                       gcodeText={editorTexts[activePaneIdx]}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
@@ -3000,7 +3000,7 @@ export default function App() {
 type TMPt = { x: number; z: number };
 type TMIntervalo = { zA: number; zB: number; xa: number; xb: number };
 type TMFaixa = [number, number];
-type TMOpTipo = "face" | "desbExt" | "acabExt" | "canal" | "canalInt" | "roscaExt" | "centro" | "furo" | "desbInt" | "acabInt" | "roscaInt" | "macho" | "corte";
+type TMOpTipo = "face" | "desbExt" | "acabExt" | "canal" | "canalInt" | "roscaExt" | "centro" | "furo" | "desbInt" | "acabInt" | "roscaInt" | "macho" | "corte" | "alargador" | "recartilhado" | "canalFrontal" | "furoRadial" | "furoAxial" | "fresaFaces";
 interface TMOp {
   id: string;
   tipo: TMOpTipo;
@@ -3088,14 +3088,14 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75", "G74"], opcoes: ["Automático", "Canal (sem alívio)", "Faceamento"] },
     { k: "larg", rot: "Largura da ferramenta mm (para a conta)", def: 3, step: 0.1, so: ["G75", "G74"] }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   desbExt: { nome: "Desbaste externo", grupo: "EXTERNO", regiao: true, ciclo: "G71", ferr: "T0101", params: [
-    { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "vc", rot: "Vc m/min", def: 180, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.25, step: 0.01 }, { k: "ap", rot: "Prof. por passe mm", def: 1.5, step: 0.1 }, { k: "u", rot: "Sobremetal X (U) mm", def: 0.4, step: 0.05 }, { k: "w", rot: "Sobremetal Z (W) mm", def: 0.1, step: 0.05 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1, so: ["LINHA"] }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "rs", rot: "Resto de operação nº (0 = do bruto)", def: 0, step: 1, so: ["LINHA"] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   acabExt: { nome: "Acabamento externo", grupo: "EXTERNO", regiao: true, ciclo: "G70", ferr: "T0202", params: [
     { k: "vc", rot: "Vc m/min", def: 220, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 0, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "real", rot: "Entrar nos rebaixos (1=sim)", def: 0, step: 1 }, { k: "pas", rot: "Pastilha (limita o mergulho)", def: 2, step: 1, opcoes: ["CNMG/WNMG 80° (0°)", "DNMG 55° (27°)", "TNMG 60° (27°)", "VNMG/VBMT 35° (50°)"] }, { k: "ang", rot: "Ângulo de mergulho ° (0 = o da pastilha)", def: 0, step: 1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   canal: { nome: "Canal", grupo: "EXTERNO", regiao: true, ciclo: "G75", ferr: "T0303", params: [
     { k: "vc", rot: "Vc m/min", def: 120, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
     { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (lado do Z0 / frente da peça)", "Lado 2 (lado da placa ou da bucha)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
     { k: "sx", rot: "Sobremetal X p/ acabamento (Ø) mm", def: 0.2, step: 0.05, so: ["LINHA"] }, { k: "sz", rot: "Sobremetal Z p/ acabamento mm", def: 0.1, step: 0.05, so: ["LINHA"] },
-    { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+    { k: "acab", rot: "Passe de acabamento no perfil", def: 0, step: 1, so: ["LINHA"], check: true }, { k: "fa", rot: "Avanço do acabamento mm/v", def: 0.03, step: 0.01, so: ["LINHA"], quando: ["acab", [1]] }, { k: "rs", rot: "Resto de operação nº (0 = do bruto)", def: 0, step: 1, so: ["LINHA"] }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   canalInt: { nome: "Canal interno", grupo: "INTERNO", regiao: true, ciclo: "G75", ferr: "T1010", params: [
     { k: "vc", rot: "Vc m/min", def: 120, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "pk", rot: "Pica-pau em X (P) mm", def: 1, step: 0.1 }, { k: "ps", rot: "Passo em Z (Q) mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["G75"] }, { k: "re", rot: "Recuo R (1º bloco) mm", def: 0.5, step: 0.1, so: ["G75"] }, { k: "ra", rot: "Alívio no fundo R (2º bloco) mm", def: 0.2, step: 0.05, so: ["G75"], soUso: [2] }, { k: "uso", rot: "Uso do ciclo", def: 0, step: 1, so: ["G75"], opcoes: ["Automático (canal)", "Canal (sem alívio)", "Faceamento"] },
     { k: "ref", rot: "Lado de referência do bedame", def: 0, step: 1, so: ["LINHA"], opcoes: ["Lado 1 (lado do Z0 / frente da peça)", "Lado 2 (lado da placa ou da bucha)"] }, { k: "inc", rot: "Incremento por passada Z mm (0 = 80% larg.)", def: 0, step: 0.1, so: ["LINHA"] },
@@ -3115,6 +3115,18 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "rpm", rot: "Rotação rpm", def: 600, step: 50 }, { k: "nr", rot: "Tipo de rosca", def: 0, step: 1, opcoes: ["Métrica (passo em mm)", "NPT — cônica 1:16, 60°", "BSPT / R — cônica 1:16, 55°", "BSP / G — paralela, 55°", "UNC / UNF / UN — fios por polegada, 60°"] }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05, quando: ["nr", [0]] }, { k: "tpi", rot: "Fios por polegada", def: 18, step: 1, quando: ["nr", [1, 2, 3, 4]] }, { k: "lh", rot: "Sentido da rosca", def: 0, step: 1, opcoes: ["Direita — corta da frente para trás", "Esquerda — corta de trás para a frente"] }, { k: "ne", rot: "Número de entradas", def: 1, step: 1 }, { k: "se", rot: "Como separar as entradas", def: 0, step: 1, opcoes: ["Deslocar o início em Z (qualquer comando, G76 ou G92)", "Mesmo ponto — ângulo Q no G92 (comandos novos; o G76 fica desligado)"], quando: ["ne", [2, 3, 4, 5, 6, 7, 8, 9]] }, { k: "np", rot: "Número de passadas", def: 8, step: 1 }, { k: "q1", rot: "Profundidade da 1ª passada mm (recalcula as passadas)", def: 0, step: 0.01 }, { k: "pm", rot: "Passes de acabamento (mola)", def: 1, step: 1 }, { k: "h", rot: "Altura do filete mm (0 = pela norma)", def: 0, step: 0.01 }, { k: "xr", rot: "Ø de recuo de cada passe (0 = auto)", def: 0, step: 0.1 }, { k: "d0", rot: "Ø menor (furo) mm", def: 0, step: 0.1 }, { k: "fb", rot: "Folga da barra (mm)", def: 0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
   macho: { nome: "Rosca com macho", grupo: "INTERNO", regiao: true, ciclo: "G84", ferr: "T1010", params: [
     { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "passo", rot: "Passo mm", def: 1.5, step: 0.05 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
+  alargador: { nome: "Alargador", grupo: "INTERNO", regiao: true, ciclo: "", ferr: "T1818", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 400, step: 10 }, { k: "f", rot: "Avanço mm/v", def: 0.1, step: 0.01 }, { k: "fr", rot: "Avanço de retorno mm/v (0 = 2x o avanço)", def: 0, step: 0.01 }, { k: "d", rot: "Ø alargador mm", def: 6, step: 0.01 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
+  recartilhado: { nome: "Recartilhado", grupo: "EXTERNO", regiao: true, ciclo: "", ferr: "T0909", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 300, step: 10 }, { k: "f", rot: "Avanço mm/v", def: 0.15, step: 0.01 }, { k: "pr", rot: "Penetração no Ø mm", def: 0.3, step: 0.05 }, { k: "fp", rot: "Avanço da penetração mm/v", def: 0.05, step: 0.01 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
+  canalFrontal: { nome: "Canal frontal (G74)", grupo: "EXTERNO", regiao: true, ciclo: "G74", ferr: "T1919", params: [
+    { k: "rpm", rot: "Rotação rpm", def: 800, step: 10 }, { k: "f", rot: "Avanço mm/v", def: 0.03, step: 0.01 }, { k: "de", rot: "Ø de fora do canal mm", def: 12, step: 0.1 }, { k: "di", rot: "Ø de dentro do canal mm", def: 8, step: 0.1 }, { k: "larg", rot: "Largura da ferramenta mm", def: 1.5, step: 0.1 }, { k: "pk", rot: "Pica-pau em Z (Q) mm", def: 0.5, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
+  furoRadial: { nome: "Furo radial (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T0909", params: [
+    { k: "rpm", rot: "Rotação da ferramenta rpm", def: 2000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 60, step: 5 }, { k: "d", rot: "Ø broca mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final do furo (0 = até o centro)", def: 0, step: 0.1 }, { k: "nf", rot: "Nº de furos na volta", def: 1, step: 1 }, { k: "a0", rot: "Ângulo C do 1º furo °", def: 0, step: 1 }, { k: "q", rot: "Pica-pau mm (0 = direto)", def: 1, step: 0.1 } ] },
+  furoAxial: { nome: "Furo axial fora de centro (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T1818", params: [
+    { k: "rpm", rot: "Rotação da ferramenta rpm", def: 2000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 60, step: 5 }, { k: "d", rot: "Ø broca mm", def: 3, step: 0.1 }, { k: "pcd", rot: "Ø do círculo dos furos mm", def: 10, step: 0.1 }, { k: "nf", rot: "Nº de furos", def: 4, step: 1 }, { k: "a0", rot: "Ângulo C do 1º furo °", def: 0, step: 1 }, { k: "q", rot: "Pica-pau mm (0 = direto)", def: 1, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
+  fresaFaces: { nome: "Fresar faces / sextavado / quadrado (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T0808", params: [
+    { k: "rpm", rot: "Rotação da fresa rpm", def: 3000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 120, step: 5 }, { k: "df", rot: "Ø da fresa mm", def: 6, step: 0.5 }, { k: "nfc", rot: "Faces", def: 4, step: 1, opcoes: ["1 face", "2 faces", "3 faces", "4 faces (quadrado)", "6 faces (sextavado)", "8 faces"] }, { k: "s", rot: "Medida entre faces (chave) mm — 1 face: 2x a distância do centro", def: 10, step: 0.1 }, { k: "a0", rot: "Ângulo C da 1ª face °", def: 0, step: 1 }, { k: "ap", rot: "Prof. por passe mm (no raio)", def: 0.5, step: 0.1 } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
     { k: "vc", rot: "Vc m/min", def: 100, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
 };
@@ -4962,6 +4974,7 @@ const avisosLados: string[] = (() => {
     soloId: soloOp || undefined,
     pega2: maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? cfg.pega2Maq : cfg.pega2,
     cursoCab: cfg.cursoCab,
+    compW: (cfg as any).compW,
     ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
     estTope: cfg.estTope,
     estBedame: cfg.estBedame,
@@ -5344,6 +5357,18 @@ return (
                   />
                 </label>
               )}
+                  {maqAtual.perfil === "STAR_G266" && geo && (
+                    <label className="flex items-center gap-1.5 text-zinc-300" title="W do G266 = comprimento da peça. Aumente para deixar sobremetal em Z. O Z do G266 sai = curso do cabeçote − W">
+                      <span>Comprimento W (mm)</span>
+                      <TMOptNum
+                        v={(cfg as any).compW}
+                        set={(n) => setCfg((c) => ({ ...c, compW: n } as any))}
+                        placeholder={tmFmt(geo.L)}
+                        cls={inp + " w-20 "}
+                      />
+                      {cfg.cursoCab !== undefined && cfg.cursoCab > 0 && <span className="text-[10px] text-zinc-500">Z do G266 = {tmFmt(cfg.cursoCab - (((cfg as any).compW ?? 0) > 0 ? (cfg as any).compW : geo.L))}</span>}
+                    </label>
+                  )}
               {maqAtual.perfil === "STAR_G266" && (
                 <label className="flex items-center gap-1.5 text-zinc-300">
                   <span>Lado do bedame K</span>
@@ -5913,7 +5938,7 @@ return (
           <div className="flex items-center gap-2 mt-2">
             <select value={addTipo} onChange={(e) => setAddTipo(e.target.value)} className={inp + " flex-1"}>
               <option value="">+ Adicionar operação…</option>
-              {(["EXTERNO", "INTERNO", "FINAL"] as const).map((gr) => (
+              {(["EXTERNO", "INTERNO", "ACIONADA", "FINAL"] as const).map((gr) => (
                 <optgroup key={gr} label={gr}>
                   {(Object.keys(TM_TIPOS) as TMOpTipo[]).filter((t) => TM_TIPOS[t].grupo === gr).map((t) => <option key={t} value={t}>{TM_TIPOS[t].nome}</option>)}
                 </optgroup>

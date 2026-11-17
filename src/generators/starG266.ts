@@ -63,7 +63,7 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   const fCorte = corteOp && (corteOp.p.f ?? 0) > 0 ? corteOp.p.f : 0.05;
   const kBedame = cfg.ladoBedameK !== undefined ? cfg.ladoBedameK : (corteOp && corteOp.p.ref === 1 ? -17 : 0);
   const { gerarOpLinhas, ferramentasUsadas, deslH1 } = criarEmissorOpsStar(ops, geo, cfg);
-  const compCorte = Math.max(0.1, geo.L + deslH1);
+  const compCorte = (cfg as any).compW > 0 ? (cfg as any).compW : Math.max(0.1, geo.L + deslH1); // W: comprimento da peça (editável p/ deixar sobremetal em Z)
   const cursoCab = cfg.cursoCab && cfg.cursoCab > 0 ? cfg.cursoCab : compCorte + largCorte;
   const subPega = cfg.maqId === "STAR_N17" ? "7000" : "8000";
   const opsH1 = ativos.filter((o) => o.tipo !== "corte" && (o.cab || "H1") === "H1");
@@ -103,13 +103,13 @@ export function tmGerarStarG266(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarC
   h1.push(`${progId}(${nm})`);
   h1.push("(HEAD 1)");
   listaFerrMap.forEach((f) => {
-    h1.push(`(T${f.tNum} - ${f.desc} V.U= ${f.vu})`);
+    h1.push(`(T${f.tNum} - ${f.desc})`);
   });
   h1.push("M9");
   h1.push("M38");
   h1.push("G0G99G97G40M5");
   h1.push(
-    `G266A${fmtStar(bD)}W${fmtStar(compCorte)}S${rpmCorte}X-1.5Z${fmtStar(cursoCab)}F${fmtStar(fCorte)}B${fmtStar(largCorte)}K${kBedame}`
+    `G266A${fmtStar(bD)}W${fmtStar(compCorte)}S${rpmCorte}X-1.5Z${fmtStar(cfg.cursoCab && cfg.cursoCab > 0 ? cfg.cursoCab - compCorte : cursoCab)}F${fmtStar(fCorte)}B${fmtStar(largCorte)}K${kBedame}`
   );
   h1.push("(A:DIAMETRO DA BARRA)");
   h1.push("(W:COMPRIMENTO DA PECA)");

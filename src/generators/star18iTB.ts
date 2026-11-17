@@ -16,7 +16,13 @@ export type StarTMOpTipo =
   | "acabInt"
   | "roscaInt"
   | "macho"
-  | "corte";
+  | "corte"
+  | "alargador"
+  | "recartilhado"
+  | "canalFrontal"
+  | "furoRadial"
+  | "furoAxial"
+  | "fresaFaces";
 
 export interface StarTMOp {
   id: string;
@@ -65,6 +71,7 @@ export interface StarGerarCfg {
   pega2?: number;
   soloId?: string; // simular só esta operação (as outras ficam só no cálculo)
   cursoCab?: number;
+  compW?: number; // W do G266 (comprimento da peça; editável)
   ladoBedameK?: number;
   estTope?: number;
   estBedame?: number;
@@ -534,7 +541,7 @@ function extrairNumeroFerr(ferr: string): number {
   return parseInt(s, 10) || 0;
 }
 
-const FRONTAIS_H1: StarTMOpTipo[] = ["centro", "furo", "desbInt", "acabInt", "canalInt", "roscaInt", "macho"];
+const FRONTAIS_H1: StarTMOpTipo[] = ["centro", "furo", "desbInt", "acabInt", "canalInt", "roscaInt", "macho", "alargador", "canalFrontal", "furoAxial"];
 const FRONTAL_PADRAO: Partial<Record<StarTMOpTipo, number>> = {
   centro: 11,
   furo: 12,
@@ -559,6 +566,12 @@ const DESC_TIPO: Record<StarTMOpTipo, string> = {
   roscaInt: "ROSCA INTERNA",
   macho: "MACHO RIGIDO",
   corte: "BEDAME",
+  alargador: "ALARGADOR",
+  recartilhado: "RECARTILHADO",
+  canalFrontal: "CANAL FRONTAL",
+  furoRadial: "FURO RADIAL ACIONADA",
+  furoAxial: "FURO AXIAL ACIONADA",
+  fresaFaces: "FRESA FACES ACIONADA",
 };
 
 export const DESC_TIPO_STAR = DESC_TIPO;
@@ -660,6 +673,37 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const sFH2 = geo.zFront + geo.zBack;
   const espIvH2 = (lst: StarTMIntervalo[]): StarTMIntervalo[] => lst.map((q) => ({ zA: sFH2 - q.zB, zB: sFH2 - q.zA, xa: q.xb, xb: q.xa })).reverse();
   const geoEspH2: StarTMGeo = { ...geo, ext: espIvH2(geo.ext), int: espIvH2(geo.int), intZmin: sFH2 - geo.intZmax, intZmax: sFH2 - geo.intZmin };
+  // RESTO DE OPERAÇÃO: Ø que a operação nº "rs" deixou em cada Z (externo). null = do bruto
+  const perfilRestoExt = (opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
+    const nRs = Math.round(opAtual.p.rs ?? 0);
+    if (!(nRs > 0)) return null;
+    const ref = ops[nRs - 1];
+    if (!ref || !ref.ativo || ref === opAtual || !(ref.tipo === "desbExt" || ref.tipo === "acabExt" || ref.tipo === "canal" || ref.tipo === "face")) return null;
+    if ((ref.cab ?? "H1") !== (opAtual.cab ?? "H1")) return null;
+    const po = ref.p;
+    const fxRaw = ref.faixas.length ? ref.faixas : faixaPadraoStar(ref.tipo, geo, po, ref.cab) || [];
+    const sF = geo.zFront + geo.zBack;
+    const fxo = espH2 ? fxRaw.map((fx) => [sF - Math.max(fx[0], fx[1]), sF - Math.min(fx[0], fx[1])] as StarTMFaixa) : fxRaw;
+    const so = subIntervalos(geoC.ext, fxo);
+    if (!so.length) return null;
+    const zMax = Math.max(...so.map((q) => Math.max(q.zA, q.zB))), zMin = Math.min(...so.map((q) => Math.min(q.zA, q.zB)));
+    if (ref.tipo === "face") return { nivel: (z: number) => (z > zMax + 1e-6 ? 0 : bD), nome: "OP " + nRs };
+    const realO = po.real === 1 || ref.tipo === "canal";
+    const angO = realO ? ((po.ang ?? 0) > 0 ? po.ang : PASTILHA_ANG[po.pas ?? 2] ?? 27) : 90;
+    const ptsO = ref.tipo === "canal" ? perfilMono(so, false, true).pts : compensarRaio(limitaMergulho(perfilMono(so, false, realO).pts, angO), po.rp ?? 0.4, false);
+    const sobre = ref.tipo === "desbExt" ? Math.max(0, po.u ?? 0.4) : 0;
+    const valEm = (z: number) => {
+      let vv = -Infinity;
+      for (let i = 0; i < ptsO.length - 1; i++) {
+        const a = ptsO[i], b = ptsO[i + 1];
+        const lo = Math.min(a.z, b.z), hi = Math.max(a.z, b.z);
+        if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+        vv = Math.max(vv, hi - lo < 1e-9 ? Math.max(a.x, b.x) : a.x + ((z - a.z) / (b.z - a.z)) * (b.x - a.x));
+      }
+      return vv;
+    };
+    return { nivel: (z: number) => { if (z > zMax + 1e-6 || z < zMin - 1e-6) return bD; const v = valEm(z); return v > -Infinity ? Math.min(bD, v + sobre) : bD; }, nome: "OP " + nRs };
+  };
   const gerarOpLinhasBase = (opIn: StarTMOp, canal: "H1" | "H2"): string[] => {
     const espH2 = canal === "H2" && !h2NaFrente;
     const geo = espH2 ? geoEspH2 : geoBaseStar;
@@ -734,7 +778,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       if (zTarget > zSafe + 1e-4) lines.push("G0Z" + fmt(zTarget));
     };
 
-    const acionada = (p.acionada ?? 0) === 1;
+    const acionada = (p.acionada ?? 0) === 1 || op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces"; // ferramenta acionada (M36 / G98 mm/min)
     ferramentasUsadas.push({ tNum, desc, vu: Math.round(p.vu ?? 500) });
     lines.push("T" + tNum + "00(" + desc + ")");
     lines.push("/M25");
@@ -836,7 +880,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               const topo = Math.max(...idx.map((i) => MA[i]));
               const fundoMin = Math.min(...idx.map((i) => TA[i]));
               lines.push("(REBAIXO " + (ir + 1) + " Z" + fmt(zCoord(ZG[i0])) + " A Z" + fmt(zCoord(ZG[i1])) + " - ENTRA PELA RAMPA, SEMPRE NO SENTIDO DO CABECOTE)");
-              lines.push("G0X" + fmt(xSafe));
+              if (ir === 0) lines.push("G0X" + fmt(xSafe)); // entre rebaixos já está numa altura segura (acima do perfil desbastado)
               lines.push("G0Z" + fmt(zCoord(ZG[i0])));
               let curX = MA[i0] + 0.5;
               let curZi = i0;
@@ -884,7 +928,15 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                   lines.push("G0X" + fmt(curX) + "(SOBE EM G0 - AREA JA USINADA)");
                 });
               }
-              lines.push("G0X" + fmt(xSafe) + "(SAI DO REBAIXO POR CIMA)");
+              {
+            // sai do rebaixo só até 0,5 mm acima do perfil JÁ DESBASTADO até o próximo rebaixo (igual ao H1, sem subir até a barra)
+            const prox = rebs[ir + 1];
+            if (prox) {
+              let hT = -Infinity;
+              for (let i = i0; i <= prox[0]; i++) hT = Math.max(hT, MA[i] + 0.5);
+              lines.push("G0X" + fmt(Math.min(xSafe, hT)) + "(SAI DO REBAIXO - VAI PARA O PROXIMO)");
+            } else lines.push("G0X" + fmt(xSafe) + "(SAI DO REBAIXO POR CIMA)");
+          }
             });
           };
           if (op.ciclo) {
@@ -906,7 +958,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             const xMin = Math.min(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
             // degraus retos da peça (+ sobremetal): o passe PARA neles (ex.: Ø28,4 + 0,4 = Ø28,8), igual à TBSy
             const platE = Array.from(new Set(compOff.filter((q, k) => k < compOff.length - 1 && Math.abs(compOff[k + 1].x - q.x) < 2e-3 && Math.abs(compOff[k + 1].z - q.z) > 0.05).map((q) => Math.round(q.x * 1000) / 1000)));
-            let xp = bD;
+            const restoE = perfilRestoExt(opIn, canal, geo, espH2);
+            if (restoE) lines.push("(RESTO DA " + restoE.nome + ": SO CORTA O MATERIAL QUE ELA DEIXOU)");
+            let xp = restoE ? Math.min(bD, Math.max(...Array.from({ length: 200 }, (_, i) => restoE.nivel(pts[0].z - ((pts[0].z - pts[pts.length - 1].z) * i) / 199)))) + 2 * Math.max(0.05, (p.ap ?? 1.5) > 0 ? p.ap : 1.5) - 1e-6 : bD;
+            if (restoE) xp = Math.min(bD, xp);
             let gXp = 0;
             while (gXp++ < 1000 && xp > xMin + 1e-6) {
               let nx = Math.max(xMin, xp - 2 * apDesb);
@@ -920,6 +975,28 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               if (zl >= pts[0].z - 1e-4) continue;
               const xRet = Math.min(bD + 1, xp + Math.min(2 * apDesb, 1.5));
               const zEndS = zCoord(zl);
+              if (restoE) {
+                // RESTO: só onde a operação de referência deixou material acima deste passe (o resto já está limpo)
+                const trechos: [number, number][] = [];
+                let zA: number | null = null, zUlt = pts[0].z;
+                for (let zz = pts[0].z; zz >= zl - 1e-9; zz -= 0.05) {
+                  const tem = restoE.nivel(zz) > xp + 0.01;
+                  if (tem && zA === null) zA = Math.min(pts[0].z, zz + 0.05);
+                  if (!tem && zA !== null) { trechos.push([zA, zz]); zA = null; }
+                  zUlt = zz;
+                }
+                if (zA !== null) trechos.push([zA, zl]);
+                void zUlt;
+                trechos.forEach(([ta, tb]) => {
+                  const zIniT = Math.max(zStartS, zCoord(ta) - 0.5); // chega em G0 0,5 mm antes do material que sobrou
+                  lines.push("G0Z" + fmt(zIniT));
+                  lines.push("G0X" + fmt(xp));
+                  lines.push("G1Z" + fmt(zCoord(tb)) + "F" + fmt(p.f ?? 0.25));
+                  lines.push("G1X" + fmt(xRet) + "Z" + fmt(zCoord(tb) - 0.5));
+                });
+                if (trechos.length) lines.push("G0Z" + fmt(zStartS));
+                continue;
+              }
               lines.push("G0X" + fmt(xp));
               lines.push("G1Z" + fmt(zEndS) + "F" + fmt(p.f ?? 0.25));
               lines.push("G1X" + fmt(xRet) + "Z" + fmt(zEndS - 0.5));
@@ -1024,16 +1101,40 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 for (const q of geo.ext) {
                   const a = Math.min(zR, q.zA);
                   const b = Math.max(zL, q.zB);
-                  if (a - b < -1e-6) continue;
+                  if (a - b < 1e-3) continue; // só encostando na lateral do bedame (sobremetal Z = 0) não é material
+                      // FACE (linha em pé) só encostando na lateral do bedame não é material (sobremetal Z = 0 encosta na face)
+                      if (Math.abs(q.zA - q.zB) < 1e-6 && (q.zA >= zR - 1e-3 || q.zA <= zL + 1e-3)) continue;
                   mm = Math.max(mm, xiq(q, a), xiq(q, b));
                 }
                 return mm;
               };
               const zProg = (zR: number) => (ladoEsq ? zR - Lb : zR);
               const xSeg = pl.xSeg;
-              const zIniR = cc.zStart;
+              let zIniR = cc.zStart;
               const naTraseira = Math.abs(cc.zEnd - geo.zBack) < 1e-3;
-              const zFimR = Math.min(cc.zStart, naTraseira ? Math.max(cc.zEnd, geo.zBack - largCorte + Lb + sz) : cc.zEnd + Lb);
+              let zFimR = Math.min(cc.zStart, naTraseira ? Math.max(cc.zEnd, geo.zBack - largCorte + Lb + sz) : cc.zEnd + Lb);
+                  // ONDE O BEDAME CABE DE VERDADE: a região pode incluir chanfros/raios na boca do canal.
+                  // Anda da ponta para dentro enquanto o "fundo alcançável" desce; para no 1º ponto em que a lateral do bedame
+                  // encosta na parede (ex.: canal de 2,0 com bedame de 2,0 -> uma posição só, encostada nas duas paredes)
+                  const acharPonta = (fn: (z: number) => number, zDe: number, zAte: number) => {
+                    const st = zAte < zDe ? -0.01 : 0.01;
+                    let z = zDe, v = fn(z), gA = 0, best = zDe, bv = v;
+                    while (gA++ < 5000) {
+                      const nz = z + st;
+                      if ((st < 0 && nz < zAte - 1e-9) || (st > 0 && nz > zAte + 1e-9)) break;
+                      const nv = fn(nz);
+                      if (nv > v + 1e-4) break; // começou a subir: passou do fundo
+                      z = nz; v = nv;
+                      if (nv < bv - 1e-4) { bv = nv; best = nz; } // 1º ponto do fundo mais baixo
+                    }
+                    return Math.round(best * 1000) / 1000;
+                  };
+                  const zIniOrig = zIniR, zFimOrig = zFimR;
+                  if (!naTraseira && zIniR > zFimR) {
+                    const fSob = (zR: number) => maxEntre(zR - Lb - sz, zR + sz);
+                    const zA1 = acharPonta(fSob, zIniR, zFimR), zB1 = acharPonta(fSob, zFimR, zIniR);
+                    if (zA1 >= zB1) { zIniR = zA1; zFimR = zB1; } else { const zMeio = fSob(zA1) <= fSob(zB1) ? zA1 : zB1; zIniR = zMeio; zFimR = zMeio; }
+                  }
               const posR: number[] = [];
               let gPos = 0;
               // no lado do corte: os passos normais vão só até o bedame encostar no fim da peça;
@@ -1047,7 +1148,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               geo.ext.forEach((q) => {
                 if (Math.abs(q.zA - q.zB) > 0.02) return;
                 const zw = q.zA;
-                [zw - sz - 0.002, zw + Lb + sz + 0.002].forEach((zc) => { if (zc <= zIniR + 1e-6 && zc >= zFimR - 1e-6) posR.push(zc); });
+                [zw - sz - 0.002, zw + Lb + sz + 0.002, zw - sz, zw + Lb + sz].forEach((zc) => { if (zc <= zIniR + 1e-6 && zc >= zFimR - 1e-6) posR.push(zc); });
               });
               posR.sort((pa, pb) => pb - pa);
               const posU = posR.filter((zp, k) => k === 0 || Math.abs(zp - posR[k - 1]) > 0.01);
@@ -1078,7 +1179,9 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 const sobre = o.tipo === "desbExt" ? Math.min(Math.max(0, po.u ?? 0.4), sx) : 0;
                 return { ptsO, sobre, zMax: Math.max(...so.map((q) => q.zA)), zMin: Math.min(...so.map((q) => q.zB)) };
               }).filter((x): x is { ptsO: { x: number; z: number }[]; sobre: number; zMax: number; zMin: number } => !!x);
-              const nivel = (z: number) => {
+              const restoC = perfilRestoExt(opIn, canal, geo, espH2);
+                  if (restoC) lines.push("(RESTO DA " + restoC.nome + ": CANAL SO ONDE ELA DEIXOU MATERIAL)");
+                  const nivelBase = (z: number) => {
                 let n = bD;
                 for (const pa of perfisAntes) {
                   if (z > pa.zMax + 1e-6 || z < pa.zMin - 1e-6) continue;
@@ -1087,7 +1190,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 }
                 return n;
               };
-              const nivelSpan = (zR: number) => {
+              const nivel = (z: number) => (restoC ? restoC.nivel(z) : nivelBase(z));
+                  const nivelSpan = (zR: number) => {
                 let n = -Infinity;
                 for (let zz = zR - Lb - sz; zz <= zR + sz + 1e-9; zz += 0.05) n = Math.max(n, nivel(zz));
                 return n;
@@ -1123,7 +1227,31 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 const zNx = uteis[kU + 1];
                 lines.push("G0X" + fmt(zNx === undefined ? xSegC : Math.max(nivelSpan(zNx), d) + 1.0));
               });
-              lines.push("G0X" + fmt(xSegC));
+              // PASSE DE ACABAMENTO NO PERFIL (bedame com a largura real): desce na parede 1, anda no fundo seguindo o perfil e sobe na parede 2
+                  if ((p.acab ?? 0) === 1) {
+                    const fa = p.fa ?? 0.03;
+                    const fFin = (zR: number) => maxEntre(zR - Lb, zR);
+                    let zA0 = zIniOrig, zB0 = zFimOrig;
+                    if (!naTraseira && zA0 > zB0) {
+                      const a1 = acharPonta(fFin, zIniOrig, zFimOrig), b1 = acharPonta(fFin, zFimOrig, zIniOrig);
+                      if (a1 >= b1) { zA0 = a1; zB0 = b1; } else { const m1 = fFin(a1) <= fFin(b1) ? a1 : b1; zA0 = m1; zB0 = m1; }
+                    } else { zA0 = zIniR; zB0 = zFimR; }
+                    const fundoEm = (zR: number) => maxEntre(zR - Lb, zR);
+                    const pf: { z: number; x: number }[] = [];
+                    const nP = Math.max(1, Math.ceil(Math.abs(zA0 - zB0) / 0.05));
+                    for (let k = 0; k <= nP; k++) { const zR = zA0 + ((zB0 - zA0) * k) / nP; pf.push({ z: zR, x: fundoEm(zR) }); }
+                    const pr: { z: number; x: number }[] = [];
+                    pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4) pr.pop(); } pr.push(q); });
+                    const topoA = Math.max(nivelSpan(zA0), maxEntre(zA0 - Lb, zA0)) + 0.5;
+                    const topoB = Math.max(nivelSpan(zB0), maxEntre(zB0 - Lb, zB0)) + 0.5;
+                    lines.push("(ACABAMENTO DO CANAL NO PERFIL - BEDAME L" + fmt(Lb) + ")");
+                    lines.push("G0Z" + fmt(zCoord(zProg(zA0))));
+                    lines.push("G0X" + fmt(topoA));
+                    lines.push("G1X" + fmt(pr[0].x) + "F" + fmt(fa));
+                    for (let k = 1; k < pr.length; k++) lines.push("G1X" + fmt(pr[k].x) + "Z" + fmt(zCoord(zProg(pr[k].z))));
+                    lines.push("G1X" + fmt(topoB));
+                  }
+                  lines.push("G0X" + fmt(xSegC));
               return;
             }
             pl.grupos.forEach((g) => {
@@ -1284,7 +1412,121 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
         }
         if (esquerda && !interno) lines.push("G0X" + fmt(Math.max(bD + 1, xStart)));
         if (interno) lines.push("G0Z" + fmt(zFrontClear));
-    } else if (op.tipo === "centro") {
+    } else if (op.tipo === "alargador") {
+        // ALARGADOR: entra em G1 até o fundo e volta em G1 (não sai em rápido para não riscar o furo)
+        const zIniA = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+        const zFimA = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+        const zEntryA = zCoord(zIniA) - aprox;
+        lines.push("G99G97S" + Math.round(p.rpm ?? 400) + "M3");
+        g0FrontalSeguro(0, zEntryA);
+        lines.push("G1Z" + fmt(zCoord(zFimA)) + "F" + fmt(p.f ?? 0.1));
+        lines.push("G1Z" + fmt(zEntryA) + "F" + fmt((p.fr ?? 0) > 0 ? p.fr : 2 * (p.f ?? 0.1)));
+      } else if (op.tipo === "recartilhado") {
+        // RECARTILHADO: penetra no Ø e anda em Z pela região
+        const zIniK = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+        const zFimK = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+        const sK = subIntervalos(geo.ext, fxs);
+        const dK = sK.length ? Math.max(...sK.map((q) => Math.max(q.xa, q.xb))) : geo.dMax;
+        const zEK = zCoord(zIniK) - aprox;
+        lines.push("G99G97S" + Math.round(p.rpm ?? 300) + "M3");
+        g0Inicial(bD + 1, Math.min(zFrontClear, zEK));
+        if (zEK > zFrontClear + 1e-4) lines.push("G0Z" + fmt(zEK));
+        lines.push("G0X" + fmt(dK + 0.5));
+        lines.push("G1X" + fmt(dK - Math.max(0, p.pr ?? 0.3)) + "F" + fmt(p.fp ?? 0.05));
+        lines.push("G1Z" + fmt(zCoord(zFimK)) + "F" + fmt(p.f ?? 0.15));
+        lines.push("G0X" + fmt(bD + 1));
+      } else if (op.tipo === "canalFrontal") {
+        // CANAL FRONTAL (G74): ferramenta axial, referência na borda de FORA do canal
+        const zIniF = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+        const zFimF = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+        const largF = Math.max(0.3, p.larg ?? 1.5);
+        const dE = p.de ?? 12, dI = p.di ?? 8;
+        const xFimF = Math.min(dE, dI + 2 * largF);
+        const zEF = zCoord(zIniF) - aprox;
+        lines.push("(CANAL FRONTAL D" + fmt(dE) + " A D" + fmt(dI) + " - FERRAMENTA L" + fmt(largF) + " REFERENCIA NA BORDA DE FORA - CONFERIR)");
+        lines.push("G99G97S" + Math.round(p.rpm ?? 800) + "M3");
+        g0FrontalSeguro(dE, zEF);
+        lines.push("G74R0.5");
+        lines.push("G74X" + fmt(xFimF) + "Z" + fmt(zCoord(zFimF)) + "P" + Math.round(largF * 0.8 * 1000) + "Q" + Math.round(Math.max(0.1, p.pk ?? 0.5) * 1000) + "F" + fmt(p.f ?? 0.03));
+      } else if (op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces") {
+        // FERRAMENTA ACIONADA (eixo C indexado). Avanço em mm/min (G98). CONFERIR na máquina os códigos de C e do eixo Y.
+        const zIniC = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+        const zFimC = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+        const fC = Math.max(1, p.f ?? 60);
+        emitSpindle(lines, p, bD, 0, true);
+        const rPecaC = (zg: number) => { let m = 0; for (const q of geo.ext) { const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB); if (zg < lo - 1e-9 || zg > hi + 1e-9) continue; m = Math.max(m, (hi - lo < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((zg - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa)) / 2); } return m; };
+        if (op.tipo === "furoRadial") {
+          const nF = Math.max(1, Math.round(p.nf ?? 1));
+          const zC = (zIniC + zFimC) / 2;
+          const dEm = 2 * rPecaC(zC);
+          const xF = (p.xf ?? 0) > 0 ? p.xf : 0;
+          const qR = (p.q ?? 1) > 0 ? 2 * p.q : 1e9;
+          lines.push("(FURO RADIAL D" + fmt(p.d ?? 3) + " EM Z" + fmt(zCoord(zC)) + " - " + nF + " FURO(S) - ATE D" + fmt(xF) + " - CONFERIR C/ACIONADA)");
+          g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(zC)));
+          if (zCoord(zC) > zFrontClear + 1e-4) lines.push("G0Z" + fmt(zCoord(zC)));
+          for (let k = 0; k < nF; k++) {
+            lines.push("G0C" + fmt(((p.a0 ?? 0) + (k * 360) / nF) % 360));
+            lines.push("G0X" + fmt(dEm + 1));
+            let x = dEm + 1, gR = 0;
+            while (gR++ < 500 && x > xF + 1e-6) {
+              const nx = Math.max(xF, x - qR);
+              lines.push("G1X" + fmt(nx) + "F" + fmt(fC));
+              x = nx;
+              if (x > xF + 1e-6) { lines.push("G0X" + fmt(dEm + 1)); lines.push("G0X" + fmt(x + 0.3)); }
+            }
+            lines.push("G0X" + fmt(bD + 2));
+          }
+        } else if (op.tipo === "furoAxial") {
+          const nF = Math.max(1, Math.round(p.nf ?? 4));
+          const pcd = Math.max(0, p.pcd ?? 10);
+          const zEA = zCoord(zIniC) - aprox;
+          const zFA = zCoord(zFimC);
+          const qA = (p.q ?? 1) > 0 ? p.q : 1e9;
+          lines.push("(FURO AXIAL D" + fmt(p.d ?? 3) + " NO CIRCULO D" + fmt(pcd) + " - " + nF + " FUROS - CONFERIR C/ACIONADA)");
+          g0FrontalSeguro(pcd, zEA);
+          for (let k = 0; k < nF; k++) {
+            lines.push("G0C" + fmt(((p.a0 ?? 0) + (k * 360) / nF) % 360));
+            let z = zEA, gA = 0;
+            while (gA++ < 500 && z < zFA - 1e-6) {
+              const nz = Math.min(zFA, z + qA);
+              lines.push("G1Z" + fmt(nz) + "F" + fmt(fC));
+              z = nz;
+              if (z < zFA - 1e-6) { lines.push("G0Z" + fmt(zEA)); lines.push("G0Z" + fmt(z - 0.3)); }
+            }
+            lines.push("G0Z" + fmt(zEA));
+          }
+        } else {
+          // FRESAR FACES: fresa radial com eixo Y; cada face no ângulo C, passes em X até a medida, varrendo em Y
+          const facesOp = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
+          const sF = Math.max(0.5, p.s ?? 10);
+          const dfF = Math.max(0.5, p.df ?? 6);
+          const apF = Math.max(0.05, p.ap ?? 0.5);
+          const R0 = bD / 2;
+          const yLim = Math.sqrt(Math.max(0, R0 * R0 - (sF / 2) * (sF / 2))) + dfF / 2 + 1;
+          const larguraZ = Math.abs(zIniC - zFimC);
+          const zsF: number[] = [];
+          if (larguraZ <= dfF + 1e-6) zsF.push((zIniC + zFimC) / 2);
+          else { const nZ = Math.ceil((larguraZ - dfF) / (0.7 * dfF)) + 1; for (let k = 0; k < nZ; k++) zsF.push(zIniC - dfF / 2 - ((larguraZ - dfF) * k) / (nZ - 1)); }
+          lines.push("(FRESAR " + facesOp + " FACE(S) - MEDIDA " + fmt(sF) + " - FRESA D" + fmt(dfF) + (larguraZ < dfF - 1e-6 ? " - ATENCAO: FRESA MAIOR QUE A REGIAO EM Z" : "") + " - CONFERIR EIXO Y/C)");
+          g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(zsF[0])));
+          for (let fc = 0; fc < facesOp; fc++) {
+            lines.push("G0C" + fmt(((p.a0 ?? 0) + (fc * 360) / facesOp) % 360));
+            for (const zc of zsF) {
+              lines.push("G0X" + fmt(bD + 2));
+              lines.push("G0Z" + fmt(zCoord(zc)) + "Y" + fmt(-yLim));
+              let r = R0, lado = 1, gF = 0;
+              while (gF++ < 500 && r > sF / 2 + 1e-6) {
+                r = Math.max(sF / 2, r - apF);
+                lines.push("G0X" + fmt(2 * r));
+                lines.push("G1Y" + fmt(lado * yLim) + "F" + fmt(fC));
+                lado = -lado;
+              }
+              lines.push("G0X" + fmt(bD + 2));
+            }
+          }
+          lines.push("G0Y0");
+        }
+      } else if (op.tipo === "centro") {
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
       const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
       const zEntry = zCoord(zIni) - aprox;
