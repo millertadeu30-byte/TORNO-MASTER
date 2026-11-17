@@ -4527,7 +4527,8 @@ export const PainelPrograma: React.FC<{
     return zFace1 + dirDentro * mm; // mm medidos a partir da face do zero 1
   };
   useEffect(() => { onSentidoZ(sZ); }, [sZ]);
-  const bD = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
+  const bDAuto = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
+  const bD = ((cfg as any).bA ?? 0) > 0 ? (cfg as any).bA : bDAuto; // Ø da barra (A do G266): editável em DADOS DA MÁQUINA;
 
   // peça nova sem operações: sugere as operações
   useEffect(() => {
@@ -5357,6 +5358,17 @@ return (
                   />
                 </label>
               )}
+                  {maqAtual.perfil === "STAR_G266" && (
+                    <label className="flex items-center gap-1.5 text-zinc-300" title="A do G266 = Ø da barra. Vazio = automático (bruto do STEP ou Ø da peça + 2). Vale para todo o programa">
+                      <span>Ø barra A (mm)</span>
+                      <TMOptNum
+                        v={(cfg as any).bA}
+                        set={(n) => setCfg((c) => ({ ...c, bA: n } as any))}
+                        placeholder={tmFmt(bDAuto)}
+                        cls={inp + " w-20 "}
+                      />
+                    </label>
+                  )}
                   {maqAtual.perfil === "STAR_G266" && geo && (
                     <label className="flex items-center gap-1.5 text-zinc-300" title="W do G266 = comprimento da peça. Aumente para deixar sobremetal em Z. O Z do G266 sai = curso do cabeçote − W">
                       <span>Comprimento W (mm)</span>
