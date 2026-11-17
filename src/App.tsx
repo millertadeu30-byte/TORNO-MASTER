@@ -2598,7 +2598,29 @@ export default function App() {
                       key={"proj" + projVer}
                       partLayers={partLayers}
                       partSolid={partSolid}
-                      gcodeText={editorTexts[activePaneIdx]}
+                      gcodeText={(() => {
+                  // 3D: mostra o H1 e TAMBÉM a usinagem do H2 (blocos M75…M76 do Canal 2), com o Z virado a partir do zero do Head 2
+                  const base = editorTexts[0] || "";
+                  const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
+                  const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
+                  if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
+                  const extra: string[] = [];
+                  let on = false;
+                  editorTexts[1].split("\n").forEach((ln) => {
+                    const u = ln.replace(/^\//, "").trim();
+                    const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
+                    if (/M75(?!\d)/.test(semC)) { on = true; return; }
+                    if (/M76(?!\d)/.test(semC)) { on = false; return; }
+                    if (!on) return;
+                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
+                    l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
+                    extra.push(l2);
+                  });
+                  if (!extra.length) return editorTexts[activePaneIdx];
+                  // mantém as linhas do H1 no mesmo número (só desliga o fim de programa) e põe o H2 depois
+                  const linhas = base.split("\n").map((l) => (/^\s*%\s*$/.test(l) ? "" : /M99|M30/.test(l) ? "(" + l.replace(/[()]/g, "") + ")" : l));
+                  return linhas.join("\n") + "\n(USINAGEM DO HEAD 2 - Z VIRADO PELO ZERO DO H2)\n" + extra.join("\n");
+                })()}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
                       isHighContrast={isHighContrast}
@@ -2666,7 +2688,29 @@ export default function App() {
                       key={"proj" + projVer}
                       partLayers={partLayers}
                       partSolid={partSolid}
-                      gcodeText={editorTexts[activePaneIdx]}
+                      gcodeText={(() => {
+                  // 3D: mostra o H1 e TAMBÉM a usinagem do H2 (blocos M75…M76 do Canal 2), com o Z virado a partir do zero do Head 2
+                  const base = editorTexts[0] || "";
+                  const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
+                  const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
+                  if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
+                  const extra: string[] = [];
+                  let on = false;
+                  editorTexts[1].split("\n").forEach((ln) => {
+                    const u = ln.replace(/^\//, "").trim();
+                    const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
+                    if (/M75(?!\d)/.test(semC)) { on = true; return; }
+                    if (/M76(?!\d)/.test(semC)) { on = false; return; }
+                    if (!on) return;
+                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
+                    l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
+                    extra.push(l2);
+                  });
+                  if (!extra.length) return editorTexts[activePaneIdx];
+                  // mantém as linhas do H1 no mesmo número (só desliga o fim de programa) e põe o H2 depois
+                  const linhas = base.split("\n").map((l) => (/^\s*%\s*$/.test(l) ? "" : /M99|M30/.test(l) ? "(" + l.replace(/[()]/g, "") + ")" : l));
+                  return linhas.join("\n") + "\n(USINAGEM DO HEAD 2 - Z VIRADO PELO ZERO DO H2)\n" + extra.join("\n");
+                })()}
                       activeLine={activeLine}
                       onLineChange={analyzeActiveLine}
                       isHighContrast={isHighContrast}
