@@ -200,6 +200,7 @@ export function calculateCycleTimeDetailed(
     warnings: [],
   };
   if (!gcodeText || !gcodeText.trim()) return empty;
+  gcodeText = gcodeText.replace(/S[12]?=/g, "S"); // TBSy: S1=1500 / S2=1500 / G92S=3000 -> S1500 (senão lia "S1" = 1 rpm e o tempo explodia)
 
   const mp: MachineParams = machineParams ? { ...machineParams } : loadMachineParams();
   if (!machineParams && rapidFeedMMin !== undefined && rapidFeedMMin > 0 && rapidFeedMMin !== 24) {

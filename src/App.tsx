@@ -3146,7 +3146,7 @@ interface TMOp {
 }
 type TMParam = { k: string; rot: string; def: number; step: number; so?: string[]; rotPor?: Record<string, string>; opcoes?: string[]; soUso?: number[]; check?: boolean; quando?: [string, number[]] }; // check = caixinha; quando = só aparece se outro campo tiver esse valor // soUso = só aparece nesse "Uso do ciclo" (0 auto, 1 canal, 2 faceamento) // so = só aparece nesses ciclos ("LINHA" = sem ciclo)
 // Caixa de número: fica parada, seleciona tudo ao clicar, aceita vírgula e sinal de menos
-const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void }> = ({ v, set, cls, inputRef }) => {
+const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void; adiar?: boolean }> = ({ v, set, cls, inputRef, adiar }) => {
   const [txt, setTxt] = useState<string | null>(null);
   const mostra = txt !== null ? txt : String(v).replace(".", ",");
   return (
@@ -3156,9 +3156,9 @@ const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputR
       inputMode="decimal"
       value={mostra}
       onFocus={(e) => { setTxt(String(v).replace(".", ",")); const el = e.target; setTimeout(() => el.select(), 0); }}
-      onChange={(e) => { const t = e.target.value; setTxt(t); const n = parseFloat(t.replace(",", ".")); if (!isNaN(n)) set(n); }}
+      onChange={(e) => { const t = e.target.value; setTxt(t); if (adiar) return; /* adiar: só grava ao sair do campo / Enter (Z da região não some no meio da digitação) */ const n = parseFloat(t.replace(",", ".")); if (!isNaN(n)) set(n); }}
       onClick={(e) => (e.target as HTMLInputElement).select()}
-      onBlur={() => setTxt(null)}
+      onBlur={() => { if (adiar && txt !== null) { const n = parseFloat(txt.replace(",", ".")); if (!isNaN(n) && Math.abs(n - v) > 1e-9) set(n); } setTxt(null); }}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
       className={cls}
     />
@@ -5023,7 +5023,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
   };
   // HEAD 2 (suíço): o Z da região é mostrado a partir do ZERO DO HEAD 2 (face do corte), como no programa do canal 2
   const origH2P = (cfg.origens || []).find((og: TMOrigem, j: number) => j > 0 && og.fuso === "contrafuso");
-  const ehH2Op = (o: TMOp) => !!geo && !!maqAtual.suico && o.cab === "H2" && !!origH2P;
+  const ehH2Op = (o: TMOp) => !!geo && ((!!maqAtual.suico && o.cab === "H2") || (maqAtual.id === "TBSY" && o.posto === "HIBO")) && !!origH2P; // HIBO (TBSy): Z da região contado do zero do contrafuso (face do corte)
   const zH2Disp = (z: number) => { if (!geo || !origH2P) return z; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - z : z - (geo.zBack + dH); };
   const zFromH2 = (v: number) => { if (!geo || !origH2P) return v; const dH = origH2P.desl || 0; return origH2P.face === partZero.face ? geo.zFront - dH - v : v + geo.zBack + dH; };
   // TEMPO DE CADA OPERAÇÃO (mm:ss): calculado pelas linhas que o gerador escreveu para ela
@@ -5375,8 +5375,8 @@ const avisosLados: string[] = (() => {
       {rot} {on ? "ON" : "OFF"}
     </button>
   );
-  const num = (v: number, set: (n: number) => void, step = 0.1, w = "w-16") => (
-    <TMNum v={v} set={set} cls={inp + " " + w + (step ? "" : "")} />
+  const num = (v: number, set: (n: number) => void, step = 0.1, w = "w-16", adiar = false) => (
+    <TMNum v={v} set={set} adiar={adiar} cls={inp + " " + w + (step ? "" : "")} />
   );
 
   return (
@@ -6092,7 +6092,7 @@ return (
                     </button>
                     <button
                       ref={(el) => { fieldRefs.current[`op_${o.id}_cab`] = el; }}
-                      onClick={() => { if (maqAtual.id === "TBSY") { /* TBSy: TI1 (torre inferior, H1, G54) -> TS2 (torre superior no fuso, H2, G54) -> HIBO (torre superior no contrafuso, H2, G55) */ const pA = o.posto || (o.cab === "H2" ? "TS2" : "TI1"); const nx = pA === "TI1" ? "TS2" : pA === "TS2" ? "HIBO" : "TI1"; setOp(o.id, { cab: nx === "TI1" ? "H1" : "H2", posto: nx, orig: nx === "HIBO" ? 2 : 1 }); } else setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" }); }}
+                      onClick={() => { if (maqAtual.id === "TBSY") { /* TBSy: TI1 (torre inferior, H1, G54) -> TS2 (torre superior no fuso, H2, G54) -> HIBO (torre superior no contrafuso, H2, G55) */ const pA = o.posto || (o.cab === "H2" ? "TS2" : "TI1"); const nx = pA === "TI1" ? "TS2" : pA === "TS2" ? "HIBO" : "TI1"; /* operação frontal (face, centro, furação) que estava na FRENTE da peça vai para a FACE DO CORTE ao ir para o HIBO (e volta ao sair) */ const sFp = geo ? geo.zFront + geo.zBack : 0; const hiF = o.faixas.length ? Math.max(...o.faixas.map((g) => Math.max(g[0], g[1]))) : NaN; const loF = o.faixas.length ? Math.min(...o.faixas.map((g) => Math.min(g[0], g[1]))) : NaN; const frontalT = ["face", "centro", "furo", "macho", "alargador"].includes(o.tipo); const espelhar = !!geo && frontalT && ((nx === "HIBO" && pA !== "HIBO" && hiF >= geo.zFront - 0.05) || (nx !== "HIBO" && pA === "HIBO" && loF <= geo.zBack + 0.05)); const faixasN = espelhar ? o.faixas.map(([x1, x2]) => [sFp - Math.max(x1, x2), sFp - Math.min(x1, x2)] as TMFaixa) : o.faixas; const nnF = (parseInt((o.ferr || "").replace(/\D/g, ""), 10) || 0) % 100; /* HIBO só trabalha nas posições 21, 22 e 23 */ const ferrN = nx === "HIBO" && !(nnF >= 21 && nnF <= 23) ? "T0521" : o.ferr; setOp(o.id, { cab: nx === "TI1" ? "H1" : "H2", posto: nx, orig: nx === "HIBO" ? 2 : 1, faixas: faixasN, ferr: ferrN }); } else setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" }); }}
                       className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
                       title={maqAtual.id === "TBSY" ? "TBSy - clique para trocar: TI1 = torre inferior (programa H1, G54) | TS2 = torre superior no fuso principal (programa H2, G54) | HIBO = torre superior no contrafuso T521/T522/T523 (programa H2, G55)" : "Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)"}
                     >
@@ -6147,11 +6147,11 @@ return (
                     return (
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-zinc-400">Começa em Z</span>
-                        {ehH2Op(o) ? num(zH2Disp(lo), (n) => ajusta(zFromH2(n), hi), 0.1, "w-20") : num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
+                        {ehH2Op(o) ? num(zH2Disp(lo), (n) => ajusta(zFromH2(n), hi), 0.1, "w-20", true) : num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20", true)}
                                 {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento começa (0 = fora do bruto)">X Ø</span>{num(o.p.xi ?? 0, (n) => setOp(o.id, { p: { ...o.p, xi: n } }), 0.1, "w-16")}</>}
                                 {["acabExt", "desbExt", "desbInt", "acabInt", "canal"].includes(o.tipo) && <><span className="text-zinc-400" title="Ø onde a ferramenta começa (0 = automático pelo Z). Junto com o Z marca o ponto do perfil - tem que estar em cima do perfil (no canal vale no contorno/acabamento)">X Ø</span>{num(o.p.xI ?? 0, (n) => setOp(o.id, { p: { ...o.p, xI: n } }), 0.1, "w-16")}</>}
                         <span className="text-zinc-400">termina em Z</span>
-                        {ehH2Op(o) ? num(zH2Disp(hi), (n) => ajusta(lo, zFromH2(n)), 0.1, "w-20") : num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
+                        {ehH2Op(o) ? num(zH2Disp(hi), (n) => ajusta(lo, zFromH2(n)), 0.1, "w-20", true) : num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20", true)}
                                 {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento termina (centro = -1,6)">X Ø</span>{num(o.p.xf ?? -1.6, (n) => setOp(o.id, { p: { ...o.p, xf: n } }), 0.1, "w-16")}</>}
                                 {["acabExt", "desbExt", "desbInt", "acabInt", "canal"].includes(o.tipo) && <><span className="text-zinc-400" title="Ø onde a ferramenta termina (0 = automático pelo Z). Junto com o Z marca o ponto do perfil - tem que estar em cima do perfil (no canal vale no contorno/acabamento)">X Ø</span>{num(o.p.xF ?? 0, (n) => setOp(o.id, { p: { ...o.p, xF: n } }), 0.1, "w-16")}</>}
                                 {(o.tipo === "desbInt" || o.tipo === "acabInt") && <><span className="text-zinc-400" title="Ø final no fundo (0 = até onde a barra alcança)">X Ø fundo</span>{num(o.p.xff ?? 0, (n) => setOp(o.id, { p: { ...o.p, xff: n, xffClk: 0 } }), 0.1, "w-16")}</>}

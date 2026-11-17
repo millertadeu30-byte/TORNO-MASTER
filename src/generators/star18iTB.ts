@@ -689,7 +689,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const fxRaw = ref.faixas.length ? ref.faixas : faixaPadraoStar(ref.tipo, geo, po, ref.cab) || [];
     const sF = geo.zFront + geo.zBack;
     const fxo = espH2 ? fxRaw.map((fx) => [sF - Math.max(fx[0], fx[1]), sF - Math.min(fx[0], fx[1])] as StarTMFaixa) : fxRaw;
-    const so = subIntervalos(geoC.ext, fxo);
+    let so = subIntervalos(geoC.ext, fxo);
+    if (so.length && ref.tipo !== "face") { const [aX, bX] = pontosXZ(po, fxo); so = estenderIntervalos(cortarIntervalosXZ(so, aX, bX), po, false); } // o que a operação de referência fez de verdade (X de começo/fim e extensão)
     if (!so.length) return null;
     const zMax = Math.max(...so.map((q) => Math.max(q.zA, q.zB))), zMin = Math.min(...so.map((q) => Math.min(q.zA, q.zB)));
     if (ref.tipo === "face") return { nivel: (z: number) => (z > zMax + 1e-6 ? 0 : bD), nome: "OP " + nRs };
@@ -2372,10 +2373,19 @@ export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGer
   // ---------------- H2 (sem extensão): HIBO + TS2 + contrafuso ----------------
   h2.push("%", "<" + nm + ">", "(GERADO PELO TORNO MASTER - CONFERIR ANTES DE RODAR)", "(G54 = FUSO PRINCIPAL / G55 = CONTRAFUSO - HIBO)");
   h2.push("G0G53X235Z280Y0", "M250", "M260", "/G65P9500", "M270");
+  let primeiraHibo = true;
   hibo.forEach((op) => {
     const t = tCod(op);
-    if (!(t >= 521 && t <= 523) && !(t >= 21 && t <= 23)) h2.push("(ATENCAO: HIBO TRABALHA SO NAS POSICOES T521 T522 T523 - CONFERIR " + (op.ferr || "") + ")");
-    h2.push("", "N" + nSeq(t) + "G0G53X235Z280Y0", "T" + t + "(" + desc(op) + ")");
+    if (!(t % 100 >= 21 && t % 100 <= 23)) h2.push("(ATENCAO: HIBO TRABALHA SO NAS POSICOES 21 22 23 - CONFERIR " + (op.ferr || "") + ")");
+    // 1ª ferramenta do HIBO: T5 + 21/22/23 (dá o "tombo" na torre); as próximas só T21, T22 ou T23
+    const nnH = t % 100;
+    const tH = (primeiraHibo ? "T5" : "T") + String(nnH).padStart(2, "0");
+    primeiraHibo = false;
+    h2.push("", "N" + nnH + "G0G53X235Z280Y0", tH + "(" + desc(op) + ")");
+    // face / centro / furação marcada na FRENTE da peça: no HIBO vale a FACE DO CORTE (espelha a região)
+    const sFh = geo.zFront + geo.zBack;
+    const hiH = op.faixas.length ? Math.max(...op.faixas.map((g) => Math.max(g[0], g[1]))) : NaN;
+    if (["face", "centro", "furo", "macho", "alargador"].includes(op.tipo) && hiH >= geo.zFront - 0.05) op = { ...op, faixas: op.faixas.map(([x1, x2]) => [sFh - Math.max(x1, x2), sFh - Math.min(x1, x2)] as StarTMFaixa) };
     corpoOp(op, "HIBO").forEach((l) => h2.push(l));
     h2.push("M25M109", "G4U.5");
   });
