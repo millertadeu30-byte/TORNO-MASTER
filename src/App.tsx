@@ -3146,16 +3146,18 @@ interface TMOp {
 }
 type TMParam = { k: string; rot: string; def: number; step: number; so?: string[]; rotPor?: Record<string, string>; opcoes?: string[]; soUso?: number[]; check?: boolean; quando?: [string, number[]] }; // check = caixinha; quando = só aparece se outro campo tiver esse valor // soUso = só aparece nesse "Uso do ciclo" (0 auto, 1 canal, 2 faceamento) // so = só aparece nesses ciclos ("LINHA" = sem ciclo)
 // Caixa de número: fica parada, seleciona tudo ao clicar, aceita vírgula e sinal de menos
+// número na caixa: arredonda (sem "-3,55e-15" de conta de ponto flutuante) e usa vírgula
+const tmNumTxt = (v: number) => { const r = Math.round(v * 10000) / 10000; return String(Object.is(r, -0) ? 0 : r).replace(".", ","); };
 const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void; adiar?: boolean }> = ({ v, set, cls, inputRef, adiar }) => {
   const [txt, setTxt] = useState<string | null>(null);
-  const mostra = txt !== null ? txt : String(v).replace(".", ",");
+  const mostra = txt !== null ? txt : tmNumTxt(v);
   return (
     <input
       ref={inputRef}
       type="text"
       inputMode="decimal"
       value={mostra}
-      onFocus={(e) => { setTxt(String(v).replace(".", ",")); const el = e.target; setTimeout(() => el.select(), 0); }}
+      onFocus={(e) => { setTxt(tmNumTxt(v)); const el = e.target; setTimeout(() => el.select(), 0); }}
       onChange={(e) => { const t = e.target.value; setTxt(t); if (adiar) return; /* adiar: só grava ao sair do campo / Enter (Z da região não some no meio da digitação) */ const n = parseFloat(t.replace(",", ".")); if (!isNaN(n)) set(n); }}
       onClick={(e) => (e.target as HTMLInputElement).select()}
       onBlur={() => { if (adiar && txt !== null) { const n = parseFloat(txt.replace(",", ".")); if (!isNaN(n) && Math.abs(n - v) > 1e-9) set(n); } setTxt(null); }}
@@ -3166,7 +3168,7 @@ const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputR
 };
 const TMOptNum: React.FC<{ v: number | undefined; set: (n: number | undefined) => void; cls: string; placeholder?: string; inputRef?: (el: HTMLInputElement | null) => void }> = ({ v, set, cls, placeholder, inputRef }) => {
   const [txt, setTxt] = useState<string | null>(null);
-  const base = v !== undefined && !isNaN(v) ? String(v).replace(".", ",") : "";
+  const base = v !== undefined && !isNaN(v) ? tmNumTxt(v) : "";
   const mostra = txt !== null ? txt : base;
   return (
     <input
