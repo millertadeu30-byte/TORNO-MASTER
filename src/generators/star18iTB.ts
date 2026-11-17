@@ -831,6 +831,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       let s = subIntervalos(geo.ext, fxs);
       let gS = 0;
       while (gS++ < 500 && s.length > 1 && s[0].zA - s[0].zB < 1e-9) s = s.slice(1);
+      if (op.tipo === "desbExt") { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim (acabamento já faz pelo cortarPerfilPontos)
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -1351,7 +1352,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                     }
                     const pr: { z: number; x: number }[] = [];
                     pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4 && (v.x - u.x) * (q.x - v.x) + (v.z - u.z) * (q.z - v.z) > 0) pr.pop(); } pr.push(q); }); // só junta reta que continua no mesmo sentido (desce/sobe na parede fica)
-                    const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
+                    { const [aX, bX] = pontosXZ(p, fxs, Lb); const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
+const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     const topoA = Math.max(nivelSpan(zPA), pr[0].x) + 0.5;
                     const topoB = Math.max(nivelSpan(zPB), pr[pr.length - 1].x) + 0.5;
                     lines.push("(ACABAMENTO DO CANAL NO PERFIL - BEDAME L" + fmt(Lb) + ")");
@@ -1683,7 +1685,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       const s0Int = subIntervalos(geo.int, fxs);
         const zFundoS0 = s0Int.length ? Math.min(...s0Int.map((q) => Math.min(q.zA, q.zB))) : 0;
         // a FACE do fundo NÃO entra no contorno: quem faceia o fundo é o bloco FUNDO (respeita a barra, a folga e o recuo X)
-        const s = s0Int.filter((q) => !(Math.abs(q.zA - q.zB) < 1e-6 && Math.abs(q.zA - zFundoS0) < 1e-4));
+        let s = s0Int.filter((q) => !(Math.abs(q.zA - q.zB) < 1e-6 && Math.abs(q.zA - zFundoS0) < 1e-4));
+      { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbInt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -2089,6 +2092,71 @@ export function espelharXLinhas(linhas: string[], ligar: boolean): string[] {
 }
 
 // Corta o perfil para começar/terminar no PONTO escolhido (X e Z) — segue a linha da peça entre eles
+// X Ø DE COMEÇO / FIM: o ponto (X, Z) escolhido marca ONDE no perfil a operação começa e termina.
+// Só vale se o ponto estiver EM CIMA do perfil (até 0,3 mm); clicado no ar = automático pelo Z (como sempre foi).
+type StarPtXZ = { x: number; z: number };
+function cortarIntervalosXZ(s: StarTMIntervalo[], a?: StarPtXZ, b?: StarPtXZ, tol = 0.3): StarTMIntervalo[] {
+  if (!s.length || (!a && !b)) return s;
+  const pt = (q: StarTMIntervalo, t: number) => ({ x: q.xa + t * (q.xb - q.xa), z: q.zA + t * (q.zB - q.zA) });
+  const proj = (P: StarPtXZ) => {
+    let best = { d: Infinity, i: 0, t: 0 };
+    s.forEach((q, i) => {
+      const ar = q.xa / 2, dr = q.xb / 2 - ar, dz = q.zB - q.zA, L2 = dr * dr + dz * dz;
+      let t = L2 > 1e-12 ? ((P.x / 2 - ar) * dr + (P.z - q.zA) * dz) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(P.x / 2 - (ar + t * dr), P.z - (q.zA + t * dz));
+      if (d < best.d - 1e-9) best = { d, i, t };
+    });
+    return best.d <= tol ? best : null;
+  };
+  const A = a ? proj(a) : null;
+  const B = b ? proj(b) : null;
+  if (!A && !B) return s;
+  const iA = A ? A.i : 0, tA = A ? A.t : 0, iB = B ? B.i : s.length - 1, tB = B ? B.t : 1;
+  if (iA + tA >= iB + tB - 1e-9) return s;
+  const r: StarTMIntervalo[] = [];
+  for (let i = iA; i <= iB; i++) {
+    const q = s[i];
+    const P0 = pt(q, i === iA ? tA : 0), P1 = pt(q, i === iB ? tB : 1);
+    if (Math.hypot(P1.x - P0.x, P1.z - P0.z) < 1e-6) continue;
+    r.push({ ...q, xa: P0.x, zA: P0.z, xb: P1.x, zB: P1.z });
+  }
+  return r.length ? r : s;
+}
+function cortarPtsXZ<T extends StarPtXZ>(pts: T[], a?: StarPtXZ, b?: StarPtXZ, tol = 0.3): T[] {
+  if (pts.length < 2 || (!a && !b)) return pts;
+  const proj = (P: StarPtXZ) => {
+    let best = { d: Infinity, i: 0, t: 0 };
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ar = pts[i].x / 2, dr = pts[i + 1].x / 2 - ar, dz = pts[i + 1].z - pts[i].z, L2 = dr * dr + dz * dz;
+      let t = L2 > 1e-12 ? ((P.x / 2 - ar) * dr + (P.z - pts[i].z) * dz) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(P.x / 2 - (ar + t * dr), P.z - (pts[i].z + t * dz));
+      if (d < best.d - 1e-9) best = { d, i, t };
+    }
+    return best.d <= tol ? best : null;
+  };
+  const A = a ? proj(a) : null;
+  const B = b ? proj(b) : null;
+  if (!A && !B) return pts;
+  const L = pts.length - 1;
+  const iA = A ? A.i : 0, tA = A ? A.t : 0, iB = B ? B.i : L - 1, tB = B ? B.t : 1;
+  if (iA + tA >= iB + tB - 1e-9) return pts;
+  const P = (i: number, t: number): T => ({ ...pts[i], x: pts[i].x + t * (pts[i + 1].x - pts[i].x), z: pts[i].z + t * (pts[i + 1].z - pts[i].z) });
+  const out: T[] = [P(iA, tA)];
+  for (let k = iA + 1; k <= iB; k++) out.push(pts[k]);
+  out.push(P(iB, tB));
+  return out.filter((q, k) => k === 0 || Math.hypot(q.x - out[k - 1].x, q.z - out[k - 1].z) > 1e-6);
+}
+// pontos do X de começo / fim da operação (Z = começo / fim da região)
+function pontosXZ(p: any, fxs: StarTMFaixa[], dzFim = 0): [StarPtXZ | undefined, StarPtXZ | undefined] {
+  if (!fxs.length) return [undefined, undefined];
+  const zI = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+  const zF = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+  return [(p.xI ?? 0) > 0 ? { x: p.xI, z: zI } : undefined, (p.xF ?? 0) > 0 ? { x: p.xF, z: zF + dzFim } : undefined];
+}
+const msgXZ = (p: any) => "(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 0 ? " - INICIO D" + fmt(p.xI) : "") + ((p.xF ?? 0) > 0 ? " - FIM D" + fmt(p.xF) : "") + ")";
+
 function cortarPerfilPontos(pts: StarTMPt[], a?: { x: number; z: number }, b?: { x: number; z: number }): StarTMPt[] {
   if (pts.length < 2 || (!a && !b)) return pts;
   const proj = (q: { x: number; z: number }) => {

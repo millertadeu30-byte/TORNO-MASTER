@@ -3509,6 +3509,63 @@ function tmCompensar(pts: TMPt[], r: number, interno: boolean): TMPt[] {
   return simp.length >= 2 ? simp : pts;
 }
 
+// X Ø DE COMEÇO / FIM: o ponto (X, Z) escolhido marca ONDE no perfil a operação começa e termina.
+// Só vale se o ponto estiver EM CIMA do perfil (até 0,3 mm); clicado no ar = automático pelo Z (como sempre foi).
+type TMPtXZ = { x: number; z: number };
+function tmCortarIvXZ(s: TMIntervalo[], a?: TMPtXZ, b?: TMPtXZ, tol = 0.3): TMIntervalo[] {
+  if (!s.length || (!a && !b)) return s;
+  const pt = (q: TMIntervalo, t: number) => ({ x: q.xa + t * (q.xb - q.xa), z: q.zA + t * (q.zB - q.zA) });
+  const proj = (P: TMPtXZ) => {
+    let best = { d: Infinity, i: 0, t: 0 };
+    s.forEach((q, i) => {
+      const ar = q.xa / 2, dr = q.xb / 2 - ar, dz = q.zB - q.zA, L2 = dr * dr + dz * dz;
+      let t = L2 > 1e-12 ? ((P.x / 2 - ar) * dr + (P.z - q.zA) * dz) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(P.x / 2 - (ar + t * dr), P.z - (q.zA + t * dz));
+      if (d < best.d - 1e-9) best = { d, i, t };
+    });
+    return best.d <= tol ? best : null;
+  };
+  const A = a ? proj(a) : null;
+  const B = b ? proj(b) : null;
+  if (!A && !B) return s;
+  const iA = A ? A.i : 0, tA = A ? A.t : 0, iB = B ? B.i : s.length - 1, tB = B ? B.t : 1;
+  if (iA + tA >= iB + tB - 1e-9) return s;
+  const r: TMIntervalo[] = [];
+  for (let i = iA; i <= iB; i++) {
+    const q = s[i];
+    const P0 = pt(q, i === iA ? tA : 0), P1 = pt(q, i === iB ? tB : 1);
+    if (Math.hypot(P1.x - P0.x, P1.z - P0.z) < 1e-6) continue;
+    r.push({ ...q, xa: P0.x, zA: P0.z, xb: P1.x, zB: P1.z });
+  }
+  return r.length ? r : s;
+}
+function tmCortarPtsXZ<T extends TMPtXZ>(pts: T[], a?: TMPtXZ, b?: TMPtXZ, tol = 0.3): T[] {
+  if (pts.length < 2 || (!a && !b)) return pts;
+  const proj = (P: TMPtXZ) => {
+    let best = { d: Infinity, i: 0, t: 0 };
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ar = pts[i].x / 2, dr = pts[i + 1].x / 2 - ar, dz = pts[i + 1].z - pts[i].z, L2 = dr * dr + dz * dz;
+      let t = L2 > 1e-12 ? ((P.x / 2 - ar) * dr + (P.z - pts[i].z) * dz) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(P.x / 2 - (ar + t * dr), P.z - (pts[i].z + t * dz));
+      if (d < best.d - 1e-9) best = { d, i, t };
+    }
+    return best.d <= tol ? best : null;
+  };
+  const A = a ? proj(a) : null;
+  const B = b ? proj(b) : null;
+  if (!A && !B) return pts;
+  const L = pts.length - 1;
+  const iA = A ? A.i : 0, tA = A ? A.t : 0, iB = B ? B.i : L - 1, tB = B ? B.t : 1;
+  if (iA + tA >= iB + tB - 1e-9) return pts;
+  const P = (i: number, t: number): T => ({ ...pts[i], x: pts[i].x + t * (pts[i + 1].x - pts[i].x), z: pts[i].z + t * (pts[i + 1].z - pts[i].z) });
+  const out: T[] = [P(iA, tA)];
+  for (let k = iA + 1; k <= iB; k++) out.push(pts[k]);
+  out.push(P(iB, tB));
+  return out.filter((q, k) => k === 0 || Math.hypot(q.x - out[k - 1].x, q.z - out[k - 1].z) > 1e-6);
+}
+
 function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
   const f = tmFmt;
   const fmtInt = (n: number) => (Number.isInteger(n) ? String(n) : f(n));
@@ -3787,6 +3844,13 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         for (let z = q0.zA + 0.005; z <= zCom + 1e-9 && ok; z += 0.005) if (q0.xa - k * (z - q0.zA) < xPerf(z) - 1e-6) ok = false; // a reta prolongada não pode entrar na peça
         if (!ok) xIni = q0.xa; // se entraria na peça: chega reto no Ø do início
         s = [{ ...q0, zA: zCom, zB: q0.zA, xa: xIni, xb: q0.xa }, ...s];
+      }
+      // X Ø DE COMEÇO / FIM (digitado ou do clique): começa e termina exatamente nesse ponto do perfil (0 = automático pelo Z)
+      {
+        const zFimX = op.faixas.length ? Math.min(...op.faixas.map((g) => Math.min(g[0], g[1]))) : -1e9;
+        const mX = (x: number) => (intE ? KM - x : x);
+        const sX = tmCortarIvXZ(s, (p.xI ?? 0) > 0 ? { x: mX(p.xI), z: zCom } : undefined, (p.xF ?? 0) > 0 ? { x: mX(p.xF), z: zFimX } : undefined);
+        if (sX !== s) { W("(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 0 ? " - INICIO D" + f(p.xI) : "") + ((p.xF ?? 0) > 0 ? " - FIM D" + f(p.xF) : "") + ");"); s = sX; }
       }
       if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); fimInt(); return; }
       const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo); // G71 Fanuc normal: nunca entra em rebaixo (perfil só cresce)
@@ -4132,7 +4196,12 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
             });
             return simp;
           };
-          const passaPerfil = (simp: { z: number; x: number }[], fx: number) => {
+          // X Ø DE COMEÇO / FIM: o contorno do canal começa e termina no ponto escolhido (Z do fim = canto direito do bedame)
+        const mXc = (x: number) => (intE ? KM - x : x);
+        const aXc = (p.xI ?? 0) > 0 && op.faixas.length ? { x: mXc(p.xI), z: Math.max(...op.faixas.map((g) => Math.max(g[0], g[1]))) } : undefined;
+        const bXc = (p.xF ?? 0) > 0 && op.faixas.length ? { x: mXc(p.xF), z: Math.min(...op.faixas.map((g) => Math.min(g[0], g[1]))) + Lb } : undefined;
+        const passaPerfil = (simp0: { z: number; x: number }[], fx: number) => {
+          const simp = tmCortarPtsXZ(simp0, aXc, bXc);
             W("G00 Z" + f(zProg(simp[0].z)) + ";");
             W("G00 X" + f(xSeg - 1) + ";");
             W("G01 X" + f(simp[0].x) + " F" + fx + ";");
@@ -5899,11 +5968,11 @@ return (
                         <span className="text-zinc-400">Começa em Z</span>
                         {ehH2Op(o) ? num(zH2Disp(lo), (n) => ajusta(zFromH2(n), hi), 0.1, "w-20") : num(zDisp(hi), (n) => ajusta(lo, zFromDisp(n)), 0.1, "w-20")}
                                 {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento começa (0 = fora do bruto)">X Ø</span>{num(o.p.xi ?? 0, (n) => setOp(o.id, { p: { ...o.p, xi: n } }), 0.1, "w-16")}</>}
-                                {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta começa (0 = automático pelo Z)">X Ø</span>{num(o.p.xI ?? 0, (n) => setOp(o.id, { p: { ...o.p, xI: n } }), 0.1, "w-16")}</>}
+                                {["acabExt", "desbExt", "desbInt", "acabInt", "canal"].includes(o.tipo) && <><span className="text-zinc-400" title="Ø onde a ferramenta começa (0 = automático pelo Z). Junto com o Z marca o ponto do perfil - tem que estar em cima do perfil (no canal vale no contorno/acabamento)">X Ø</span>{num(o.p.xI ?? 0, (n) => setOp(o.id, { p: { ...o.p, xI: n } }), 0.1, "w-16")}</>}
                         <span className="text-zinc-400">termina em Z</span>
                         {ehH2Op(o) ? num(zH2Disp(hi), (n) => ajusta(lo, zFromH2(n)), 0.1, "w-20") : num(zDisp(lo), (n) => ajusta(zFromDisp(n), hi), 0.1, "w-20")}
                                 {o.tipo === "face" && <><span className="text-zinc-400" title="Ø onde o faceamento termina (centro = -1,6)">X Ø</span>{num(o.p.xf ?? -1.6, (n) => setOp(o.id, { p: { ...o.p, xf: n } }), 0.1, "w-16")}</>}
-                                {o.tipo === "acabExt" && <><span className="text-zinc-400" title="Ø onde a ferramenta termina (0 = automático pelo Z)">X Ø</span>{num(o.p.xF ?? 0, (n) => setOp(o.id, { p: { ...o.p, xF: n } }), 0.1, "w-16")}</>}
+                                {["acabExt", "desbExt", "desbInt", "acabInt", "canal"].includes(o.tipo) && <><span className="text-zinc-400" title="Ø onde a ferramenta termina (0 = automático pelo Z). Junto com o Z marca o ponto do perfil - tem que estar em cima do perfil (no canal vale no contorno/acabamento)">X Ø</span>{num(o.p.xF ?? 0, (n) => setOp(o.id, { p: { ...o.p, xF: n } }), 0.1, "w-16")}</>}
                                 {(o.tipo === "desbInt" || o.tipo === "acabInt") && <><span className="text-zinc-400" title="Ø final no fundo (0 = até onde a barra alcança)">X Ø fundo</span>{num(o.p.xff ?? 0, (n) => setOp(o.id, { p: { ...o.p, xff: n, xffClk: 0 } }), 0.1, "w-16")}</>}
                         <button onClick={() => setOp(o.id, { faixas: [] })} className="text-zinc-500 hover:text-red-400" title="Tirar a região">✕</button>
                         {o.faixas.length > 1 && <span className="text-[10px] text-zinc-500">({o.faixas.length} linhas)</span>}
