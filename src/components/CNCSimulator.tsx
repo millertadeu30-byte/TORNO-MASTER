@@ -1455,10 +1455,11 @@ export function simularGCodeEColisoes(
   const ladoPorLinha: number[] = [];
   {
     let ladoAtual = canalSim >= 2 ? 2 : 1;
+    const temM75Lado = /M75(?!\d)/.test(gcodeText.replace(/\([^)]*\)/g, "").toUpperCase());
     gcodeText.split("\n").forEach((ln, i) => {
       const semComent = ln.replace(/\([^)]*\)/g, "").toUpperCase();
       const mG = semComent.match(/G5[4-9](?:\.\d)?/g);
-      if (mG) { const g = mG[mG.length - 1].slice(0, 3); ladoAtual = gContra.has(g) ? 2 : (canalSim >= 2 ? 2 : 1); }
+      if (mG) { const g = mG[mG.length - 1].slice(0, 3); ladoAtual = gContra.has(g) ? 2 : (canalSim >= 2 && temM75Lado ? 2 : 1); } // TBSy (sem M75): no canal 2 a origem manda - G54 (TS2 no fuso principal) = Lado 1, G55 (HIBO no contrafuso) = Lado 2
       ladoPorLinha[i] = ladoAtual;
     });
   }
@@ -2504,7 +2505,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
   if (plotList.length > 0) {
     toolX = plotList[0].x1;
     toolZ = plotList[0].z1;
-    for (const item of plotList) {
+    for (const item of [...plotList, ...plotOutro]) { // DRO segue também o OUTRO canal (ex.: TS2 / HIBO no H2), com o X negativo como está no programa
       if (isFrozen) {
         if (item.linhaId <= activeLine) {
           toolX = item.x2;
