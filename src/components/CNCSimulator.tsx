@@ -1393,20 +1393,48 @@ export function simularGCodeEColisoes(
   // CANAL 2 (HEAD 2 / contrafuso): o Z do programa é contado a partir do ZERO DO HEAD 2 (face do corte), entrando na peça.
   // Para desenhar em cima da peça: Z do gráfico = Z0 H2 − Z do programa (espelhado). Só desenha a usinagem (blocos M75…M76).
   {
+    const linhasSim = gcodeText.split("\n");
+    // G53 = coordenada de MÁQUINA (troca de ferramenta segura): não desenha nem o movimento que sai dele (senão vira um risco enorme no gráfico)
+    {
+      const g53 = new Set<number>();
+      linhasSim.forEach((ln, i) => { if (/G53(?!\d)/.test(ln.replace(/\([^)]*\)/g, "").toUpperCase())) g53.add(i); });
+      if (g53.size) {
+        let antG53 = false;
+        plotList = plotList.filter((it) => { const li = Math.floor((it as any).linhaId ?? 0); const eh = g53.has(li); const sai = antG53 && !eh; antG53 = eh; return !eh && !sai; });
+      }
+    }
     const zH2Sim = fixZones.find((f) => typeof f.zH2 === "number")?.zH2;
     if (canalSim >= 2 && typeof zH2Sim === "number") {
       const dentro: boolean[] = [];
-      let on = false;
-      gcodeText.split("\n").forEach((ln, i) => {
-        const u = ln.replace(/\([^)]*\)/g, "").toUpperCase();
-        if (/M75(?!\d)/.test(u)) on = true;
-        dentro[i] = on;
-        if (/M76(?!\d)/.test(u)) on = false;
-      });
-      const temBloco = dentro.some(Boolean);
+      const espelha: boolean[] = [];
+      const temM75 = linhasSim.some((ln) => /M75(?!\d)/.test(ln.replace(/\([^)]*\)/g, "").toUpperCase()));
+      if (temM75) {
+        // Star: só a usinagem do Head 2 (blocos M75…M76), toda espelhada
+        let on = false;
+        linhasSim.forEach((ln, i) => {
+          const u = ln.replace(/\([^)]*\)/g, "").toUpperCase();
+          if (/M75(?!\d)/.test(u)) on = true;
+          dentro[i] = on;
+          espelha[i] = on;
+          if (/M76(?!\d)/.test(u)) on = false;
+        });
+      } else {
+        // TBSy (e máquinas com origem de contrafuso): na origem do CONTRAFUSO (ex.: G55 / HIBO) espelha; no fuso principal (G54 / TS2) desenha normal
+        const gC = new Set<string>();
+        fixZones.forEach((fz) => (fz.gContra || []).forEach((g) => gC.add(g.toUpperCase().slice(0, 3))));
+        let cur = false;
+        linhasSim.forEach((ln, i) => {
+          const u = ln.replace(/\([^)]*\)/g, "").toUpperCase();
+          const mG = u.match(/G5[4-9]/g);
+          if (mG) cur = gC.has(mG[mG.length - 1]);
+          dentro[i] = true;
+          espelha[i] = cur;
+        });
+      }
       plotList = plotList
-        .filter((it) => !temBloco || dentro[Math.floor((it as any).linhaId ?? 0)])
+        .filter((it) => dentro[Math.floor((it as any).linhaId ?? 0)])
         .map((it) => {
+          if (!espelha[Math.floor((it as any).linhaId ?? 0)]) return it;
           const n: any = { ...it };
           ["z1", "z2", "zc", "z"].forEach((k) => { if (typeof n[k] === "number") n[k] = zH2Sim - n[k]; });
           if (n.type === "arc") n.isG3 = !n.isG3;

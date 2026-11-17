@@ -114,7 +114,7 @@ import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
-import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar } from "./generators/star18iTB";
+import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY } from "./generators/star18iTB";
 import { calculateCycleTimeDetailed } from "./utils/cycleTimeCalculator";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
@@ -2671,12 +2671,20 @@ export default function App() {
                   if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
                   const extra: string[] = [];
                   let on = false;
+                  let g55TB = false;
                   editorTexts[1].split("\n").forEach((ln) => {
                     const u = ln.replace(/^\//, "").trim();
                     const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
                     if (/M75(?!\d)/.test(semC)) { on = true; return; }
                     if (/M76(?!\d)/.test(semC)) { on = false; return; }
-                    if (!on) return;
+                    if (!on) {
+                      // TBSy (sem M75/M76): na origem do contrafuso (G55 / HIBO) vira pelo zero do H2; no fuso principal (G54 / TS2) entra como está; G53 (troca) fica de fora
+                      if (/M75(?!\d)/.test(editorTexts[1].replace(/\([^)]*\)/g, "").toUpperCase())) return;
+                      if (/G53(?!\d)/.test(semC)) return;
+                      const mG = semC.match(/G5[4-9]/g);
+                      if (mG) g55TB = mG[mG.length - 1] === "G55";
+                      if (!g55TB) { extra.push(u); return; }
+                    }
                     let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
                     l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
@@ -2761,12 +2769,20 @@ export default function App() {
                   if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
                   const extra: string[] = [];
                   let on = false;
+                  let g55TB = false;
                   editorTexts[1].split("\n").forEach((ln) => {
                     const u = ln.replace(/^\//, "").trim();
                     const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
                     if (/M75(?!\d)/.test(semC)) { on = true; return; }
                     if (/M76(?!\d)/.test(semC)) { on = false; return; }
-                    if (!on) return;
+                    if (!on) {
+                      // TBSy (sem M75/M76): na origem do contrafuso (G55 / HIBO) vira pelo zero do H2; no fuso principal (G54 / TS2) entra como está; G53 (troca) fica de fora
+                      if (/M75(?!\d)/.test(editorTexts[1].replace(/\([^)]*\)/g, "").toUpperCase())) return;
+                      if (/G53(?!\d)/.test(semC)) return;
+                      const mG = semC.match(/G5[4-9]/g);
+                      if (mG) g55TB = mG[mG.length - 1] === "G55";
+                      if (!g55TB) { extra.push(u); return; }
+                    }
                     let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
                     l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
@@ -3124,6 +3140,7 @@ interface TMOp {
   cicloSel?: string; // qual ciclo foi escolhido quando a operação tem mais de um (ex.: faceamento G94 / G72 / G75)
   orig?: number; // origem (zero peça) 1 = G54, 2 = G55... definida na seção ORIGENS
   rsTxt?: string; // RESTO de várias operações, como foi digitado (ex.: "6,7")
+  posto?: "TI1" | "TS2" | "HIBO"; // TBSy: TI1 = torre inferior (H1, G54) | TS2 = torre superior no fuso (H2, G54) | HIBO = torre superior no contrafuso (H2, G55)
 }
 type TMParam = { k: string; rot: string; def: number; step: number; so?: string[]; rotPor?: Record<string, string>; opcoes?: string[]; soUso?: number[]; check?: boolean; quando?: [string, number[]] }; // check = caixinha; quando = só aparece se outro campo tiver esse valor // soUso = só aparece nesse "Uso do ciclo" (0 auto, 1 canal, 2 faceamento) // so = só aparece nesses ciclos ("LINHA" = sem ciclo)
 // Caixa de número: fica parada, seleciona tudo ao clicar, aceita vírgula e sinal de menos
@@ -3241,6 +3258,14 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "vc", rot: "Vc m/min", def: 100, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
 };
 
+// ESTENDER INÍCIO / FIM do percurso: vale em todas as operações de perfil (motor único, todas as máquinas)
+const TM_PARAMS_ESTENDER: TMParam[] = [
+  { k: "eiL", rot: "Estender início: comprimento mm (0 = não)", def: 0, step: 0.5 },
+  { k: "eiA", rot: "Estender início: ângulo° (0 = reto em Z, 90 = sobe em X)", def: 0, step: 5 },
+  { k: "efL", rot: "Estender fim: comprimento mm (0 = não)", def: 0, step: 0.5 },
+  { k: "efA", rot: "Estender fim: ângulo° (0 = reto em Z, 90 = sobe em X)", def: 0, step: 5 },
+];
+(["desbExt", "acabExt", "desbInt", "acabInt", "canal"] as TMOpTipo[]).forEach((t) => { if (TM_TIPOS[t] && !TM_TIPOS[t].params.some((pr) => pr.k === "eiL")) TM_TIPOS[t].params.push(...TM_PARAMS_ESTENDER); });
 const tmFmt = (n: number) => {
   let s = (Math.round(n * 1000) / 1000).toFixed(3).replace(/0+$/, "");
   if (s.endsWith(".")) s += "0";
@@ -3647,7 +3672,7 @@ function tmTraduzStarErgomat(ls: string[], zMap: (z: number) => number, comM08: 
     const pula = l.startsWith("/");
     if (pula) l = l.slice(1).trim();
     if (!l) return;
-    const zCom = (c: string) => c.replace(/\bZ(-?\d+(?:\.\d+)?)/g, (_m, v) => "Z" + f(zMap(parseFloat(v)))); // Z dos comentários também no padrão desta máquina
+    const zCom = (c: string) => /SOBREMETAL/.test(c) ? c : c.replace(/\bZ(-?\d+(?:\.\d+)?)/g, (_m, v) => "Z" + f(zMap(parseFloat(v)))); // Z dos comentários também no padrão desta máquina
     if (/^\(.*\)$/.test(l)) { res.push(zCom(l) + ";"); return; }
     const ip = l.indexOf("(");
     const com = ip >= 0 ? " " + zCom(l.slice(ip)) : "";
@@ -3682,6 +3707,16 @@ function tmTraduzStarErgomat(ls: string[], zMap: (z: number) => number, comM08: 
   return res;
 }
 
+// ESTENDER INÍCIO / FIM DO PERCURSO (mesma regra do motor único): comprimento mm + ângulo (0 = reto em Z, 90 = sobe em X)
+function tmEstenderIv(s: TMIntervalo[], p: Record<string, number>): TMIntervalo[] {
+  if (!s.length) return s;
+  const ang = (v: number | undefined) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180;
+  let r = s;
+  const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0;
+  if (eiL > 0) { const a = ang(p.eiA); const q = r[0]; r = [{ ...q, zA: q.zA + eiL * Math.cos(a), zB: q.zA, xa: Math.max(0, q.xa + 2 * eiL * Math.sin(a)), xb: q.xa }, ...r]; }
+  if (efL > 0) { const a = ang(p.efA); const q = r[r.length - 1]; r = [...r, { ...q, zA: q.zB, zB: q.zB - efL * Math.cos(a), xa: q.xb, xb: Math.max(0, q.xb + 2 * efL * Math.sin(a)) }]; }
+  return r;
+}
 function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; brutoDz?: number; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
   const f = tmFmt;
   const fmtInt = (n: number) => (Number.isInteger(n) ? String(n) : f(n));
@@ -3983,6 +4018,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         const sX = tmCortarIvXZ(s, (p.xI ?? 0) > 0 ? { x: mX(p.xI), z: zCom } : undefined, (p.xF ?? 0) > 0 ? { x: mX(p.xF), z: zFimX } : undefined);
         if (sX !== s) { W("(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 0 ? " - INICIO D" + f(p.xI) : "") + ((p.xF ?? 0) > 0 ? " - FIM D" + f(p.xF) : "") + ");"); s = sX; }
       }
+      s = tmEstenderIv(s, p); // ESTENDER início / fim do percurso
       if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); fimInt(); return; }
       const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo); // G71 Fanuc normal: nunca entra em rebaixo (perfil só cresce)
       const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : TM_PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90; // ângulo de mergulho (só quando entra nos rebaixos)
@@ -5265,9 +5301,10 @@ const avisosLados: string[] = (() => {
       maqAtual.perfil === "STAR_18iTB" ||
       maqAtual.perfil === "STAR_G266" ||
       maqAtual.perfil === "SIEMENS_TND180" ||
-      maqAtual.id === "INDEX_ABC"
+      maqAtual.id === "INDEX_ABC" ||
+    maqAtual.id === "TBSY"
     ) {
-      const gerFn =
+      const gerFn = maqAtual.id === "TBSY" ? (tmGerarErgomatTBSY as typeof tmGerarStarG266) :
         maqAtual.perfil === "STAR_G266"
           ? tmGerarStarG266
           : maqAtual.perfil === "SIEMENS_TND180"
@@ -5296,9 +5333,10 @@ const avisosLados: string[] = (() => {
         maqAtual.perfil === "STAR_18iTB" ||
         maqAtual.perfil === "STAR_G266" ||
         maqAtual.perfil === "SIEMENS_TND180" ||
-        maqAtual.id === "INDEX_ABC"
+        maqAtual.id === "INDEX_ABC" ||
+      maqAtual.id === "TBSY"
       ) {
-        const gerFn =
+        const gerFn = maqAtual.id === "TBSY" ? (tmGerarErgomatTBSY as typeof tmGerarStarG266) :
           maqAtual.perfil === "STAR_G266"
             ? tmGerarStarG266
             : maqAtual.perfil === "SIEMENS_TND180"
@@ -6052,11 +6090,11 @@ return (
                     </button>
                     <button
                       ref={(el) => { fieldRefs.current[`op_${o.id}_cab`] = el; }}
-                      onClick={() => setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" })}
+                      onClick={() => { if (maqAtual.id === "TBSY") { /* TBSy: TI1 (torre inferior, H1, G54) -> TS2 (torre superior no fuso, H2, G54) -> HIBO (torre superior no contrafuso, H2, G55) */ const pA = o.posto || (o.cab === "H2" ? "TS2" : "TI1"); const nx = pA === "TI1" ? "TS2" : pA === "TS2" ? "HIBO" : "TI1"; setOp(o.id, { cab: nx === "TI1" ? "H1" : "H2", posto: nx, orig: nx === "HIBO" ? 2 : 1 }); } else setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" }); }}
                       className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
-                      title="Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)"
+                      title={maqAtual.id === "TBSY" ? "TBSy - clique para trocar: TI1 = torre inferior (programa H1, G54) | TS2 = torre superior no fuso principal (programa H2, G54) | HIBO = torre superior no contrafuso T521/T522/T523 (programa H2, G55)" : "Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)"}
                     >
-                      {o.cab || "H1"}
+                      {maqAtual.id === "TBSY" ? o.posto || (o.cab === "H2" ? "TS2" : "TI1") : o.cab || "H1"}
                     </button>
                     <button
                       ref={(el) => { fieldRefs.current[`op_${o.id}_orig`] = el; }}

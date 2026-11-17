@@ -853,6 +853,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       let gS = 0;
       while (gS++ < 500 && s.length > 1 && s[0].zA - s[0].zB < 1e-9) s = s.slice(1);
       if (op.tipo === "desbExt") { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim (acabamento já faz pelo cortarPerfilPontos)
+      s = estenderIntervalos(s, p, false); // ESTENDER início / fim do percurso
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -1374,6 +1375,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                     const pr: { z: number; x: number }[] = [];
                     pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4 && (v.x - u.x) * (q.x - v.x) + (v.z - u.z) * (q.z - v.z) > 0) pr.pop(); } pr.push(q); }); // só junta reta que continua no mesmo sentido (desce/sobe na parede fica)
                     { const [aX, bX] = pontosXZ(p, fxs, Lb); const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
+{ const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0; const ang = (v: any) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180; if (eiL > 0 && pr.length) { const a = ang(p.eiA); const q = pr[0]; pr.unshift({ z: q.z + eiL * Math.cos(a), x: q.x + 2 * eiL * Math.sin(a) }); } if (efL > 0 && pr.length) { const a = ang(p.efA); const q = pr[pr.length - 1]; pr.push({ z: q.z - efL * Math.cos(a), x: q.x + 2 * efL * Math.sin(a) }); } } // ESTENDER início / fim do contorno do canal
 const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     const topoA = Math.max(nivelSpan(zPA), pr[0].x) + 0.5;
                     const topoB = Math.max(nivelSpan(zPB), pr[pr.length - 1].x) + 0.5;
@@ -1708,6 +1710,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         // a FACE do fundo NÃO entra no contorno: quem faceia o fundo é o bloco FUNDO (respeita a barra, a folga e o recuo X)
         let s = s0Int.filter((q) => !(Math.abs(q.zA - q.zB) < 1e-6 && Math.abs(q.zA - zFundoS0) < 1e-4));
       { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim
+          s = estenderIntervalos(s, p, true); // ESTENDER início / fim do percurso
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbInt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -2180,6 +2183,18 @@ function pontosXZ(p: any, fxs: StarTMFaixa[], dzFim = 0): [StarPtXZ | undefined,
 }
 const msgXZ = (p: any) => "(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 0 ? " - INICIO D" + fmt(p.xI) : "") + ((p.xF ?? 0) > 0 ? " - FIM D" + fmt(p.xF) : "") + ")";
 
+// ESTENDER INÍCIO / FIM DO PERCURSO (como nos CAM): prolonga o perfil escolhido antes do começo e depois do fim,
+// com o comprimento (mm) e o ângulo (graus a partir do eixo Z: 0 = reto em Z para fora, 90 = sobe reto em X) de cada operação.
+function estenderIntervalos(s: StarTMIntervalo[], p: any, interno: boolean): StarTMIntervalo[] {
+  if (!s.length) return s;
+  const sg = interno ? -1 : 1; // externo: sai para o Ø maior | interno: sai para o centro (sempre para o lado sem material)
+  const ang = (v: any) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180;
+  let r = s;
+  const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0;
+  if (eiL > 0) { const a = ang(p.eiA); const q = r[0]; r = [{ ...q, zA: q.zA + eiL * Math.cos(a), zB: q.zA, xa: Math.max(0, q.xa + sg * 2 * eiL * Math.sin(a)), xb: q.xa }, ...r]; }
+  if (efL > 0) { const a = ang(p.efA); const q = r[r.length - 1]; r = [...r, { ...q, zA: q.zB, zB: q.zB - efL * Math.cos(a), xa: q.xb, xb: Math.max(0, q.xb + sg * 2 * efL * Math.sin(a)) }]; }
+  return r;
+}
 function cortarPerfilPontos(pts: StarTMPt[], a?: { x: number; z: number }, b?: { x: number; z: number }): StarTMPt[] {
   if (pts.length < 2 || (!a && !b)) return pts;
   const proj = (q: { x: number; z: number }) => {
@@ -2245,3 +2260,160 @@ function rPecaExtStar(geo: StarTMGeo, z: number): number {
 
 // Linhas geradas por operação (id -> linhas). O painel usa para OCULTAR o traço de uma ferramenta no simulador.
 export const blocosOpsGerados: Record<string, string[]> = {};
+
+
+// =====================================================================================================
+// ERGOMAT TBSy 60 (N09) - 2 CANAIS, MESMO MOTOR ÚNICO (cálculo da Star), só a ESCRITA é da TBSy
+// Padrão aprendido dos programas reais TC103003 e CORPO_25 (arquivo .P-2 = H1 / sem extensão = H2):
+//  TI1  = torre inferior, programa H1, fuso principal G54 (Z- entra na peça), troca G0G53X320(M89)/G0G53Z100
+//  TS2  = torre superior, programa H2, fuso principal G54 (X NEGATIVO, Z- entra na peça), troca G0G53X235Z280Y0
+//  HIBO = torre superior T521/T522/T523, programa H2, contrafuso G55 (Z+ entra pela face do corte), S2
+//  CORTE = sempre pelo V1 (bedame de cima), no H1; o contrafuso (T101 na TS2) pega a peça antes do corte
+// =====================================================================================================
+export type TbsyPosto = "TI1" | "TS2" | "HIBO";
+export function postoTbsy(op: StarTMOp): TbsyPosto {
+  const p = (op as any).posto;
+  if (p === "TI1" || p === "TS2" || p === "HIBO") return p;
+  return (op.cab ?? "H1") === "H2" ? "TS2" : "TI1";
+}
+function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: number) => number; posto: TbsyPosto; g: string; aprox: string }): string[] {
+  const f = fmt;
+  const out: string[] = [];
+  let lim: string | null = null;
+  let primeiroMov = true;
+  let primeiroG1 = true;
+  const troca = o.flipZ !== o.negX; // espelhar um eixo inverte o sentido do arco
+  const sp = o.posto === "HIBO" ? "S2=" : "S1=";
+  const mGiro = o.posto === "HIBO" ? "M23" : "M3";
+  const zC = (c: string) => (o.flipZ && !/SOBREMETAL/.test(c) ? c.replace(/\bZ(-?\d+(?:\.\d+)?)/g, (_m, v) => "Z" + f(o.zMap(parseFloat(v)))) : c);
+  ls.forEach((l0) => {
+    let l = l0.trim();
+    if (!l) return;
+    const pula = l.startsWith("/");
+    if (pula) l = l.slice(1).trim();
+    if (/^\(.*\)$/.test(l)) { out.push(zC(l)); return; }
+    const ip = l.indexOf("(");
+    const com = ip >= 0 ? zC(l.slice(ip)) : "";
+    const cod = (ip >= 0 ? l.slice(0, ip) : l).trim();
+    if (/^T\d+$/.test(cod) || cod === "M25" || /^T0M0?1$/.test(cod) || /^M0?1$/.test(cod) || cod === "G0T0" || cod === "M101" || cod === "G97") return;
+    let mm: RegExpMatchArray | null;
+    if ((mm = cod.match(/^G50S(\d+)$/))) { lim = mm[1]; return; }
+    if ((mm = cod.match(/^G99G96S(\d+)M3$/))) { out.push("G96" + mGiro + sp + mm[1]); if (lim) out.push("G92S=" + lim); lim = null; return; }
+    if ((mm = cod.match(/^G99G97S(\d+)M3$/))) { out.push("G97" + sp + mm[1] + mGiro); return; }
+    const pal: string[] = cod.match(/[A-Z][-+]?[\d.]*/g) || [];
+    const temPQ = pal.some((w) => w[0] === "P") && pal.some((w) => w[0] === "Q");
+    const g76 = pal.includes("G76");
+    const temZ = pal.some((w) => w[0] === "Z");
+    const w: string[] = [];
+    let mov = false, g1 = false, pausa = false;
+    pal.forEach((p) => {
+      const L = p[0];
+      const v = p.slice(1);
+      if (L === "G") {
+        const g = parseFloat(v);
+        if (g === 0 || g === 1) { w.push("G" + g); mov = true; if (g === 1) g1 = true; }
+        else if (g === 2 || g === 3) { w.push(troca ? (g === 2 ? "G3" : "G2") : "G" + g); mov = true; g1 = true; }
+        else { if (g === 4) pausa = true; w.push(p); }
+      } else if (v === "") w.push(p);
+      else if (L === "X") w.push((pausa ? "U" : "X") + f(!pausa && o.negX ? -parseFloat(v) : parseFloat(v)));
+      else if (L === "Z") w.push("Z" + f(o.flipZ ? o.zMap(parseFloat(v)) : parseFloat(v)));
+      else if (L === "K" || L === "W") w.push(L + f(o.flipZ ? -parseFloat(v) : parseFloat(v)));
+      else if (L === "I" || (L === "U" && temPQ) || (L === "R" && g76 && temZ)) w.push(L + f(o.negX ? -parseFloat(v) : parseFloat(v)));
+      else if (L === "T") { /* a TBSy chama a ferramenta na linha T própria */ }
+      else w.push(p);
+    });
+    if (!w.length) return;
+    if (mov && primeiroMov) { const iG0 = w.indexOf("G0"); if (iG0 >= 0) w.splice(iG0 + 1, 0, o.g); else w.unshift(o.g); w.push(o.aprox); primeiroMov = false; }
+    if (g1 && primeiroG1) { const iG = w.findIndex((x) => /^G[123]$/.test(x)); if (iG >= 0) w.splice(iG + 1, 0, "G95"); primeiroG1 = false; }
+    out.push((pula ? "/" : "") + w.join("") + com);
+  });
+  return out;
+}
+export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg): StarGerarResult {
+  const f = fmt;
+  const nm = (cfg.nome || "PECA").trim().toUpperCase().replace(/[^A-Z0-9_\-]/g, "_") || "PECA";
+  const bD = cfg.bD;
+  // motor único SEM o recuo X320 da DNA dentro da operação (a TBSy faz a troca segura pelo G53 aqui embaixo)
+  const { gerarOpLinhas, deslH1 } = criarEmissorOpsStar(ops, geo, { ...cfg, maqId: undefined, recuoTroca: undefined });
+  const zH1map = (z: number) => geo.zFront + deslH1 - z; // Z da Star (+ entra) -> Z da TBSy G54 (- entra)
+  const ativos = ops.filter((o) => o.ativo && o.tipo !== "corte" && (!cfg.soloId || o.id === cfg.soloId));
+  const corteOp = ops.find((o) => o.ativo && o.tipo === "corte");
+  const tCod = (op: StarTMOp) => { const n = parseInt(String(op.ferr || "").replace(/\D/g, ""), 10); return isFinite(n) && n > 0 ? n : 0; };
+  const desc = (op: StarTMOp) => (op.nomeFerr || DESC_TIPO[op.tipo] || op.tipo).toUpperCase().replace(/[()]/g, "");
+  const nSeq = (t: number) => (t >= 100 ? Math.floor(t / 100) : t);
+  const corpoOp = (op: StarTMOp, posto: TbsyPosto) => {
+    const ls = gerarOpLinhas(op, posto === "HIBO" ? "H2" : "H1");
+    const r = traduzTbsy(ls, posto === "TI1" ? { flipZ: true, negX: false, zMap: zH1map, posto, g: "G54", aprox: "M7M87" } : posto === "TS2" ? { flipZ: true, negX: true, zMap: zH1map, posto, g: "G54", aprox: "M57" } : { flipZ: false, negX: false, zMap: (z) => z, posto, g: "G55", aprox: "M107" });
+    blocosOpsGerados[op.id] = r;
+    return r;
+  };
+  // grupos na ORDEM da árvore: HIBO roda em paralelo no início (peça anterior no contrafuso);
+  // cada sequência de TS2 vira uma "janela" em que o H1 fica recuado esperando (sincronismo)
+  type Bloco = { tipo: "TI1" | "TS2"; ops: StarTMOp[] };
+  const blocos: Bloco[] = [];
+  const hibo: StarTMOp[] = [];
+  ativos.forEach((op) => {
+    const pt = postoTbsy(op);
+    if (pt === "HIBO") { hibo.push(op); return; }
+    const ult = blocos[blocos.length - 1];
+    if (ult && ult.tipo === pt) ult.ops.push(op); else blocos.push({ tipo: pt, ops: [op] });
+  });
+  const JANELAS: [number, number][] = [[280, 285], [290, 295], [300, 305]];
+  const nJan = blocos.filter((b) => b.tipo === "TS2").length;
+  if (nJan > JANELAS.length) return { textos: ["", ""], nomes: [nm + ".P-2", nm], doisCanais: true, erro: "TBSy: no máximo " + JANELAS.length + " trechos separados de TS2 (agrupe as operações da torre superior em sequência)." };
+  const faceOp = ativos.find((o) => o.tipo === "face" && postoTbsy(o) === "TI1");
+  const sobreFace = (cfg.brutoDz ?? 0) > 0 ? cfg.brutoDz! : faceOp ? (faceOp.p.sobre ?? 0.3) : 0.3;
+  const h1: string[] = [];
+  const h2: string[] = [];
+  // ---------------- H1 (.P-2): TI1 + V1 ----------------
+  h1.push("%", "<" + nm + ">", "(GERADO PELO TORNO MASTER - CONFERIR ANTES DE RODAR)", "(G54 = FUSO PRINCIPAL / V1 = BEDAME DE CORTE)");
+  h1.push("G0G53X320Z100V350", "M250");
+  h1.push("T808(TOPE - CONFERIR POSICAO)", "G0G54Z10", "/G0X0", "/G1G94Z-12F3000(CONFERIR)", "M260", "/G65P9500", "M270", "/M11", "G4U0.5", "G1G94Z10F3000", "Z" + f(sobreFace), "M10", "G4U0.5", "G0Z10");
+  // ---------------- H2 (sem extensão): HIBO + TS2 + contrafuso ----------------
+  h2.push("%", "<" + nm + ">", "(GERADO PELO TORNO MASTER - CONFERIR ANTES DE RODAR)", "(G54 = FUSO PRINCIPAL / G55 = CONTRAFUSO - HIBO)");
+  h2.push("G0G53X235Z280Y0", "M250", "M260", "/G65P9500", "M270");
+  hibo.forEach((op) => {
+    const t = tCod(op);
+    if (!(t >= 521 && t <= 523) && !(t >= 21 && t <= 23)) h2.push("(ATENCAO: HIBO TRABALHA SO NAS POSICOES T521 T522 T523 - CONFERIR " + (op.ferr || "") + ")");
+    h2.push("", "N" + nSeq(t) + "G0G53X235Z280Y0", "T" + t + "(" + desc(op) + ")");
+    corpoOp(op, "HIBO").forEach((l) => h2.push(l));
+    h2.push("M25M109", "G4U.5");
+  });
+  // tira do contrafuso a peça da volta anterior
+  h2.push("", "N1G0G53X235Z280Y0", "T101", "(EXPULSAR PECA)", "M64", "G0G53X259Y0Z200.", "G0G53Z90(CONFERIR)", "M111", "G4U.5", "M110", "G0G53Z200.M65");
+  let primeiraTI1 = true;
+  let jan = 0;
+  blocos.forEach((b) => {
+    if (b.tipo === "TI1") {
+      b.ops.forEach((op) => {
+        const t = tCod(op);
+        h1.push("");
+        if (primeiraTI1) { h1.push("N" + nSeq(t) + "G0G53X320"); primeiraTI1 = false; } else h1.push("N" + nSeq(t) + "G0G53X320M89");
+        h1.push("G0G53Z100", "T" + t + "(" + desc(op) + ")");
+        corpoOp(op, "TI1").forEach((l) => h1.push(l));
+      });
+    } else {
+      const [mA, mB] = JANELAS[jan++];
+      // H1 recua e espera a torre superior trabalhar no fuso principal
+      h1.push("", "G0G53X320M89", "G0G53Z100", "M" + mA, "(ESPERA A TORRE SUPERIOR - TS2)", "M" + mB);
+      h2.push("", "M" + mA);
+      b.ops.forEach((op) => {
+        const t = tCod(op);
+        h2.push("", "N" + nSeq(t) + "G0G53X235Z280Y0", "T" + t + "(" + desc(op) + ")");
+        corpoOp(op, "TS2").forEach((l) => h2.push(l));
+      });
+      h2.push("G0G53X235Z280Y0", "M" + mB);
+    }
+  });
+  // ---------------- CORTE pelo V1 + contrafuso pega a peça ----------------
+  const rpmC = corteOp ? (corteOp.p.mr === 1 && (corteOp.p.rpm ?? 0) > 0 ? Math.round(corteOp.p.rpm) : Math.min(cfg.rpmMax || 3000, Math.round(((corteOp.p.vc ?? 100) * 1000) / (Math.PI * Math.max(bD, 1))))) : 1500;
+  const fC = corteOp && (corteOp.p.f ?? 0) > 0 ? corteOp.p.f : 0.05;
+  const xfC = corteOp && corteOp.p.xf !== undefined ? corteOp.p.xf : -1.5;
+  const pega = Math.max(1, cfg.pega2 ?? 8);
+  h1.push("", "N11G0G53X320M89", "G0G53Z100", "M310", "(CORTE)", "M390", "S1=" + rpmC + "M3", "M395", "G0G53X320Z100V350M7", "M400", "M410");
+  if (corteOp && (!cfg.soloId || corteOp.id === cfg.soloId)) h1.push("G0G54V" + f(Math.ceil(bD + 4)), "G95G1V" + f(xfC) + "F" + f(fC));
+  else h1.push("(CORTE DESTICADO NA ARVORE - SEM MOVIMENTO DO V1 - CONFERIR)");
+  h1.push("M415", "M420", "G0G53V350M9", "M30", "%");
+  h2.push("", "N11G53X235Z300Y0M59", "M310", "T101(AGARRAR)", "M390", "S1=" + rpmC + "M3", "S2=" + rpmC + "M24", "M395", "M45", "M400", "G0G54X0Y0.Z18M111", "G4U1.5", "G1G94Z-" + f(pega) + "F4000", "M110", "M410", "M415", "G1W2", "M420", "G1Z10", "M46", "G0G53X235Z280Y0M25", "M30", "%");
+  return { textos: [h1.join("\n"), h2.join("\n")], nomes: [nm + ".P-2", nm], doisCanais: true };
+}
