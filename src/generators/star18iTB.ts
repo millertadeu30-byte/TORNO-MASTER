@@ -72,6 +72,7 @@ export interface StarGerarCfg {
   soloId?: string; // simular só esta operação (as outras ficam só no cálculo)
   cursoCab?: number;
   compW?: number; // W do G266 (comprimento da peça; editável)
+  brutoDz?: number; // face do BRUTO à frente do zero da peça (mm): aproximação e faceamento do H1 respeitam o bruto
   ladoBedameK?: number;
   estTope?: number;
   estBedame?: number;
@@ -747,7 +748,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const aprox = p.apz !== undefined ? p.apz : 2;
     const xSeg = xSegCfg !== undefined && isFinite(xSegCfg) ? xSegCfg : bD + 2;
     const zCoord = (zGeo: number) => (canal === "H2" ? (espH2 ? geoBaseStar.zFront - zGeo - deslH2 : zH2(zGeo)) : zH1(zGeo));
-    const zFrontClear = zCoord(canal === "H2" && !espH2 ? geo.zBack : geo.zFront) - Math.max(1, aprox);
+    const dzBruto = canal === "H2" ? 0 : Math.max(0, cfg.brutoDz ?? 0); // H1: a face do bruto pode estar à frente do zero
+    const zFrontClear = zCoord(canal === "H2" && !espH2 ? geo.zBack : geo.zFront) - Math.max(1, aprox) - dzBruto;
 
     // Impossibility guards: comment out instead of emitting colliding toolpath
     if (op.tipo === "furo") {
@@ -811,7 +813,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       const apFace = Math.max(0.05, (p.ap ?? 1) > 0 ? p.ap : 1);
       emitSpindle(lines, p, bD, 0, acionada);
       const zEndS = Math.max(zcIniF, zcFimF);
-        const zStartS = Math.abs(zcIniF - zcFimF) < 0.001 ? zEndS - (p.sobre ?? 0.5) : Math.min(zcIniF, zcFimF);
+        const zStartS0 = Math.abs(zcIniF - zcFimF) < 0.001 ? zEndS - (p.sobre ?? 0.5) : Math.min(zcIniF, zcFimF);
+      // BRUTO: faceamento da frente começa na face do bruto (não corta tudo de uma vez)
+      const zStartS = dzBruto > 0 && Math.abs(zFim - geo.zFront) < 1e-3 ? Math.min(zStartS0, zCoord(geo.zFront) - dzBruto) : zStartS0;
+      if (zStartS < zStartS0 - 1e-6) lines.push("(FACEIA A PARTIR DA FACE DO BRUTO - " + fmt(dzBruto) + " MM A FRENTE DO ZERO)");
       const passos: number[] = [];
       let zz = zStartS;
       let g = 0;

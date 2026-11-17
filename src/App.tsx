@@ -1,3 +1,58 @@
+// BRUTO DIGITADO (sem STEP): cilindro, tubo ou sextavado. Vira um "perfil de bruto" igual ao do STEP,
+// então aparece tracejado no gráfico, pode ser ocultado e manda no Ø de partida de todas as operações.
+type TMBrutoTipo = "cilindro" | "tubo" | "sext";
+type TMBrutoMan = { tipo: TMBrutoTipo; d: number; di: number; L: number };
+function tmBrutoPerfil(m: TMBrutoMan): PartProfile {
+  const R = (m.tipo === "sext" ? m.d / Math.cos(Math.PI / 6) : m.d) / 2; // sextavado: d = medida entre faces (chave); gira no Ø entre cantos
+  const ri = m.tipo === "tubo" ? m.di / 2 : 0;
+  const L = m.L;
+  const curves = [
+    [{ a: 0, r: R }, { a: L, r: R }],
+    [{ a: L, r: ri }, { a: L, r: R }],
+    [{ a: 0, r: ri }, { a: 0, r: R }],
+    ...(ri > 0 ? [[{ a: 0, r: ri }, { a: L, r: ri }]] : []),
+  ];
+  const f = (n: number) => String(Math.round(n * 1000) / 1000).replace(".", ",");
+  const nome = m.tipo === "tubo" ? "BRUTO TUBO Ø" + f(m.d) + " x Ø" + f(m.di) + " x " + f(L) : m.tipo === "sext" ? "BRUTO SEXTAVADO " + f(m.d) + " (cantos Ø" + f(2 * R) + ") x " + f(L) : "BRUTO CILINDRO Ø" + f(m.d) + " x " + f(L);
+  return { name: nome, curves, aMin: 0, aMax: L, rMax: R, rMinBore: ri > 0 ? ri : null, facesTotal: 0, facesUsed: 0, manual: m } as PartProfile;
+}
+function TMBrutoManual({ atual, dzAtual, onAplicar, onRemover }: { atual: PartProfile | null; dzAtual: number; onAplicar: (p: PartProfile, dz: number) => void; onRemover?: () => void }) {
+  const man = (atual as any)?.manual as TMBrutoMan | undefined;
+  const [tipo, setTipo] = useState<TMBrutoTipo>(man?.tipo ?? "cilindro");
+  const [d, setD] = useState(man ? String(man.d) : "");
+  const [di, setDi] = useState(man && man.di ? String(man.di) : "");
+  const [L, setL] = useState(man ? String(man.L) : "");
+  const [dz, setDz] = useState(String(man ? dzAtual : 0));
+  const num = (s: string) => parseFloat(String(s).replace(",", "."));
+  const vd = num(d), vdi = num(di), vL = num(L), vdz = num(dz);
+  const erro = !(vd > 0) ? "Digite o diâmetro" + (tipo === "sext" ? " (medida entre faces)" : "") : !(vL > 0) ? "Digite o comprimento" : tipo === "tubo" && !(vdi > 0 && vdi < vd) ? "Ø interno tem que ser maior que 0 e menor que o Ø externo" : "";
+  const campo = (rot: string, v: string, set: (s: string) => void, dica?: string) => (
+    <label className="flex items-center justify-between gap-2 text-xs mb-1.5" title={dica}>
+      <span className="text-zinc-600">{rot}</span>
+      <input type="text" inputMode="decimal" value={v} onFocus={(e) => e.target.select()} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} onChange={(e) => set(e.target.value)} className="w-20 border border-zinc-300 rounded px-1.5 py-1 text-right font-mono focus:outline-none focus:border-sky-500" />
+    </label>
+  );
+  return (
+    <div className="border border-zinc-200 rounded-lg p-2.5 mb-3">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 mb-1.5">Bruto sem STEP (digitar)</div>
+      <div className="grid grid-cols-3 gap-1.5 mb-2">
+        {([["cilindro", "Cilindro"], ["tubo", "Tubo"], ["sext", "Sextavado"]] as const).map(([v, rot]) => (
+          <button key={v} onClick={() => setTipo(v)} className={`px-1.5 py-1.5 rounded-lg border text-xs font-semibold transition ${tipo === v ? "border-sky-500 ring-2 ring-sky-200 text-sky-800" : "border-zinc-300 hover:border-zinc-400"}`}>{rot}</button>
+        ))}
+      </div>
+      {campo(tipo === "sext" ? "Medida entre faces - chave (mm)" : tipo === "tubo" ? "Ø externo (mm)" : "Ø (mm)", d, setD)}
+      {tipo === "sext" && vd > 0 && <div className="text-[10px] text-zinc-500 -mt-1 mb-1.5 text-right">gira no Ø entre cantos {(vd / Math.cos(Math.PI / 6)).toFixed(3)}</div>}
+      {tipo === "tubo" && campo("Ø interno (mm)", di, setDi, "O furo do tubo já existe: as operações internas começam dele")}
+      {campo("Comprimento (mm)", L, setL)}
+      {campo("Face do bruto à frente do zero H1 (mm)", dz, setDz, "Quanto a face do bruto fica para fora do Z0 da peça (sobremetal de face). 0 = face do bruto no zero")}
+      {erro && <div className="text-[11px] text-amber-700 mb-1.5">{erro}</div>}
+      <button disabled={!!erro} onClick={() => onAplicar(tmBrutoPerfil({ tipo, d: vd, di: tipo === "tubo" ? vdi : 0, L: vL }), isNaN(vdz) ? 0 : vdz)} className="w-full text-sm font-bold bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white rounded-lg px-3 py-2">{man ? "Atualizar bruto" : "Aplicar bruto"}</button>
+      {atual && onRemover && <button onClick={onRemover} className="w-full text-[11px] font-semibold text-rose-600 hover:text-rose-500 mt-1.5">Remover bruto (volta ao Ø automático)</button>}
+      <div className="text-[10px] text-zinc-500 text-center mt-2">ou anexe o STEP do bruto</div>
+    </div>
+  );
+}
+
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   FilePlus, 
@@ -1493,6 +1548,15 @@ export default function App() {
             })}
           </div>
 
+          {stepTarget === "bruto" && (
+            <TMBrutoManual
+              key={(stockProfile ? stockProfile.name : "vazio") + "_" + stockZero.offsetZ}
+              atual={stockProfile}
+              dzAtual={stockZero.offsetZ}
+              onAplicar={(pb, dz) => { setStockProfile(pb); setStockZero({ face: "direita", offsetZ: dz }); setShowStock(true); }}
+              onRemover={() => setStockProfile(null)}
+            />
+          )}
           {partError && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-3">{partError}</div>}
 
           {(() => {
@@ -2483,6 +2547,7 @@ export default function App() {
                 setPartZero={setPartZero}
                 onSentidoZ={setZSinal}
                 stockProfile={stockProfile}
+                stockZero={stockZero}
                 showStock={showStock}
                 setShowStock={setShowStock}
                 onAnexarStep={(alvo) => { setStepTarget(alvo); setTimeout(() => stepInputRef.current?.click(), 0); }}
@@ -3566,7 +3631,7 @@ function tmCortarPtsXZ<T extends TMPtXZ>(pts: T[], a?: TMPtXZ, b?: TMPtXZ, tol =
   return out.filter((q, k) => k === 0 || Math.hypot(q.x - out[k - 1].x, q.z - out[k - 1].z) > 1e-6);
 }
 
-function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
+function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; brutoDz?: number; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
   const f = tmFmt;
   const fmtInt = (n: number) => (Number.isInteger(n) ? String(n) : f(n));
   const out: string[] = [];
@@ -3597,6 +3662,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
   const nm = cfg.nome || "PECA";
   const bD = cfg.bD;
   const zF = geo.zFront;
+  const zFA = zF + Math.max(0, cfg.brutoDz ?? 0); // BRUTO: face do bruto à frente do zero - as aproximações em Z ficam fora dele
   // ROTAÇÃO escolhida em cada ferramenta: G96 (Vc constante) com G92 limitando, ou G97 rotação fixa
   const fuso = (p: Record<string, number>, dRef: number, padrao: number, coment = "") => {
     const modo = p.mr !== undefined ? p.mr : padrao;
@@ -3746,7 +3812,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       if (!intE) return;
       for (let k = iniM; k < out.length; k++) out[k] = espelha(out[k]);
       iniM = out.length;
-      W("G00 Z" + f(zF + aprox) + "; (SAI DO FURO)");
+      W("G00 Z" + f(zFA + aprox) + "; (SAI DO FURO)");
     };
     if (intE && (p.bm ?? 0) > 0 && (!faixasM.length || (op.tipo === "desbInt" ? dSegM + 2 * (p.ap ?? 1) < p.bm : dSegM < p.bm))) { // desbaste: a barra entra no furo que o 1º passe abre
       W("(ALARME: BARRA D" + f(p.bm) + " NAO ENTRA NO FURO D" + f(dSegM) + " - OPERACAO NAO GERADA);");
@@ -3770,7 +3836,9 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       // Começo/Fim em Z (região) e em X (Ø inicial / Ø final). Ciclo: linhas, G94, G72, G75 ou G74.
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
       const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
-      const zTopo = zIni - zFim < 0.001 ? zFim + p.sobre : zIni; // marcou só a linha da face: usa o sobremetal
+      const zTopo0 = zIni - zFim < 0.001 ? zFim + p.sobre : zIni; // marcou só a linha da face: usa o sobremetal
+      const zTopo = Math.abs(zFim - zF) < 1e-3 && zFA > zTopo0 + 1e-6 ? zFA : zTopo0; // BRUTO: começa na face do bruto
+      if (zTopo > zTopo0 + 1e-6) W("(FACEIA A PARTIR DA FACE DO BRUTO Z" + f(zTopo) + ");");
       const xi = p.xi > 0 ? p.xi : bD + 2;
       const xf = p.xf !== undefined ? p.xf : -1.6;
       const cic = op.ciclo ? op.cicloSel || "G94" : "";
@@ -4271,10 +4339,10 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
       W("(CENTRO DE Z" + f(zIni) + " ATE Z" + f(zFim) + ");");
       W("G97 S" + p.rpm + " M03;");
-      W("G00 X0.0 Z" + f(zF + aprox) + " M08;");
+      W("G00 X0.0 Z" + f(zFA + aprox) + " M08;");
       if (zIni < zF - 0.01) W("G00 Z" + f(zIni + aprox) + "; (COMECA DENTRO DO FURO JA FEITO)");
       W("G01 Z" + f(zFim) + " F" + p.f + ";");
-      W("G00 Z" + f(zF + aprox) + ";");
+      W("G00 Z" + f(zFA + aprox) + ";");
       recuar();
       return;
     }
@@ -4284,7 +4352,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       if (op.tipo === "furo") {
         W("(BROCA D" + f(p.d) + " ATE Z" + f(zFim) + ");");
         W("G97 S" + p.rpm + " M03;");
-        W("G00 X0.0 Z" + f(zF + aprox) + " M08;");
+        W("G00 X0.0 Z" + f(zFA + aprox) + " M08;");
         if (zIni < zF - 0.01) W("G00 Z" + f(zIni + aprox) + "; (COMECA DENTRO DO FURO JA FEITO)");
         if (op.ciclo) {
           W("G83 X0.0 Z" + f(zFim) + " Q" + Math.round(p.q * 1000) + " F" + p.f + "; (Q EM MILESIMO)");
@@ -4298,14 +4366,14 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
           while (gFuro++ < 2000 && z > zFim + 1e-6) {
             z = Math.max(zFim, z - qVal);
             W("G01 Z" + f(z) + " F" + p.f + ";");
-            W("G00 Z" + f(zF + aprox) + ";");
+            W("G00 Z" + f(zFA + aprox) + ";");
             if (z > zFim + 1e-6) W("G00 Z" + f(z + 0.5) + ";");
           }
         }
       } else {
         W("(MACHO PASSO " + f(p.passo) + " ATE Z" + f(zFim) + ");");
         W("M29 S" + p.rpm + "; (MACHO RIGIDO - CONFERIR)");
-        W("G00 X0.0 Z" + f(zF + aprox) + " M08;");
+        W("G00 X0.0 Z" + f(zFA + aprox) + " M08;");
         if (zIni < zF - 0.01) W("G00 Z" + f(zIni + aprox) + "; (COMECA DENTRO DO FURO JA FEITO)");
         W("G84 Z" + f(zFim) + " F" + p.passo + ";");
         W("G80;");
@@ -4326,7 +4394,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
       W("G00 X" + f(menor - 1) + " Z" + f(zS + aprox) + " M08;");
       W("G76 P010060 Q50 R0.05;");
       W("G76 X" + f(menor + 2 * h) + " Z" + f(zE) + " P" + Math.round(h * 1000) + " Q" + Math.round(p.q * 1000) + " F" + p.passo + ";");
-      W("G00 Z" + f(zF + aprox) + "; (SAI DO FURO)");
+      W("G00 Z" + f(zFA + aprox) + "; (SAI DO FURO)");
       recuar();
       return;
     }
@@ -4503,6 +4571,7 @@ export const PainelPrograma: React.FC<{
   setPartZero: (z: PartZeroConfig) => void;
   onSentidoZ: (s: 1 | -1) => void;
   stockProfile: PartProfile | null;
+  stockZero?: PartZeroConfig;
   showStock: boolean;
   setShowStock: (v: boolean) => void;
   onAnexarStep: (alvo: "peca" | "bruto") => void;
@@ -4515,7 +4584,7 @@ export const PainelPrograma: React.FC<{
   onFix: (z: TMFixZone[]) => void;
   onGerar: (r: { textos: [string, string]; nomes: [string, string]; doisCanais?: boolean; unicoCanal?: boolean }, vivo?: boolean) => void;
   onClose: () => void;
-}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onOcultos, onFix, onGerar, onClose }) => {
+}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, stockZero, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onOcultos, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
     try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
   };
@@ -4641,7 +4710,14 @@ export const PainelPrograma: React.FC<{
   };
   useEffect(() => { onSentidoZ(sZ); }, [sZ]);
   const bDAuto = stockProfile && showStock ? stockProfile.rMax * 2 : geo ? geo.dMax + 2 : 0;
-  const bD = ((cfg as any).bA ?? 0) > 0 ? (cfg as any).bA : bDAuto; // Ø da barra (A do G266): editável em DADOS DA MÁQUINA;
+  const bD = stockProfile && showStock ? stockProfile.rMax * 2 : ((cfg as any).bA ?? 0) > 0 ? (cfg as any).bA : bDAuto; // BRUTO MANDA: com bruto (STEP ou digitado) o Ø dele vale para tudo
+  // face do bruto à frente do zero da peça (mm): aproximações e faceamento respeitam o bruto
+  const brutoDz = (() => {
+    if (!stockProfile || !showStock || !stockZero || !geo) return 0;
+    let zMax = -Infinity;
+    profileToLathe(stockProfile, stockZero).forEach((c) => c.forEach((q) => { if (q.z > zMax) zMax = q.z; }));
+    return isFinite(zMax) ? Math.max(0, Math.round((zMax - geo.zFront) * 1000) / 1000) : 0;
+  })(); // Ø da barra (A do G266): editável em DADOS DA MÁQUINA;
 
   // peça nova sem operações: sugere as operações
   useEffect(() => {
@@ -4690,6 +4766,8 @@ export const PainelPrograma: React.FC<{
     );
   }, [partZero.face, partZero.offsetZ, partProfile, geo]);
 
+  // TUBO: Ø interno do bruto (STEP ou digitado) = furo que já existe para as internas
+  const diTubo = stockProfile && showStock && stockProfile.rMinBore ? Math.round(stockProfile.rMinBore * 2000) / 1000 : 0;
   // PRÉ-FURO AUTOMÁTICO: operações internas usam o furo já aberto pela furação ANTERIOR que cobre a região
   // (ex.: furou com broca Ø13,5 de Z0 a Z11 -> o desbaste interno nessa região começa de Ø13,5)
   useEffect(() => {
@@ -4698,10 +4776,10 @@ export const PainelPrograma: React.FC<{
       if (!o.ativo || !["desbInt", "acabInt", "canalInt", "roscaInt"].includes(o.tipo) || !o.faixas.length) return o;
       const lo = Math.min(...o.faixas.map((fx) => Math.min(fx[0], fx[1])));
       const hi = Math.max(...o.faixas.map((fx) => Math.max(fx[0], fx[1])));
-      let pre = 0;
+      let pre = diTubo; // TUBO: o furo do bruto já existe (0 = barra maciça)
       let zPonta = 0; // Z (geo) onde a PONTA da broca parou
       let angP = 120; // ângulo da ponta da broca
-      let coneTirado = false; // um desbaste interno ANTERIOR (com barra informada) já faceou o cone
+      let coneTirado = diTubo > 0; // furo do tubo não tem cone de broca // um desbaste interno ANTERIOR (com barra informada) já faceou o cone
       ops.slice(0, i).forEach((an) => {
         if (!an.ativo || !an.faixas.length) return;
         const alo = Math.min(...an.faixas.map((fx) => Math.min(fx[0], fx[1])));
@@ -4718,7 +4796,7 @@ export const PainelPrograma: React.FC<{
       return o;
     });
     if (mudou) setOps(novas);
-  }, [ops]);
+  }, [ops, diTubo]);
 
   // traço oculto no simulador (botão ● / ◌ de cada operação)
   useEffect(() => { if (onOcultos) onOcultos(ops.filter((o) => (o.p.oc ?? 0) === 1).map((o) => o.id)); }, [ops]);
@@ -5088,7 +5166,7 @@ const avisosLados: string[] = (() => {
     soloId: soloOp || undefined,
     pega2: maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? cfg.pega2Maq : cfg.pega2,
     cursoCab: cfg.cursoCab,
-    compW: (cfg as any).compW,
+    compW: (cfg as any).compW, brutoDz,
     ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
     estTope: cfg.estTope,
     estBedame: cfg.estBedame,
@@ -5144,7 +5222,7 @@ const avisosLados: string[] = (() => {
       return;
     }
     setAvisoMaq("");
-    onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
+    onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
@@ -5169,7 +5247,7 @@ const avisosLados: string[] = (() => {
         if (!res.erro) onGerar({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any, true);
         return;
       }
-      onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
+      onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
     }, 400);
     return () => clearTimeout(t);
   }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina, soloOp]);
@@ -5345,7 +5423,7 @@ return (
           </div>
           <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
             <span className="text-zinc-400">Bruto:</span>
-            {stockProfile ? sw(showStock, () => setShowStock(!showStock), "STEP do bruto Ø" + tmFmt(stockProfile.rMax * 2)) : <span className="text-zinc-500">sem STEP do bruto (usando Ø{tmFmt(bD)})</span>}
+            {stockProfile ? sw(showStock, () => setShowStock(!showStock), ((stockProfile as any).manual ? "bruto digitado Ø" : "STEP do bruto Ø") + tmFmt(stockProfile.rMax * 2) + (stockProfile.rMinBore ? " furo Ø" + tmFmt(stockProfile.rMinBore * 2) : "")) : <span className="text-zinc-500">sem STEP do bruto (usando Ø{tmFmt(bD)})</span>}
             <button onClick={() => onAnexarStep("bruto")} className="text-[10px] font-bold px-2 py-0.5 rounded border border-zinc-700 hover:border-zinc-500">{stockProfile ? "Trocar bruto" : "Anexar bruto (opcional)"}</button>
           </div>
         </div>
@@ -5477,7 +5555,7 @@ return (
                       <TMOptNum
                         v={(cfg as any).bA}
                         set={(n) => setCfg((c) => ({ ...c, bA: n } as any))}
-                        placeholder={tmFmt(bDAuto)}
+                        placeholder={tmFmt(stockProfile && showStock ? bD : bDAuto)}
                         cls={inp + " w-20 "}
                       />
                     </label>
