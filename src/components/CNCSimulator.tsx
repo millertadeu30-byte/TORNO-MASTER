@@ -1398,6 +1398,8 @@ export function simularGCodeEColisoes(
     {
       const g53 = new Set<number>();
       linhasSim.forEach((ln, i) => { if (/G53(?!\d)/.test(ln.replace(/\([^)]*\)/g, "").toUpperCase())) g53.add(i); });
+      // blocos marcados (NAO SIMULAR)...(FIM NAO SIMULAR): tope da barra, pega e expulsão da peça no contrafuso - não são usinagem
+      { let ns = false; linhasSim.forEach((ln, i) => { const u = ln.toUpperCase(); if (u.includes("(NAO SIMULAR")) ns = true; if (ns) g53.add(i); if (u.includes("(FIM NAO SIMULAR")) ns = false; }); }
       if (g53.size) {
         let antG53 = false;
         plotList = plotList.filter((it) => { const li = Math.floor((it as any).linhaId ?? 0); const eh = g53.has(li); const sai = antG53 && !eh; antG53 = eh; return !eh && !sai; });
@@ -1405,6 +1407,8 @@ export function simularGCodeEColisoes(
     }
     const zH2Sim = fixZones.find((f) => typeof f.zH2 === "number")?.zH2;
     if (canalSim >= 2 && typeof zH2Sim === "number") {
+      // para que lado o Z do H2 entra na peça: pela pega do contrafuso (Lado 2) ou, sem ela, ao contrário da fixação do Lado 1 (suíço = -, torno normal = +)
+      const dirInH2 = (() => { const z2 = fixZones.find((q) => q.lado === 2); if (z2) return Math.sign((z2.za + z2.zb) / 2 - zH2Sim) || -1; const z1 = fixZones.find((q) => q.lado === 1); if (z1) return -Math.sign((z1.za + z1.zb) / 2 - zH2Sim) || -1; return -1; })();
       const dentro: boolean[] = [];
       const espelha: boolean[] = [];
       const temM75 = linhasSim.some((ln) => /M75(?!\d)/.test(ln.replace(/\([^)]*\)/g, "").toUpperCase()));
@@ -1436,8 +1440,8 @@ export function simularGCodeEColisoes(
         .map((it) => {
           if (!espelha[Math.floor((it as any).linhaId ?? 0)]) return it;
           const n: any = { ...it };
-          ["z1", "z2", "zc", "z"].forEach((k) => { if (typeof n[k] === "number") n[k] = zH2Sim - n[k]; });
-          if (n.type === "arc") n.isG3 = !n.isG3;
+          ["z1", "z2", "zc", "z"].forEach((k) => { if (typeof n[k] === "number") n[k] = zH2Sim + dirInH2 * n[k]; });
+          if (n.type === "arc" && dirInH2 < 0) n.isG3 = !n.isG3;
           return n;
         });
     }

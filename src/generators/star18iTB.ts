@@ -2368,7 +2368,7 @@ export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGer
   // ---------------- H1 (.P-2): TI1 + V1 ----------------
   h1.push("%", "<" + nm + ">", "(GERADO PELO TORNO MASTER - CONFERIR ANTES DE RODAR)", "(G54 = FUSO PRINCIPAL / V1 = BEDAME DE CORTE)");
   h1.push("G0G53X320Z100V350", "M250");
-  h1.push("T808(TOPE - CONFERIR POSICAO)", "G0G54Z10", "/G0X0", "/G1G94Z-12F3000(CONFERIR)", "M260", "/G65P9500", "M270", "/M11", "G4U0.5", "G1G94Z10F3000", "Z" + f(sobreFace), "M10", "G4U0.5", "G0Z10");
+  h1.push("(NAO SIMULAR - TOPE DA BARRA)", "T808(TOPE - CONFERIR POSICAO)", "G0G54Z10", "/G0X0", "/G1G94Z-12F3000(CONFERIR)", "M260", "/G65P9500", "M270", "/M11", "G4U0.5", "G1G94Z10F3000", "Z" + f(sobreFace), "M10", "G4U0.5", "G0Z10", "(FIM NAO SIMULAR)");
   // ---------------- H2 (sem extensão): HIBO + TS2 + contrafuso ----------------
   h2.push("%", "<" + nm + ">", "(GERADO PELO TORNO MASTER - CONFERIR ANTES DE RODAR)", "(G54 = FUSO PRINCIPAL / G55 = CONTRAFUSO - HIBO)");
   h2.push("G0G53X235Z280Y0", "M250", "M260", "/G65P9500", "M270");
@@ -2380,7 +2380,7 @@ export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGer
     h2.push("M25M109", "G4U.5");
   });
   // tira do contrafuso a peça da volta anterior
-  h2.push("", "N1G0G53X235Z280Y0", "T101", "(EXPULSAR PECA)", "M64", "G0G53X259Y0Z200.", "G0G53Z90(CONFERIR)", "M111", "G4U.5", "M110", "G0G53Z200.M65");
+  h2.push("", "N1G0G53X235Z280Y0", "(NAO SIMULAR - EXPULSAR PECA DO CONTRAFUSO)", "T101", "(EXPULSAR PECA)", "M64", "G0G53X259Y0Z200.", "G0G53Z90(CONFERIR)", "M111", "G4U.5", "M110", "G0G53Z200.M65", "(FIM NAO SIMULAR)");
   let primeiraTI1 = true;
   let jan = 0;
   blocos.forEach((b) => {
@@ -2414,6 +2414,6 @@ export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGer
   if (corteOp && (!cfg.soloId || corteOp.id === cfg.soloId)) h1.push("G0G54V" + f(Math.ceil(bD + 4)), "G95G1V" + f(xfC) + "F" + f(fC));
   else h1.push("(CORTE DESTICADO NA ARVORE - SEM MOVIMENTO DO V1 - CONFERIR)");
   h1.push("M415", "M420", "G0G53V350M9", "M30", "%");
-  h2.push("", "N11G53X235Z300Y0M59", "M310", "T101(AGARRAR)", "M390", "S1=" + rpmC + "M3", "S2=" + rpmC + "M24", "M395", "M45", "M400", "G0G54X0Y0.Z18M111", "G4U1.5", "G1G94Z-" + f(pega) + "F4000", "M110", "M410", "M415", "G1W2", "M420", "G1Z10", "M46", "G0G53X235Z280Y0M25", "M30", "%");
+  h2.push("", "N11G53X235Z300Y0M59", "M310", "(NAO SIMULAR - CONTRAFUSO PEGA A PECA)", "T101(AGARRAR)", "M390", "S1=" + rpmC + "M3", "S2=" + rpmC + "M24", "M395", "M45", "M400", "G0G54X0Y0.Z18M111", "G4U1.5", "G1G94Z-" + f(pega) + "F4000", "M110", "M410", "M415", "G1W2", "M420", "G1Z10", "M46", "G0G53X235Z280Y0M25", "M30", "%");
   return { textos: [h1.join("\n"), h2.join("\n")], nomes: [nm + ".P-2", nm], doisCanais: true };
 }

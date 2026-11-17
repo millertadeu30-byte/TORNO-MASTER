@@ -2562,7 +2562,7 @@ export default function App() {
                   if (r.doisCanais) {
                     setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
                     setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
-                    if (!vivo) setLayoutCount((c) => Math.max(c, 2));
+                    setLayoutCount((c) => Math.max(c, 2)); // programa de 2 canais: mostra os 2 editores (H1 e H2)
                   } else {
                     // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
                     setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
@@ -2668,6 +2668,7 @@ export default function App() {
                   const base = editorTexts[0] || "";
                   const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
                   const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
+                  const dirIn3D = (() => { const zs: any[] = (fixComando?.zones as any[])?.length ? (fixComando!.zones as any[]) : (() => { try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } })(); if (typeof zH2v !== "number") return -1; const z2 = zs.find((q) => q.lado === 2); if (z2) return Math.sign((z2.za + z2.zb) / 2 - zH2v) || -1; const z1 = zs.find((q) => q.lado === 1); if (z1) return -Math.sign((z1.za + z1.zb) / 2 - zH2v) || -1; return -1; })(); // para que lado o Z do H2 entra na peça (suíço: -, torno normal: +)
                   if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
                   const extra: string[] = [];
                   let on = false;
@@ -2685,8 +2686,8 @@ export default function App() {
                       if (mG) g55TB = mG[mG.length - 1] === "G55";
                       if (!g55TB) { extra.push(u); return; }
                     }
-                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
-                    l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
+                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v + dirIn3D * parseFloat(v)) * 1000) / 1000));
+                    if (dirIn3D < 0) l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
                   });
                   if (!extra.length) return editorTexts[activePaneIdx];
@@ -2766,6 +2767,7 @@ export default function App() {
                   const base = editorTexts[0] || "";
                   const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
                   const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
+                  const dirIn3D = (() => { const zs: any[] = (fixComando?.zones as any[])?.length ? (fixComando!.zones as any[]) : (() => { try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } })(); if (typeof zH2v !== "number") return -1; const z2 = zs.find((q) => q.lado === 2); if (z2) return Math.sign((z2.za + z2.zb) / 2 - zH2v) || -1; const z1 = zs.find((q) => q.lado === 1); if (z1) return -Math.sign((z1.za + z1.zb) / 2 - zH2v) || -1; return -1; })(); // para que lado o Z do H2 entra na peça (suíço: -, torno normal: +)
                   if (!dois || !editorTexts[1] || typeof zH2v !== "number") return editorTexts[activePaneIdx];
                   const extra: string[] = [];
                   let on = false;
@@ -2783,8 +2785,8 @@ export default function App() {
                       if (mG) g55TB = mG[mG.length - 1] === "G55";
                       if (!g55TB) { extra.push(u); return; }
                     }
-                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v - parseFloat(v)) * 1000) / 1000));
-                    l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
+                    let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v + dirIn3D * parseFloat(v)) * 1000) / 1000));
+                    if (dirIn3D < 0) l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
                   });
                   if (!extra.length) return editorTexts[activePaneIdx];
