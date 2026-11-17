@@ -2420,10 +2420,10 @@ export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGer
   const fC = corteOp && (corteOp.p.f ?? 0) > 0 ? corteOp.p.f : 0.05;
   const xfC = corteOp && corteOp.p.xf !== undefined ? corteOp.p.xf : -1.5;
   const pega = Math.max(1, cfg.pega2 ?? 8);
-  h1.push("", "N11G0G53X320M89", "G0G53Z100", "M310", "(CORTE)", "M390", "S1=" + rpmC + "M3", "M395", "G0G53X320Z100V350M7", "M400", "M410");
+  h1.push("", "N11G0G53X320M89", "G0G53Z100", "M310", "(CORTE)", "M390", "S1=300M3", "S2=300M24", "G4X.5", "", "M395", "G0G53X320Z100V350M7", "", "G4X.5", "S1=" + rpmC + "M3", "M400", "M410"); // final do programa no modelo real da TBSy (a partir do M390)
   if (corteOp && (!cfg.soloId || corteOp.id === cfg.soloId)) h1.push("G0G54V" + f(Math.ceil(bD + 4)), "G95G1V" + f(xfC) + "F" + f(fC));
   else h1.push("(CORTE DESTICADO NA ARVORE - SEM MOVIMENTO DO V1 - CONFERIR)");
-  h1.push("M415", "M420", "G0G53V350M9", "M30", "%");
-  h2.push("", "N11G53X235Z300Y0M59", "M310", "(NAO SIMULAR - CONTRAFUSO PEGA A PECA)", "T101(AGARRAR)", "M390", "S1=" + rpmC + "M3", "S2=" + rpmC + "M24", "M395", "M45", "M400", "G0G54X0Y0.Z18M111", "G4U1.5", "G1G94Z-" + f(pega) + "F4000", "M110", "M410", "M415", "G1W2", "M420", "G1Z10", "M46", "G0G53X235Z280Y0M25", "M30", "%");
+  h1.push("M415", "M420", "G0G53V350M9", "M5", "M30", "%");
+  h2.push("", "N11G53X235Z300Y0M59", "M310", "(NAO SIMULAR - CONTRAFUSO PEGA A PECA)", "T101(AGARRAR)", "M110", "M390", "S1=300M3", "S2=300M24", "G4X.5", "", "M395", "M45", "", "G4X.5", "S1=" + rpmC + "M3", "S2=" + rpmC + "M24", "M400", "G0G54Y0Z15M111", "X0", "G4U.5", "G1G94Z-" + f(pega) + "F800", "M110", "M410", "M415", "G1W2", "M420", "G0Z10", "M46", "G0G53X235Z310Y0M25", "M30", "%"); // final do programa no modelo real da TBSy (a partir do M390)
   return { textos: [h1.join("\n"), h2.join("\n")], nomes: [nm + ".P-2", nm], doisCanais: true };
 }
