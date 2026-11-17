@@ -4875,6 +4875,8 @@ export const PainelPrograma: React.FC<{
   // (ex.: furou com broca Ø13,5 de Z0 a Z11 -> o desbaste interno nessa região começa de Ø13,5)
   useEffect(() => {
     let mudou = false;
+    // LADO DE TRÁS = quem trabalha pelo outro lado da peça. Torno com contrafuso: H2. TBSY: só o HIBO (TS2 trabalha pela FRENTE no fuso principal)
+    const ladoTras = (x: TMOp) => (maqAtual.id === "TBSY" ? x.posto === "HIBO" : (x.cab ?? "H1") === "H2");
     const novas = ops.map((o, i) => {
       if (!o.ativo || !["desbInt", "acabInt", "canalInt", "roscaInt"].includes(o.tipo) || !o.faixas.length) return o;
       const lo = Math.min(...o.faixas.map((fx) => Math.min(fx[0], fx[1])));
@@ -4888,7 +4890,7 @@ export const PainelPrograma: React.FC<{
         const alo = Math.min(...an.faixas.map((fx) => Math.min(fx[0], fx[1])));
         const ahi = Math.max(...an.faixas.map((fx) => Math.max(fx[0], fx[1])));
         if (an.tipo === "furo" && (an.p.d ?? 0) > 0) {
-          if (alo <= lo + 0.01 && ahi >= hi - 0.01 && an.p.d >= pre) { pre = an.p.d; zPonta = (an.cab ?? "H1") === "H2" ? ahi : alo; /* H2 fura pelo outro lado: a ponta fica no Z maior */ angP = (an.p.pa ?? 0) > 0 ? an.p.pa : 120; coneTirado = (an.cab ?? "H1") !== (o.cab ?? "H1"); } // furo do OUTRO cabeçote: o cone da ponta não fica do lado desta operação
+          if (alo <= lo + 0.01 && ahi >= hi - 0.01 && an.p.d >= pre) { pre = an.p.d; zPonta = ladoTras(an) ? ahi : alo; /* fura pelo outro lado (H2 / HIBO no TBSY): a ponta fica no Z maior */ angP = (an.p.pa ?? 0) > 0 ? an.p.pa : 120; coneTirado = ladoTras(an) !== ladoTras(o); } // furo do OUTRO cabeçote: o cone da ponta não fica do lado desta operação
         } else if (an.tipo === "desbInt" && pre > 0 && (an.p.bm ?? 0) > 0 && alo <= lo + 0.01) coneTirado = true;
       });
       const cn = pre > 0 && !coneTirado ? 1 : 0;
@@ -4899,7 +4901,7 @@ export const PainelPrograma: React.FC<{
       return o;
     });
     if (mudou) setOps(novas);
-  }, [ops, diTubo]);
+  }, [ops, diTubo, maqAtual.id]);
 
   // traço oculto no simulador (botão ● / ◌ de cada operação)
   useEffect(() => { if (onOcultos) onOcultos(ops.filter((o) => (o.p.oc ?? 0) === 1).map((o) => o.id)); }, [ops]);

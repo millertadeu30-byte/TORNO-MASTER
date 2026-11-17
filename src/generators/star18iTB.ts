@@ -718,11 +718,24 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     return { nivel: (z: number) => Math.min(...rs.map((r) => r.nivel(z))), nome: rs.map((r) => r.nome).join(" + ") };
   };
   // RESTO DE OPERAÇÃO (interno): menor Ø já ABERTO pela operação nº "rs" (furação / desbaste / acabamento interno). null = do bruto
-  const restoIntUm = (nRs: number, opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): { dMin: number; nome: string } | null => {
+  const restoIntUm = (nRs: number, opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): RestoIntR | null => {
     if (!(nRs > 0)) return null;
     const ref = ops[nRs - 1];
     if (!ref || !ref.ativo || ref === opAtual || (ref.cab ?? "H1") !== (opAtual.cab ?? "H1")) return null;
-    if (ref.tipo === "furo") return (ref.p.d ?? 0) > 0 ? { dMin: ref.p.d, nome: "OP " + nRs } : null;
+    if (ref.tipo === "furo") {
+      // FURAÇÃO: o Ø da broca só está aberto da boca até o OMBRO da broca (depois vem o cone da ponta).
+      // Só vale como "furo já aberto" da operação inteira se a broca cobre toda a região; senão serve só para os passes entrarem em G0 até onde já está aberto
+      if (!((ref.p.d ?? 0) > 0) || !ref.faixas.length) return null;
+      const sFf = geo.zFront + geo.zBack;
+      const espF = (fl: StarTMFaixa[]) => (espH2 ? fl.map((fx) => [sFf - Math.max(fx[0], fx[1]), sFf - Math.min(fx[0], fx[1])] as StarTMFaixa) : fl);
+      const fr = espF(ref.faixas), fo = espF(opAtual.faixas);
+      const rLo = Math.min(...fr.map((fx) => Math.min(fx[0], fx[1]))), rHi = Math.max(...fr.map((fx) => Math.max(fx[0], fx[1])));
+      const oLo = fo.length ? Math.min(...fo.map((fx) => Math.min(fx[0], fx[1]))) : rLo, oHi = fo.length ? Math.max(...fo.map((fx) => Math.max(fx[0], fx[1]))) : rHi;
+      const angF = (ref.p.pa ?? 120) > 0 ? ref.p.pa ?? 120 : 120;
+      const zOmbro = Math.min(rHi, rLo + ref.p.d / 2 / Math.tan(((angF / 2) * Math.PI) / 180));
+      const cobre = rLo <= oLo + 0.01 && rHi >= oHi - 0.01;
+      return { dMin: cobre ? ref.p.d : 0, nome: "OP " + nRs, aberturas: [{ d: ref.p.d, zAte: zOmbro, zPonta: rLo, tg: Math.tan(((angF / 2) * Math.PI) / 180) }] };
+    }
     if (!(ref.tipo === "desbInt" || ref.tipo === "acabInt" || ref.tipo === "canalInt")) return null;
     const sF = geo.zFront + geo.zBack;
     const fxo = espH2 ? ref.faixas.map((fx) => [sF - Math.max(fx[0], fx[1]), sF - Math.min(fx[0], fx[1])] as StarTMFaixa) : ref.faixas;
@@ -730,13 +743,14 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     if (!so.length) return null;
     const dPerf = Math.min(...so.filter((q) => Math.abs(q.zA - q.zB) > 1e-6).map((q) => Math.min(q.xa, q.xb)));
     const sobre = ref.tipo === "desbInt" ? Math.max(0, ref.p.u ?? 0.3) : 0;
-    return isFinite(dPerf) ? { dMin: Math.max(0.5, dPerf - sobre), nome: "OP " + nRs } : null;
+    return isFinite(dPerf) ? { dMin: Math.max(0.5, dPerf - sobre), nome: "OP " + nRs, aberturas: [{ d: Math.max(0.5, dPerf - sobre), zAte: Math.min(...fxo.map((fx) => Math.min(fx[0], fx[1]))) }] } : null;
   };
   // VÁRIAS operações (interno): vale o MAIOR furo que alguma delas já abriu
-  const perfilRestoInt = (opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): { dMin: number; nome: string } | null => {
-    const rs = listaRs(opAtual).map((n) => restoIntUm(n, opAtual, geoC, espH2)).filter((r): r is { dMin: number; nome: string } => !!r);
+  type RestoIntR = { dMin: number; nome: string; aberturas?: { d: number; zAte: number; zPonta?: number; tg?: number }[] };
+  const perfilRestoInt = (opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): RestoIntR | null => {
+    const rs = listaRs(opAtual).map((n) => restoIntUm(n, opAtual, geoC, espH2)).filter((r): r is RestoIntR => !!r);
     if (!rs.length) return null;
-    return { dMin: Math.max(...rs.map((r) => r.dMin)), nome: rs.map((r) => r.nome).join(" + ") };
+    return { dMin: Math.max(...rs.map((r) => r.dMin)), nome: rs.map((r) => r.nome).join(" + "), aberturas: rs.flatMap((r) => r.aberturas || []) };
   };
   const gerarOpLinhasBase = (opIn: StarTMOp, canal: "H1" | "H2"): string[] => {
     const espH2 = canal === "H2" && !h2NaFrente;
@@ -1717,8 +1731,8 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
         const pts = compensarRaio(limitaMergulho(perfilMono(s, true, real).pts, angM), p.rp ?? 0.4, true);
         const restoDI = op.tipo === "desbInt" ? perfilRestoInt(opIn, geo, espH2) : null;
-          if (restoDI) lines.push("(RESTO DA " + restoDI.nome + ": COMECA DO D" + fmt(restoDI.dMin) + " QUE ELA ABRIU)");
-          const dSeg = restoDI ? restoDI.dMin : (op.tipo === "desbInt" || op.tipo === "acabInt") && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin; // furo já aberto (pré-furo da operação anterior)
+          if (restoDI) lines.push("(RESTO DA " + restoDI.nome + (restoDI.dMin > 0 ? ": COMECA DO D" + fmt(restoDI.dMin) + " QUE ELA ABRIU)" : ": PASSES ENTRAM EM G0 ATE ONDE A BROCA JA ABRIU)"));
+          const dSeg = restoDI && restoDI.dMin > 0 ? restoDI.dMin : (op.tipo === "desbInt" || op.tipo === "acabInt") && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin; // furo já aberto (pré-furo da operação anterior)
         const xEnt = Math.max(1, dSeg - ((p.fi ?? 1) > 0 ? p.fi : 1));
         const zStartS = zCoord(pts[0].z) - aprox;
         emitSpindle(lines, p, Math.max(dSeg, 2), 0, acionada);
@@ -1754,7 +1768,17 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
               if (zl >= pts[0].z - 1e-4) continue;
               const xRet = Math.max(1, xp - Math.min(2 * apDesb, 1.5));
               const zEndS = zCoord(zl);
+              // RESTO: até onde uma broca / operação anterior já abriu este Ø (até o OMBRO da broca) entra em G0, só corta o que sobrou
+              let zAb: number | null = null;
+              (restoDI?.aberturas || []).forEach((ab) => {
+                if (ab.d < xp - 1e-6) return;
+                // broca: neste Ø o material começa no CONE da ponta (Z da ponta + raio / tan(ângulo/2)), não no ombro
+                const zA = ab.zPonta !== undefined && ab.tg ? Math.min(ab.zAte, ab.zPonta + xp / 2 / ab.tg) : ab.zAte;
+                zAb = zAb === null ? zA : Math.min(zAb, zA);
+              });
+              if (zAb !== null && (zAb as number) <= zl + 1e-6) continue; // este passe já está todo aberto
               lines.push("G0X" + fmt(xp));
+              if (zAb !== null && (zAb as number) < pts[0].z - 0.5) lines.push("G0Z" + fmt(zCoord(zAb as number) - 0.5));
               lines.push("G1Z" + fmt(zEndS) + "F" + fmt(p.f ?? 0.2));
               lines.push("G1X" + fmt(xRet) + "Z" + fmt(zEndS - 0.5));
               lines.push("G0Z" + fmt(zStartS));
