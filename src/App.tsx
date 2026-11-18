@@ -3149,6 +3149,9 @@ type TMParam = { k: string; rot: string; def: number; step: number; so?: string[
 // número na caixa: arredonda (sem "-3,55e-15" de conta de ponto flutuante) e usa vírgula
 // posição padrão da janela SINCRONISMO minimizada: canto de cima à direita do simulador
 const tmPosSyncPadrao = () => ({ x: Math.max(10, (typeof window !== "undefined" ? window.innerWidth : 1280) - 175), y: 88 });
+// STAR G266: o W digitado só vale se conferir com a peça (igual ao comprimento ou até 5 mm de sobremetal).
+// W de OUTRA peça (ficou salvo) faria o corte cair dentro da bucha -> o programa usa o comprimento da peça.
+const tmCompWValido = (w: number | undefined, L: number | undefined): number | undefined => (w === undefined || !(w > 0) ? undefined : L !== undefined && L > 0 && (w < L - 0.01 || w > L + 5) ? undefined : w);
 const tmNumTxt = (v: number) => { const r = Math.round(v * 10000) / 10000; return String(Object.is(r, -0) ? 0 : r).replace(".", ","); };
 const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void; adiar?: boolean }> = ({ v, set, cls, inputRef, adiar }) => {
   const [txt, setTxt] = useState<string | null>(null);
@@ -4632,7 +4635,7 @@ function tmCalcMaxBarra(o: TMOp, geo: TMGeo | null): { dMax: number; dMinInt: nu
 const tmFmt2 = (n: number) => n.toFixed(2).replace(".", ",");
 
 export type TMRegiao = { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string; fundo?: { z: number; x: number }; ap?: { x: number; z: number } };
-export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number; gContra?: string[]; zH2?: number; oculta?: boolean };
+export type TMFixZone = { lado: 1 | 2; za: number; zb: number; d: number; gContra?: string[]; zH2?: number; oculta?: boolean; tipo?: "bucha" };
 
 function sugerirFerrIndexABC(o: TMOp): string {
   if (o.cab === "H2") {
@@ -4919,7 +4922,7 @@ export const PainelPrograma: React.FC<{
     const corteOp = ops.find((o) => o.tipo === "corte" && o.ativo);
     const lc = corteOp ? corteOp.p.larg : 3;
     const z: TMFixZone[] = [];
-    if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD });
+    if (cfg.l1) z.push({ lado: 1, za: geo.zBack - lc - cfg.saida - cfg.pega1, zb: geo.zBack - lc - cfg.saida, d: bD, ...(maqAtual.suico ? { tipo: "bucha" as const } : {}) }); // SUÍÇO: Lado 1 é a BUCHA DE GUIA - o bedame trabalha encostado na face dela (só passar da face é colisão)
     if (cfg.l2) z.push({ lado: 2, za: zPega2(Math.min(cfg.ini2 || 0, cfg.pega2)), zb: zPega2(cfg.pega2), d: bD });
     const gC = (cfg.origens || []).filter((o) => o.fuso === "contrafuso").map((o) => o.g);
 // zero do Head 2 (origem do contrafuso) para o marcador no gráfico
@@ -4933,7 +4936,7 @@ const zz = oc.face === partZero.face ? f1 + dIn * (oc.desl || 0) : f2 - dIn * (o
 zH2 = zDisp(zz);
 }
 onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))).map((q) => ({ ...q, gContra: gC, zH2, oculta: cfg.fixOculta === true })));
-  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, cfg.ini2, bD, ops, sZ, deslH1, cfg.origens, partZero.face, cfg.fixOculta]);
+  }, [geo, cfg.l1, cfg.l2, cfg.saida, cfg.pega1, cfg.pega2, cfg.ini2, bD, ops, sZ, deslH1, cfg.origens, partZero.face, cfg.fixOculta, maqAtual.suico]);
 
   // toque na peça (vem do simulador) vira região da operação escolhida
   useEffect(() => {
@@ -5433,7 +5436,7 @@ const avisosLados: string[] = (() => {
     soloId: soloOp || undefined,
     pega2: maqAtual.id !== "TBSY" && maqAtual.canais >= 2 ? cfg.pega2Maq : cfg.pega2,
     cursoCab: cfg.cursoCab,
-    compW: (cfg as any).compW, brutoDz,
+    compW: tmCompWValido((cfg as any).compW, geo?.L), brutoDz,
     ladoBedameK: cfg.ladoBedameK === "0" ? 0 : cfg.ladoBedameK === "-17" ? -17 : undefined,
     estTope: cfg.estTope,
     estBedame: cfg.estBedame,
@@ -5841,7 +5844,8 @@ return (
                         placeholder={tmFmt(geo.L)}
                         cls={inp + " w-20 "}
                       />
-                      {cfg.cursoCab !== undefined && cfg.cursoCab > 0 && <span className="text-[10px] text-zinc-500">Z do G266 = {tmFmt(cfg.cursoCab - (((cfg as any).compW ?? 0) > 0 ? (cfg as any).compW : geo.L))}</span>}
+                      {((cfg as any).compW ?? 0) > 0 && tmCompWValido((cfg as any).compW, geo.L) === undefined && <span className="text-[10px] font-bold text-red-400" title="O W digitado não confere com o comprimento desta peça (provavelmente ficou de outra peça). O programa usa o comprimento da peça. Apague o campo ou digite o W certo.">W {tmFmt((cfg as any).compW)} ≠ peça L{tmFmt(geo.L)} → usando {tmFmt(geo.L)}</span>}
+                      {cfg.cursoCab !== undefined && cfg.cursoCab > 0 && <span className="text-[10px] text-zinc-500">Z do G266 = {tmFmt(cfg.cursoCab - (tmCompWValido((cfg as any).compW, geo.L) ?? geo.L))}</span>}
                     </label>
                   )}
               {maqAtual.perfil === "STAR_G266" && (
