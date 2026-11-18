@@ -1122,6 +1122,17 @@ export default function App() {
     if (tem("stockProfile")) setStockProfile(a.stockProfile);
     if (tem("partZero")) setPartZero(a.partZero);
     if (tem("stockZero")) setStockZero(a.stockZero);
+    // SENTIDO DO Z (suíço = -1 / torno normal = 1): fica fora do "app" do projeto, então vem do storage salvo.
+    // Sem isso, abrir uma peça de torno normal depois de mexer numa Star deixava o desenho espelhado/deslocado.
+    {
+      const st = p.storage || {};
+      let zs: number | null = null;
+      try { if (typeof st.cnc_zSinal === "string") zs = JSON.parse(st.cnc_zSinal); } catch { zs = null; }
+      if (zs !== 1 && zs !== -1) {
+        try { const cf = JSON.parse(st.cnc_painel_cfg || "{}"); zs = cf?.origens?.[0]?.tipo === "suico" ? -1 : 1; } catch { zs = 1; }
+      }
+      setZSinal(zs === -1 ? -1 : 1);
+    }
     if (tem("layerColors")) setLayerColors(a.layerColors);
     if (tem("syncIncludeNoP")) setSyncIncludeNoP(a.syncIncludeNoP);
     if (tem("syncIncludeWithP")) setSyncIncludeWithP(a.syncIncludeWithP);
