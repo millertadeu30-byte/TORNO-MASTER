@@ -115,7 +115,7 @@ import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
 import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY } from "./generators/star18iTB";
-import { calculateCycleTimeDetailed } from "./utils/cycleTimeCalculator";
+import { calculateCycleTimeDetailed, loadMachineParams } from "./utils/cycleTimeCalculator";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
 import { tmGerarIndexABC } from "./generators/indexABC";
@@ -5076,7 +5076,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
 
   // ================= FOLHA DE PROCESSO (para o preparador montar a máquina) =================
   // Só LÊ a árvore de operações e monta uma folha limpa para imprimir (preto e branco). Não muda nada do programa.
-  const folhaProcesso = () => {
+  const dadosFolha = () => {
     const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const n2 = (v: number | undefined | null, d = 2) => (v === undefined || v === null || !isFinite(v) ? "—" : tmNumTxt(Math.round(v * 10 ** d) / 10 ** d));
     const ehTbsy = maqAtual.id === "TBSY";
@@ -5166,6 +5166,10 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     });
     const montL = [...mont.values()].sort((x, y) => ordemHead.indexOf(x.head) - ordemHead.indexOf(y.head) || x.ferr.localeCompare(y.ferr));
     const hoje = new Date().toLocaleDateString("pt-BR");
+    return { esc, n2, linhas, montL, hoje, FOLGA };
+  };
+  const folhaProcesso = () => {
+    const { esc, n2, linhas, montL, hoje, FOLGA } = dadosFolha();
     const css =
       "@page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;margin:0;padding:14px;font-size:11px}" +
       "h1{font-size:17px;margin:0;letter-spacing:.5px}h2{font-size:12px;margin:14px 0 5px;padding:3px 6px;background:#e6e6e6;border-left:4px solid #000;text-transform:uppercase;letter-spacing:.5px}" +
@@ -5233,6 +5237,61 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     ov.append(barra, ifr);
     document.body.appendChild(ov);
   };
+
+  // ================= CABEÇALHO DO PROGRAMA (todas as máquinas) =================
+  // Comentários no início de cada programa: tempo de ciclo DAQUELE head, data, programador e as ferramentas
+  // daquele head com Ø de broca/barra, largura do bedame e balanço mínimo (mesmas contas da folha de processo).
+  const cabecalhoProg = (r: any) => {
+    try {
+      if (!r || !Array.isArray(r.textos) || !r.textos[0]) return r;
+      const { montL } = dadosFolha();
+      const siem = maqAtual.perfil === "SIEMENS_TND180";
+      const ehTbsyC = maqAtual.id === "TBSY";
+      const sem = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ø/g, "D").toUpperCase().replace(/[()";]/g, " ").replace(/,/g, ".").replace(/\s+/g, " ").trim();
+      const com = (t: string) => (siem ? "; " + t : "(" + t + ")");
+      const nC = (v: number) => String(Math.round(v * 10) / 10);
+      const hj = new Date();
+      const data = String(hj.getDate()).padStart(2, "0") + "/" + String(hj.getMonth() + 1).padStart(2, "0") + "/" + String(hj.getFullYear()).slice(2);
+      const prog = sem((cfg as any).programador || "");
+      let fator = 100;
+      try { fator = parseInt(localStorage.getItem("cnc_cycleTimeFactor") || "100", 10) || 100; } catch { fator = 100; }
+      const tempo = (txt: string) => { try { return calculateCycleTimeDetailed(txt, undefined, undefined, loadMachineParams()).totalSeconds * (fator / 100); } catch { return null; } };
+      const ferrTxt = (m: { head: string; ferr: string; nome: string; diam: string; larg: string; bal: number | null }, comHead: boolean) => {
+        const dd = /Ø[^\d]*([\d.,]+)/.exec(m.diam.split("<br")[0]);
+        const dTxt = dd ? (/^Broca/i.test(m.diam) ? " BR D" : /^Barra/i.test(m.diam) ? " BARRA MAX D" : " D") + dd[1].replace(",", ".") : /centro/i.test(m.diam) ? " BR CENTRO" : "";
+        const lg = /([\d.,]+)/.exec(m.larg);
+        const lTxt = m.larg !== "—" && lg ? " L" + lg[1].replace(",", ".") : "";
+        const bTxt = m.bal !== null ? " BAL" + nC(Math.ceil(m.bal * 2) / 2) : "";
+        return com((comHead && m.head !== "—" ? m.head + " " : "") + sem(m.ferr) + " " + sem(m.nome).slice(0, 16) + dTxt + lTxt + bTxt);
+      };
+      const headsDe = (i: number): string[] | null => {
+        if (!r.doisCanais) return null; // programa único: todas as ferramentas
+        if (ehTbsyC) return i === 0 ? ["TI1"] : ["TS2", "HIBO"];
+        return i === 0 ? ["H1", "—"] : ["H2"];
+      };
+      const textos = [...r.textos];
+      textos.forEach((txt: string, i: number) => {
+        if (!txt || i > 1 || (i === 1 && !r.doisCanais)) return;
+        const hs = headsDe(i);
+        const ferrs = montL.filter((m) => !hs || hs.includes(m.head));
+        const nomeHead = !r.doisCanais ? "" : ehTbsyC ? (i === 0 ? "TI1 " : "TS2/HIBO ") : i === 0 ? "H1 " : "H2 ";
+        const t = tempo(txt);
+        const cab: string[] = [com(nomeHead + "TC " + (t !== null ? fmtMMSS(t) : "--:--") + " - " + data + (prog ? " - PROG " + prog : ""))];
+        const varios = new Set(ferrs.map((m) => m.head)).size > 1;
+        ferrs.forEach((m) => cab.push(ferrTxt(m, varios)));
+        const ls = txt.split("\n");
+        let k = ls.findIndex((l) => /GERADO PELO TORNO MASTER/i.test(l));
+        if (k < 0) k = ls.findIndex((l, j) => j < 6 && /^(O\d+|<[^>]+>|%_N_)/i.test(l.trim()));
+        if (k < 0) k = ls[0] && ls[0].trim() === "%" ? 0 : -1;
+        ls.splice(k + 1, 0, ...cab);
+        textos[i] = ls.join("\n");
+      });
+      return { ...r, textos };
+    } catch {
+      return r; // qualquer problema: entrega o programa como sempre foi
+    }
+  };
+  const onGerarCab = (r: any, vivo?: boolean) => onGerar(cabecalhoProg(r), vivo);
   // CAMPOS LIGADOS: ao preencher um valor que dá para calcular outro, o app já calcula
   const ligarCalc = (o: TMOp, k: string, n: number): Record<string, number> => {
     const p: Record<string, number> = { ...o.p, [k]: n };
@@ -5500,11 +5559,11 @@ const avisosLados: string[] = (() => {
         return;
       }
       setAvisoMaq("");
-      onGerar({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any);
+      onGerarCab({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any);
       return;
     }
     setAvisoMaq("");
-    onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
+    onGerarCab(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }));
   };
   // AO VIVO: cada mudança no painel já refaz o programa e o simulador mostra na hora
   useEffect(() => {
@@ -5527,10 +5586,10 @@ const avisosLados: string[] = (() => {
                 ? tmGerarIndexABC
                 : tmGerarStar18iTB;
         const res = gerFn(ops as unknown as StarTMOp[], geo as unknown as StarTMGeo, montarCfgMaq());
-        if (!res.erro) onGerar({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any, true);
+        if (!res.erro) onGerarCab({ ...res, focoH2: !!soloOp && ops.find((o) => o.id === soloOp)?.cab === "H2" } as any, true);
         return;
       }
-      onGerar(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
+      onGerarCab(tmGerar(ops, geo, { soloId: soloOp || undefined, nome: cfg.nome, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens, zero: partZero, brutoDz, recuoTroca: { modo: recuoAtual.modo === "G53" ? "G53" : "G0_ABS", x: recuoAtual.x, z: recuoAtual.z, xCanal2: recuoAtual.xCanal2, zCanal2: recuoAtual.zCanal2 } }), true);
     }, 400);
     return () => clearTimeout(t);
   }, [ops, cfg, bD, geo, aoVivo, partZero, maqAtual, pendenciasMaquina, soloOp]);
@@ -5706,6 +5765,8 @@ return (
             </select>
             <span className="text-zinc-400">G92 S</span>
             {num(cfg.rpmMax, (n) => setCfg({ ...cfg, rpmMax: n }), 100)}
+            <span className="text-zinc-400" title="Nome do programador: vai no cabeçalho dos programas. Em branco = não aparece.">Programador</span>
+            <input value={(cfg as any).programador || ""} onChange={(e) => setCfg({ ...cfg, programador: e.target.value.toUpperCase() } as any)} placeholder="(opcional)" className={inp + " w-28"} />
           </div>
           <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
             <span className="text-zinc-400">Bruto:</span>
