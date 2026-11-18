@@ -5251,18 +5251,21 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       const com = (t: string) => (siem ? "; " + t : "(" + t + ")");
       const nC = (v: number) => String(Math.round(v * 10) / 10);
       const hj = new Date();
-      const data = String(hj.getDate()).padStart(2, "0") + "/" + String(hj.getMonth() + 1).padStart(2, "0") + "/" + String(hj.getFullYear()).slice(2);
+      const data = String(hj.getDate()).padStart(2, "0") + "/" + String(hj.getMonth() + 1).padStart(2, "0") + "/" + String(hj.getFullYear()).slice(2) + " " + String(hj.getHours()).padStart(2, "0") + "H" + String(hj.getMinutes()).padStart(2, "0"); // data e HORA da última edição (o ":" vira "H" para não confundir com o TC)
       const prog = sem((cfg as any).programador || "");
       let fator = 100;
       try { fator = parseInt(localStorage.getItem("cnc_cycleTimeFactor") || "100", 10) || 100; } catch { fator = 100; }
       const tempo = (txt: string) => { try { return calculateCycleTimeDetailed(txt, undefined, undefined, loadMachineParams()).totalSeconds * (fator / 100); } catch { return null; } };
+      // nome da ferramenta COMPLETO, só com as palavras longas abreviadas (não corta nada do que foi escrito)
+      const ABREV: Record<string, string> = { DESBASTE: "DESB", ACABAMENTO: "ACAB", EXTERNO: "EXT", EXTERNA: "EXT", INTERNO: "INT", INTERNA: "INT", FURACAO: "FUR", FACEAMENTO: "FACE", BEDAME: "BED", ROSCA: "ROSC", CHANFRO: "CHANF", RECARTILHADO: "RECART", ALARGADOR: "ALARG", PERFILAR: "PERF", FERRAMENTA: "FERR" };
+      const abrevF = (s: string) => s.split(" ").filter((w) => !["DE", "DA", "DO", "DAS", "DOS"].includes(w)).map((w) => ABREV[w] || w).join(" ");
       const ferrTxt = (m: { head: string; ferr: string; nome: string; diam: string; larg: string; bal: number | null }, comHead: boolean) => {
         const dd = /Ø[^\d]*([\d.,]+)/.exec(m.diam.split("<br")[0]);
         const dTxt = dd ? (/^Broca/i.test(m.diam) ? " BR D" : /^Barra/i.test(m.diam) ? " BARRA MAX D" : " D") + dd[1].replace(",", ".") : /centro/i.test(m.diam) ? " BR CENTRO" : "";
         const lg = /([\d.,]+)/.exec(m.larg);
         const lTxt = m.larg !== "—" && lg ? " L" + lg[1].replace(",", ".") : "";
         const bTxt = m.bal !== null ? " BAL" + nC(Math.ceil(m.bal * 2) / 2) : "";
-        return com((comHead && m.head !== "—" ? m.head + " " : "") + sem(m.ferr) + " " + sem(m.nome).slice(0, 16) + dTxt + lTxt + bTxt);
+        return com((comHead && m.head !== "—" ? m.head + " " : "") + sem(m.ferr) + " " + abrevF(sem(m.nome)) + dTxt + lTxt + bTxt);
       };
       const headsDe = (i: number): string[] | null => {
         if (!r.doisCanais) return null; // programa único: todas as ferramentas
