@@ -429,6 +429,8 @@ export default function App() {
         missingChannels: number[];
         mismatchedChannels: number[];
         isIgnored: boolean;
+        contagem: { [channelIdx: number]: number }; // quantas vezes o código aparece em cada canal
+        qtdDivergente: boolean; // ex.: 2x M283 no canal 1 e 1x no canal 2 -> a máquina trava esperando o par
       };
     } = {};
 
@@ -487,6 +489,8 @@ export default function App() {
                 missingChannels: [],
                 mismatchedChannels: [],
                 isIgnored: ignoredSyncCodes.includes(mCode),
+                contagem: {},
+                qtdDivergente: false,
               };
             }
 
@@ -494,6 +498,7 @@ export default function App() {
               analysis[mCode].pVal = pVal;
             }
 
+            analysis[mCode].contagem[c] = (analysis[mCode].contagem[c] || 0) + 1;
             analysis[mCode].declaredIn[c] = {
               line: idx + 1,
               text: line.trim(),
@@ -553,7 +558,10 @@ export default function App() {
 
       syncInfo.missingChannels = missingChannels;
       syncInfo.mismatchedChannels = mismatchedChannels;
-      syncInfo.isSynchronized = missingChannels.length === 0 && mismatchedChannels.length === 0;
+      // QUANTIDADE: cada chamada num canal precisa do seu par no outro (mesmo número de vezes em todos os canais do sincronismo)
+      const qtds = targets.filter((t) => t - 1 < layoutCount && syncInfo.declaredIn[t - 1]).map((t) => syncInfo.contagem[t - 1] || 0);
+      syncInfo.qtdDivergente = qtds.length > 1 && new Set(qtds).size > 1;
+      syncInfo.isSynchronized = missingChannels.length === 0 && mismatchedChannels.length === 0 && !syncInfo.qtdDivergente;
     });
 
     return analysis;
@@ -2487,6 +2495,7 @@ export default function App() {
                                   : `⚠️ Problema no Sincronismo!\n` +
                                     (info.missingChannels.length > 0 ? `• Faltando nos Canais: ${info.missingChannels.join(", ")}\n` : "") +
                                     (info.mismatchedChannels.length > 0 ? `• Divergente nos Canais: ${info.mismatchedChannels.join(", ")}\n` : "") +
+                                    (info.qtdDivergente ? `• Quantidade diferente: ${info.targets.map((t: number) => `Canal ${t} tem ${info.contagem[t - 1] || 0}x`).join(", ")} - cada chamada precisa do par no outro canal\n` : "") +
                                     `Clique para tentar alinhar.`
                               }
                             >
@@ -2506,7 +2515,7 @@ export default function App() {
                                 </span>
                               </div>
                               <span className="text-[9px] opacity-75 font-normal px-1 bg-black/30 rounded shrink-0">
-                                {info.isSynchronized ? "OK" : info.missingChannels.length > 0 ? `Falta C${info.missingChannels.join(",")}` : "Diverg."}
+                                {info.isSynchronized ? "OK" : info.missingChannels.length > 0 ? `Falta C${info.missingChannels.join(",")}` : info.qtdDivergente ? info.targets.map((t: number) => `C${t}:${info.contagem[t - 1] || 0}x`).join(" ") : "Diverg."}
                               </span>
                             </div>
                           );
