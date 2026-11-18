@@ -198,8 +198,8 @@ export default function App() {
     localStorage.setItem("cnc_headerCompacto_v2", String(isHeaderMinimized));
   }, [isHeaderMinimized]);
 
-  const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(false);
-  const [syncWidgetPos, setSyncWidgetPos] = useState({ x: 30, y: 180 });
+  const [isSyncWidgetMinimized, setIsSyncWidgetMinimized] = useState<boolean>(true); // abre MINIMIZADO (bolinha "SINCRONISMO") para não cobrir os programas
+  const [syncWidgetPos, setSyncWidgetPos] = useState(() => tmPosSyncPadrao()); // canto de cima à direita, na linha do MIRA ON / FIX do simulador
   const [syncWidgetSize, setSyncWidgetSize] = useState<{ width: number; height: number }>(() => {
     const saved = localStorage.getItem("cnc_syncWidgetSize");
     if (saved) {
@@ -1106,7 +1106,7 @@ export default function App() {
       while (t.length < 3) t.push("");
       return t;
     };
-    if (tem("layoutCount")) setLayoutCount(a.layoutCount);
+    if (tem("layoutCount")) { setLayoutCount(a.layoutCount); setIsSyncWidgetMinimized(true); setSyncWidgetPos(tmPosSyncPadrao()); } // ao carregar peça: sincronismo volta minimizado no canto
     if (tem("editorTexts")) setEditorTexts(tres(a.editorTexts));
     if (tem("fileNames")) setFileNames(tres(a.fileNames));
     if (tem("activePaneIdx")) setActivePaneIdx(a.activePaneIdx);
@@ -3147,6 +3147,8 @@ interface TMOp {
 type TMParam = { k: string; rot: string; def: number; step: number; so?: string[]; rotPor?: Record<string, string>; opcoes?: string[]; soUso?: number[]; check?: boolean; quando?: [string, number[]] }; // check = caixinha; quando = só aparece se outro campo tiver esse valor // soUso = só aparece nesse "Uso do ciclo" (0 auto, 1 canal, 2 faceamento) // so = só aparece nesses ciclos ("LINHA" = sem ciclo)
 // Caixa de número: fica parada, seleciona tudo ao clicar, aceita vírgula e sinal de menos
 // número na caixa: arredonda (sem "-3,55e-15" de conta de ponto flutuante) e usa vírgula
+// posição padrão da janela SINCRONISMO minimizada: canto de cima à direita do simulador
+const tmPosSyncPadrao = () => ({ x: Math.max(10, (typeof window !== "undefined" ? window.innerWidth : 1280) - 175), y: 88 });
 const tmNumTxt = (v: number) => { const r = Math.round(v * 10000) / 10000; return String(Object.is(r, -0) ? 0 : r).replace(".", ","); };
 const TMNum: React.FC<{ v: number; set: (n: number) => void; cls: string; inputRef?: (el: HTMLInputElement | null) => void; adiar?: boolean }> = ({ v, set, cls, inputRef, adiar }) => {
   const [txt, setTxt] = useState<string | null>(null);
@@ -5057,6 +5059,166 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     try { return calculateCycleTimeDetailed(b.map((l) => l.replace(/^\//, "")).join("\n")).totalSeconds; } catch { return null; }
   };
   const fmtMMSS = (s: number) => { const tt = Math.max(0, Math.round(s)); return String(Math.floor(tt / 60)).padStart(2, "0") + ":" + String(tt % 60).padStart(2, "0"); };
+
+  // ================= FOLHA DE PROCESSO (para o preparador montar a máquina) =================
+  // Só LÊ a árvore de operações e monta uma folha limpa para imprimir (preto e branco). Não muda nada do programa.
+  const folhaProcesso = () => {
+    const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const n2 = (v: number | undefined | null, d = 2) => (v === undefined || v === null || !isFinite(v) ? "—" : tmNumTxt(Math.round(v * 10 ** d) / 10 ** d));
+    const ehTbsy = maqAtual.id === "TBSY";
+    const multi = ehTbsy || (maqAtual.canais ?? 1) >= 2 || !!maqAtual.suico;
+    const headDe = (o: TMOp) => (ehTbsy ? o.posto || (o.cab === "H2" ? "TS2" : "TI1") : multi ? o.cab || "H1" : "—");
+    const ladoTrasF = (o: TMOp) => (ehTbsy ? o.posto === "HIBO" : (o.cab ?? "H1") === "H2");
+    const FOLGA = 3; // mm a mais no balanço, para não bater o porta-ferramenta
+    const internas = ["desbInt", "acabInt", "canalInt", "roscaInt", "furo", "centro"];
+    const linhas = ops
+      .map((o, i) => ({ o, n: i + 1 }))
+      .filter(({ o }) => o.ativo)
+      .map(({ o, n }) => {
+        const p = o.p as Record<string, number>;
+        const tp = TM_TIPOS[o.tipo];
+        const fx = o.faixas || [];
+        const zLo = fx.length ? Math.min(...fx.map((f) => Math.min(f[0], f[1]))) : null;
+        const zHi = fx.length ? Math.max(...fx.map((f) => Math.max(f[0], f[1]))) : null;
+        const zD = (z: number) => (ehH2Op(o) ? zH2Disp(z) : z);
+        const regiao = zLo === null || zHi === null ? "padrão" : "Z" + n2(zD(zHi)) + " → Z" + n2(zD(zLo));
+        // ROTAÇÃO
+        let rot = "—";
+        if (o.tipo === "furo" || o.tipo === "centro") rot = (p.rpm ?? 0) > 0 ? "S " + Math.round(p.rpm) + " rpm" : "—";
+        else if ((p.mr ?? 0) === 1 && (p.rpm ?? 0) > 0) rot = "S " + Math.round(p.rpm) + " rpm (G97)";
+        else if ((p.mr ?? 0) === 1) {
+          // G97 calculado pelo Vc: mostra a rotação que o programa escreveu
+          const sProg = (blocosOpsGerados[o.id] || []).map((l) => (/G97[^(]*?S[12]?=?(\d+)/.exec(l) || [])[1]).find((s) => !!s);
+          rot = sProg ? "S " + sProg + " rpm (G97)<br><small>Vc " + n2(p.vc, 0) + " m/min</small>" : "Vc " + n2(p.vc, 0) + " m/min (G97)";
+        }
+        else if ((p.vc ?? 0) > 0) rot = "Vc " + n2(p.vc, 0) + " m/min (G96)" + ((p.lim ?? 0) > 0 ? " · máx " + Math.round(p.lim) + " rpm" : "");
+        // AVANÇO
+        const avs: string[] = [];
+        if ((p.f ?? 0) > 0) avs.push("F " + n2(p.f, 3));
+        if (o.tipo === "furo" && (p.f1 ?? 0) > 0 && (p.z1 ?? 0) > 0) avs.push("encabeçar F " + n2(p.f1, 3) + " (" + n2(p.z1) + " mm)");
+        if ((o.tipo === "canal" || o.tipo === "canalInt") && (p.acab ?? 0) === 1 && (p.fa ?? 0) > 0) avs.push("acab. F " + n2(p.fa, 3));
+        const av = avs.length ? avs.join("<br>") + " mm/v" : "—";
+        // PROFUNDIDADE POR PASSE / PASSO
+        let ap = "—";
+        if ((o.tipo === "desbExt" || o.tipo === "desbInt" || o.tipo === "face") && (p.ap ?? 0) > 0) ap = "ap " + n2(p.ap);
+        else if (o.tipo === "furo" && (p.q ?? 0) > 0) ap = "pica-pau " + n2(p.q);
+        else if ((o.tipo === "roscaExt" || o.tipo === "roscaInt") && (p.passo ?? 0) > 0) ap = "passo " + n2(p.passo);
+        else if ((o.tipo === "canal" || o.tipo === "canalInt") && (p.pk ?? 0) > 0) ap = "pica-pau " + n2(p.pk);
+        // Ø DA BROCA / BARRA
+        let diam = "—";
+        if (o.tipo === "furo" && (p.d ?? 0) > 0) diam = "Broca Ø" + n2(p.d) + " · " + n2(p.pa || 120, 0) + "°";
+        else if (o.tipo === "centro") diam = "Broca de centro";
+        else if (["desbInt", "acabInt", "canalInt", "roscaInt"].includes(o.tipo)) {
+          const furoEnt = (p.d0 ?? 0) > 0 ? p.d0 : geo ? geo.intDmin : 0;
+          diam = (p.bm ?? 0) > 0 ? "Barra Ø máx " + n2(p.bm) : "Barra Ø menor que " + n2(furoEnt);
+          if (furoEnt > 0) diam += "<br><small>furo de entrada Ø" + n2(furoEnt) + "</small>";
+        }
+        // LARGURA DO BEDAME
+        const larg = (o.tipo === "canal" || o.tipo === "canalInt" || o.tipo === "corte") && (p.larg ?? 0) > 0 ? n2(p.larg) + " mm" : "—";
+        // BALANÇO MÍNIMO da ferramenta (pela profundidade que ela entra + folga)
+        let bal: number | null = null;
+        let balObs = "";
+        if (geo && internas.includes(o.tipo)) {
+          let prof = 0;
+          if (zLo !== null && zHi !== null) prof = ladoTrasF(o) ? zHi - geo.zBack : geo.zFront - zLo;
+          else if (o.tipo === "centro") prof = p.prof ?? 2;
+          if (o.tipo === "furo" && (p.d ?? 0) > 0) prof += p.d / 2 / Math.tan((((p.pa || 120) / 2) * Math.PI) / 180);
+          if (prof > 0) { bal = prof + FOLGA; balObs = "entra " + n2(prof) + " mm em Z"; }
+        } else if (geo && o.tipo === "canal" && zLo !== null && zHi !== null) {
+          let dMin = Infinity;
+          (geo.ext || []).forEach((sg: { zA: number; zB: number; xa: number; xb: number }) => {
+            const a1 = Math.min(sg.zA, sg.zB), b1 = Math.max(sg.zA, sg.zB);
+            if (b1 > zLo + 1e-3 && a1 < zHi - 1e-3) dMin = Math.min(dMin, sg.xa, sg.xb); // só o que fica DENTRO da região (a face da ponta não conta)
+          });
+          if (!isFinite(dMin) && (p.xF ?? 0) > 0) dMin = p.xF;
+          if (isFinite(dMin) && bD > dMin) { const pr = (bD - dMin) / 2; bal = pr + FOLGA; balObs = "entra " + n2(pr) + " mm no raio"; }
+        } else if (o.tipo === "corte") {
+          const pr = (bD - (p.xf ?? -0.5)) / 2; bal = pr + FOLGA; balObs = "corta do Ø" + n2(bD) + " até o centro";
+        }
+        const tS = tempoOp(o);
+        return {
+          n, head: headDe(o), ferr: o.ferr || "—", nomeF: o.nomeFerr || tp?.nome || o.tipo, nomeOp: tp?.nome || o.tipo, grupo: tp?.grupo || "",
+          orig: "G5" + (3 + (o.orig || 1)), regiao, rot, av, ap, diam, larg, bal, balObs, tempo: tS !== null && tS !== undefined ? fmtMMSS(tS) : "—",
+        };
+      });
+    // MONTAGEM DAS TORRES: cada ferramenta uma vez, no head onde ela está, com o MAIOR balanço que ela precisa
+    const ordemHead = ["TI1", "TS2", "HIBO", "H1", "H2", "—"];
+    const mont = new Map<string, { head: string; ferr: string; nome: string; diam: string; larg: string; bal: number | null; ops: number[] }>();
+    linhas.forEach((l) => {
+      const k = l.head + "|" + l.ferr;
+      const m = mont.get(k);
+      if (!m) mont.set(k, { head: l.head, ferr: l.ferr, nome: l.nomeF, diam: l.diam, larg: l.larg, bal: l.bal, ops: [l.n] });
+      else { m.ops.push(l.n); if (l.bal !== null && (m.bal === null || l.bal > m.bal)) m.bal = l.bal; if (m.diam === "—") m.diam = l.diam; if (m.larg === "—") m.larg = l.larg; }
+    });
+    const montL = [...mont.values()].sort((x, y) => ordemHead.indexOf(x.head) - ordemHead.indexOf(y.head) || x.ferr.localeCompare(y.ferr));
+    const hoje = new Date().toLocaleDateString("pt-BR");
+    const css =
+      "@page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;margin:0;padding:14px;font-size:11px}" +
+      "h1{font-size:17px;margin:0;letter-spacing:.5px}h2{font-size:12px;margin:14px 0 5px;padding:3px 6px;background:#e6e6e6;border-left:4px solid #000;text-transform:uppercase;letter-spacing:.5px}" +
+      ".cab{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:6px}.cab small{color:#444}" +
+      ".info{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid #000;margin-top:8px}.info div{padding:4px 6px;border-right:1px solid #999}.info div:last-child{border-right:0}.info b{display:block;font-size:9px;color:#444;text-transform:uppercase}" +
+      "table{width:100%;border-collapse:collapse}th{background:#d9d9d9;font-size:9.5px;text-transform:uppercase;text-align:left;padding:4px;border:1px solid #000}td{padding:4px;border:1px solid #777;vertical-align:top}" +
+      "tr:nth-child(even) td{background:#f4f4f4}td.t{font-weight:bold;font-size:12px;white-space:nowrap}td.h{font-weight:bold;text-align:center;white-space:nowrap}td small{color:#444}.ok{width:22px}" +
+      ".ass{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;margin-top:22px}.ass div{border-top:1px solid #000;padding-top:3px;font-size:10px;color:#333}" +
+      ".obs{font-size:9.5px;color:#333;margin-top:6px}@media print{body{padding:0}tr{page-break-inside:avoid}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}";
+    const balTxt = (b: number | null, obs = "") => (b === null ? "—" : "<b>≥ " + n2(Math.ceil(b * 2) / 2, 1) + " mm</b>" + (obs ? "<br><small>" + esc(obs) + "</small>" : ""));
+    const html =
+      "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Folha de processo - " + esc(cfg.nome || "PECA") + "</title><style>" + css + "</style></head><body>" +
+      "<div class='cab'><div><h1>FOLHA DE PROCESSO — PREPARAÇÃO DE MÁQUINA</h1><small>Gerado pelo Torno Master · conferir antes de rodar</small></div><div style='text-align:right'><b>" + esc(maqAtual.nome) + "</b><br><small>" + hoje + "</small></div></div>" +
+      "<div class='info'><div><b>Peça / programa</b>" + esc(cfg.nome || "—") + "</div><div><b>Desenho (STEP)</b>" + esc(partProfile?.name || "—") + "</div><div><b>Material</b>" + esc(cfg.material || "—") + "</div>" +
+      "<div><b>Bruto</b>Ø" + n2(bD) + "</div><div><b>Comprimento peça</b>" + (geo ? n2(geo.L) + " mm" : "—") + "</div><div><b>Ø máx peça</b>" + (geo ? "Ø" + n2(geo.dMax) : "—") + "</div></div>" +
+      "<h2>1. Montagem das ferramentas</h2><table><tr><th>Head</th><th>Ferramenta</th><th>Descrição</th><th>Broca / barra</th><th>Largura bedame</th><th>Balanço mínimo</th><th>Usada nas op.</th><th class='ok'>OK</th></tr>" +
+      montL.map((m) => "<tr><td class='h'>" + esc(m.head) + "</td><td class='t'>" + esc(m.ferr) + "</td><td>" + esc(m.nome) + "</td><td>" + m.diam + "</td><td>" + m.larg + "</td><td>" + balTxt(m.bal) + "</td><td>" + m.ops.join(", ") + "</td><td></td></tr>").join("") +
+      "</table><h2>2. Sequência de operações e parâmetros de corte</h2><table><tr><th>Op</th><th>Head</th><th>Ferr.</th><th>Operação</th><th>Origem / região</th><th>Rotação</th><th>Avanço</th><th>Passe</th><th>Broca / barra</th><th>Bedame</th><th>Balanço mín.</th><th>Tempo</th></tr>" +
+      linhas.map((l) => "<tr><td class='h'>" + l.n + "</td><td class='h'>" + esc(l.head) + "</td><td class='t'>" + esc(l.ferr) + "</td><td><b>" + esc(l.nomeOp) + "</b><br><small>" + esc(l.nomeF) + "</small></td><td>" + l.orig + "<br><small>" + esc(l.regiao) + "</small></td><td>" + l.rot + "</td><td>" + l.av + "</td><td>" + l.ap + "</td><td>" + l.diam + "</td><td>" + l.larg + "</td><td>" + balTxt(l.bal, l.balObs) + "</td><td>" + l.tempo + "</td></tr>").join("") +
+      "</table><div class='obs'>Balanço mínimo = profundidade que a ferramenta entra + " + FOLGA + " mm de folga (arredondado para cima). Para barras e brocas, o balanço conta a partir da face onde ela entra; para bedame, é quanto ele entra no raio. Avanços em mm/volta.</div>" +
+      "<div class='ass'><div>Preparador</div><div>Data / hora</div><div>Visto 1ª peça</div></div></body></html>";
+    // janela por cima do app (não mexe em nada do app): mostra a folha e imprime só ela
+    document.getElementById("tm-folha-processo")?.remove();
+    const ov = document.createElement("div");
+    ov.id = "tm-folha-processo";
+    ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.7);display:flex;flex-direction:column;padding:12px;gap:8px";
+    const barra = document.createElement("div");
+    barra.style.cssText = "display:flex;gap:8px;align-items:center;justify-content:flex-end;font-family:Arial,sans-serif";
+    const tit = document.createElement("span");
+    tit.textContent = "Folha de processo — " + (cfg.nome || "PECA");
+    tit.style.cssText = "margin-right:auto;color:#fff;font-weight:bold;font-size:13px";
+    const bImp = document.createElement("button");
+    bImp.textContent = "🖨 Imprimir";
+    bImp.style.cssText = "background:#059669;color:#fff;border:0;border-radius:6px;padding:7px 16px;font-weight:bold;cursor:pointer";
+    const bFec = document.createElement("button");
+    bFec.textContent = "Fechar ✕";
+    bFec.style.cssText = "background:#3f3f46;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-weight:bold;cursor:pointer";
+    const ifr = document.createElement("iframe");
+    ifr.style.cssText = "flex:1;width:100%;border:0;border-radius:6px;background:#fff";
+    ifr.srcdoc = html;
+    const fechar = () => { ov.remove(); document.removeEventListener("keydown", tecla); };
+    const tecla = (e: KeyboardEvent) => { if (e.key === "Escape") fechar(); };
+    bFec.onclick = fechar;
+    // IMPRIMIR: abre a folha numa aba só dela e chama a impressão (lá dá para escolher a impressora ou "Salvar como PDF").
+    // Se o navegador bloquear a aba nova, tenta imprimir direto do quadro.
+    const htmlImp = html.replace("</body>", "<script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body>");
+    bImp.onclick = () => {
+      let w: Window | null = null;
+      try { w = window.open(URL.createObjectURL(new Blob([htmlImp], { type: "text/html" })), "_blank"); } catch { w = null; }
+      if (!w) { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* navegador bloqueou */ } }
+    };
+    // BAIXAR: salva a folha como arquivo (.html). Abrindo o arquivo: Ctrl+P -> "Salvar como PDF" ou imprimir.
+    const bBx = document.createElement("button");
+    bBx.textContent = "⬇ Baixar";
+    bBx.title = "Baixa a folha. Abra o arquivo e use Ctrl+P para imprimir ou Salvar como PDF.";
+    bBx.style.cssText = "background:#1d4ed8;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-weight:bold;cursor:pointer";
+    bBx.onclick = () => {
+      const aL = document.createElement("a");
+      aL.href = URL.createObjectURL(new Blob([htmlImp], { type: "text/html" }));
+      aL.download = "Folha_processo_" + String(cfg.nome || "PECA").replace(/[^A-Za-z0-9_-]/g, "_") + ".html";
+      document.body.appendChild(aL); aL.click(); aL.remove();
+    };
+    document.addEventListener("keydown", tecla);
+    barra.append(tit, bImp, bBx, bFec);
+    ov.append(barra, ifr);
+    document.body.appendChild(ov);
+  };
   // CAMPOS LIGADOS: ao preencher um valor que dá para calcular outro, o app já calcula
   const ligarCalc = (o: TMOp, k: string, n: number): Record<string, number> => {
     const p: Record<string, number> = { ...o.p, [k]: n };
@@ -5506,7 +5668,10 @@ return (
         <div className="rounded-lg border border-zinc-800 p-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[11px] font-bold text-sky-300">PEÇA</span>
-            <button onClick={() => onAnexarStep("peca")} className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600">{partProfile ? "Trocar STEP" : "Anexar STEP"}</button>
+            <div className="flex items-center gap-1.5">
+                  <button onClick={folhaProcesso} disabled={!ops.some((o) => o.ativo)} className="text-[10px] font-bold px-2 py-0.5 rounded border border-zinc-500 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 disabled:opacity-40" title="Folha para o preparador: ferramentas de cada head, rotação, avanço, Ø de broca/barra, largura do bedame e balanço mínimo. Imprime em preto e branco.">📋 Folha de processo</button>
+                  <button onClick={() => onAnexarStep("peca")} className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600">{partProfile ? "Trocar STEP" : "Anexar STEP"}</button>
+                </div>
           </div>
           {geo && partProfile ? (
             <div className="text-xs text-zinc-300 flex flex-wrap gap-x-3 gap-y-1">
@@ -5981,7 +6146,7 @@ return (
               </label>
               <label className="flex items-center gap-1 cursor-pointer" title="Ticar / desticar só as operações do HIBO">
                 <input type="checkbox" className="w-3 h-3 opacity-70" checked={ops.some((o) => (o.posto || (o.cab === "H2" ? "TS2" : "TI1")) === "HIBO") && ops.filter((o) => (o.posto || (o.cab === "H2" ? "TS2" : "TI1")) === "HIBO").every((o) => o.ativo)} ref={(el) => { if (el) { const g = ops.filter((o) => (o.posto || (o.cab === "H2" ? "TS2" : "TI1")) === "HIBO"); el.indeterminate = g.some((o) => o.ativo) && !g.every((o) => o.ativo); } }} onChange={(e) => { const v = e.target.checked; setOps((arr) => arr.map((o) => ((o.posto || (o.cab === "H2" ? "TS2" : "TI1")) === "HIBO" ? { ...o, ativo: v } : o))); }} />
-                <span className="text-[10px] font-bold px-1 rounded border text-fuchsia-300 border-fuchsia-700">HIBO</span>
+                <span className="text-[10px] font-bold px-1 rounded border text-orange-300 border-orange-600">HIBO</span>
               </label>
               </>
             ) : (
@@ -6115,7 +6280,7 @@ return (
                     <button
                       ref={(el) => { fieldRefs.current[`op_${o.id}_cab`] = el; }}
                       onClick={() => { if (maqAtual.id === "TBSY") { /* TBSy: TI1 (torre inferior, H1, G54) -> TS2 (torre superior no fuso, H2, G54) -> HIBO (torre superior no contrafuso, H2, G55) */ const pA = o.posto || (o.cab === "H2" ? "TS2" : "TI1"); const nx = pA === "TI1" ? "TS2" : pA === "TS2" ? "HIBO" : "TI1"; /* operação frontal (face, centro, furação) que estava na FRENTE da peça vai para a FACE DO CORTE ao ir para o HIBO (e volta ao sair) */ const sFp = geo ? geo.zFront + geo.zBack : 0; const hiF = o.faixas.length ? Math.max(...o.faixas.map((g) => Math.max(g[0], g[1]))) : NaN; const loF = o.faixas.length ? Math.min(...o.faixas.map((g) => Math.min(g[0], g[1]))) : NaN; const frontalT = ["face", "centro", "furo", "macho", "alargador"].includes(o.tipo); const espelhar = !!geo && frontalT && ((nx === "HIBO" && pA !== "HIBO" && hiF >= geo.zFront - 0.05) || (nx !== "HIBO" && pA === "HIBO" && loF <= geo.zBack + 0.05)); const faixasN = espelhar ? o.faixas.map(([x1, x2]) => [sFp - Math.max(x1, x2), sFp - Math.min(x1, x2)] as TMFaixa) : o.faixas; const nnF = (parseInt((o.ferr || "").replace(/\D/g, ""), 10) || 0) % 100; /* HIBO só trabalha nas posições 21, 22 e 23 */ const ferrN = nx === "HIBO" && !(nnF >= 21 && nnF <= 23) ? "T0521" : o.ferr; setOp(o.id, { cab: nx === "TI1" ? "H1" : "H2", posto: nx, orig: nx === "HIBO" ? 2 : 1, faixas: faixasN, ferr: ferrN }); } else setOp(o.id, { cab: o.cab === "H2" ? "H1" : "H2" }); }}
-                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
+                      className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (pendCab ? "border-amber-400 bg-amber-950/40 text-amber-300 " : maqAtual.id === "TBSY" && o.posto === "HIBO" ? "border-orange-500 bg-orange-950/40 text-orange-300 " : o.cab === "H2" ? "border-purple-500 text-purple-300 " : "border-sky-600 text-sky-300 ") + (piscaKey === `op_${o.id}_cab` ? "pend-blink-3" : "")}
                       title={maqAtual.id === "TBSY" ? "TBSy - clique para trocar: TI1 = torre inferior (programa H1, G54) | TS2 = torre superior no fuso principal (programa H2, G54) | HIBO = torre superior no contrafuso T521/T522/T523 (programa H2, G55)" : "Onde a ferramenta está: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)"}
                     >
                       {maqAtual.id === "TBSY" ? o.posto || (o.cab === "H2" ? "TS2" : "TI1") : o.cab || "H1"}
