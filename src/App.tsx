@@ -569,7 +569,7 @@ export default function App() {
       let targetIdx = -1;
       for (let i = 0; i < pLines.length; i++) {
         const cleanLine = pLines[i].split(';')[0].replace(/\([^)]*\)/g, '').toUpperCase();
-        if (cleanLine.includes(mCode)) {
+        if (new RegExp(mCode.replace(/[^A-Z0-9]/gi, "") + "(?![0-9])").test(cleanLine)) { // M28 não pode achar o M280
           targetIdx = i;
           break;
         }
@@ -579,11 +579,12 @@ export default function App() {
         const textarea = document.getElementById(`gcode-textarea-${p}`) as HTMLTextAreaElement;
         if (textarea) {
           const viewHeight = textarea.clientHeight;
-          const fontSizeSaved = localStorage.getItem("cnc-editor-font-size");
-          const fontSize = fontSizeSaved ? parseInt(fontSizeSaved, 10) : 14;
-          const lineHeight = Math.round(fontSize * 1.714);
-
-          const targetScrollTop = targetIdx * lineHeight - (viewHeight / 2) + (lineHeight / 2);
+          // ALTURA DA LINHA lida do PRÓPRIO editor (cada canal pode ter um tamanho de letra diferente)
+          const cs = window.getComputedStyle(textarea);
+          let lineHeight = parseFloat(cs.lineHeight);
+          if (!isFinite(lineHeight) || lineHeight <= 0) lineHeight = Math.round((parseFloat(cs.fontSize) || 14) * 1.714);
+          const padTop = parseFloat(cs.paddingTop) || 0;
+          const targetScrollTop = padTop + targetIdx * lineHeight - (viewHeight / 2) + (lineHeight / 2);
           textarea.scrollTop = Math.max(0, targetScrollTop);
           textarea.dispatchEvent(new Event('scroll'));
         }
