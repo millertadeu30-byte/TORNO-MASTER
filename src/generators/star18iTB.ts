@@ -2267,10 +2267,11 @@ export function anexarDesenhosIv<T extends { zA: number; zB: number; xa: number;
     return [antes, depois];
   };
   const ivDe = (pts: { z: number; x: number }[]): Iv[] => pts.slice(1).map((q, k) => ({ zA: pts[k].z, zB: q.z, xa: pts[k].x, xb: Math.max(0, q.x) })).filter((q) => Math.hypot(q.zA - q.zB, (q.xa - q.xb) / 2) > 1e-6);
-  desenhos.forEach((pl0) => {
-    if (!pl0 || pl0.length < 2 || !r.length) return;
+  // tenta emendar cada desenho; um desenho pode emendar em OUTRO desenho já emendado (corrente), por isso repete até não mudar mais
+  const tenta = (pl0: StarTMDesenho): boolean => {
+    if (!pl0 || pl0.length < 2 || !r.length) return true;
     const hA = acha(pl0[0]), hB = acha(pl0[pl0.length - 1]);
-    if (!hA && !hB) { avisos?.push("(DESENHO NAO ENCOSTA NO PERFIL DESTA OPERACAO - IGNORADO)"); return; }
+    if (!hA && !hB) return false;
     if (hA && hB) {
       const inv = hA.i + hA.t > hB.i + hB.t;
       const pl = inv ? [...pl0].reverse() : pl0;
@@ -2279,14 +2280,22 @@ export function anexarDesenhosIv<T extends { zA: number; zB: number; xa: number;
       const [antes] = corta(h1);
       const [, depois] = corta(h2);
       r = [...antes, ...ivDe([p1, ...pl.slice(1, -1), p2]), ...depois];
-      return;
+      return true;
     }
     const h = (hA || hB) as { i: number; t: number };
     const pl = hA ? pl0 : [...pl0].reverse(); // começa na junção
     const pj = ponto(h);
     if (h.i + h.t > r.length / 2) { const [antes] = corta(h); r = [...antes, ...ivDe([pj, ...pl.slice(1)])]; }
     else { const [, depois] = corta(h); r = [...ivDe([...pl.slice(1)].reverse().concat([pj])), ...depois]; }
-  });
+    return true;
+  };
+  let pend = desenhos.slice();
+  let mudou = true;
+  while (pend.length && mudou) {
+    mudou = false;
+    pend = pend.filter((pl) => { const ok = tenta(pl); if (ok) mudou = true; return !ok; });
+  }
+  if (pend.length) avisos?.push("(" + pend.length + " DESENHO(S) NAO ENCOSTA(M) NO PERCURSO DESTA OPERACAO - IGNORADO)");
   return r as unknown as T[];
 }
 export function anexarDesenhosPts(pts: { z: number; x: number }[], desenhos: StarTMDesenho[] | undefined, avisos?: string[]): { z: number; x: number }[] {

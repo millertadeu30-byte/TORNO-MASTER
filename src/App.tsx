@@ -3158,6 +3158,7 @@ interface TMOp {
   cor: string;
   faixas: TMFaixa[];
   desenhos?: { z: number; x: number }[][];
+  selSeq?: number[]; // "Linha por linha": Z do meio de cada coisa clicada (linha do perfil OU desenho), na ordem do clique
   sentidoLinha?: 1 | -1; // "Linha por linha": 1 = de frente para trás | -1 = de trás para a frente (ordem/sentido dos cliques) // linhas DESENHADAS no simulador escolhidas no "Linha por linha" (Z da peça, X em Ø)
   p: Record<string, number>;
   nomeFerr?: string; // nome da ferramenta
@@ -4965,7 +4966,12 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         const lst = o.desenhos || [];
         const ja = lst.some((u) => igual(u, d));
         const novo = ja ? lst.filter((u) => !igual(u, d)) : [...lst, d];
-        return { ...o, desenhos: novo.length ? novo : undefined };
+        // ordem do clique também conta o desenho (ex.: clicou primeiro no desenho e depois na linha = começa no desenho)
+        const zsD = d.map((q) => q.z);
+        const cD = (Math.min(...zsD) + Math.max(...zsD)) / 2;
+        const seq = ja ? (o.selSeq || []).filter((z) => Math.abs(z - cD) > 1e-3) : [...(o.selSeq || []), cD];
+        const slD: 1 | -1 | undefined = seq.length >= 2 ? (seq[seq.length - 1] < seq[0] ? 1 : seq[seq.length - 1] > seq[0] ? -1 : o.sentidoLinha) : o.sentidoLinha;
+        return { ...o, desenhos: novo.length ? novo : undefined, selSeq: seq.length ? seq : undefined, sentidoLinha: slD };
       }));
       return;
     }
@@ -5000,14 +5006,18 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         // SENTIDO DA SELEÇÃO: várias linhas = da 1ª clicada para a última | uma linha só = começa na ponta mais perto do toque
         const zcR = (pick.r as any).zClick as number | undefined;
         const zClk = zcR === undefined ? undefined : sZ === 1 ? zcR : zFromDisp(zcR);
+        const cN = (nova[0] + nova[1]) / 2;
+        const seqN = ja >= 0 ? (o.selSeq || []).filter((z) => Math.abs(z - cN) > 1e-3) : [...(o.selSeq || []), cN];
         let sl: 1 | -1 | undefined;
-        if (fxN.length >= 2) {
+        if (seqN.length >= 2) {
+          sl = seqN[seqN.length - 1] < seqN[0] ? 1 : seqN[seqN.length - 1] > seqN[0] ? -1 : undefined;
+        } else if (fxN.length >= 2) {
           const c0 = (fxN[0][0] + fxN[0][1]) / 2, c1 = (fxN[fxN.length - 1][0] + fxN[fxN.length - 1][1]) / 2;
           sl = c1 < c0 ? 1 : c1 > c0 ? -1 : undefined;
         } else if (fxN.length === 1 && zClk !== undefined && ja < 0) {
           sl = Math.abs(zClk - fxN[0][1]) <= Math.abs(zClk - fxN[0][0]) ? 1 : -1;
         } else if (fxN.length === 1) sl = o.sentidoLinha;
-        return { ...o, faixas: fxN, sentidoLinha: sl };
+        return { ...o, faixas: fxN, selSeq: seqN.length ? seqN : undefined, sentidoLinha: sl };
       }));
       return;
     }
@@ -5047,7 +5057,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       const faixas: TMFaixa[] = [[Math.min(z1, rz), Math.max(z1, rz)]];
       if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY, ...(o.tipo === "face" ? { xi: Math.round(Math.max(pXY.xI, pXY.xF) * 1000) / 1000, xf: Math.min(pXY.xI, pXY.xF) < 0.5 ? -1.6 : Math.round(Math.min(pXY.xI, pXY.xF) * 1000) / 1000 } : {}) } }; // faceamento: X do clique vira Ø inicial / Ø final
       const p = xDeep !== null ? { ...o.p, xff: Math.round(xDeep * 100) / 100, xffClk: 1 } : (o.p as any).xffClk ? { ...o.p, xff: 0, xffClk: 0 } : o.p;
-      return { ...o, faixas, p: { ...p, ...pXY }, sentidoLinha: undefined };
+      return { ...o, faixas, p: { ...p, ...pXY }, sentidoLinha: undefined, selSeq: undefined };
     }));
     setRegiaoSel(null);
   }, [pick ? pick.seq : -1]);
@@ -6424,8 +6434,8 @@ return (
                           <span className="text-[10px] text-zinc-400">Região:</span>
                           <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
-                          <button onClick={() => setOp(o.id, { faixas: toda(o), sentidoLinha: undefined })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
-                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                          <button onClick={() => setOp(o.id, { faixas: toda(o), sentidoLinha: undefined, selSeq: undefined })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
+                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
                           <button onClick={() => { const t = toda(o); setOp(o.id, { faixas: [...o.faixas, (t.length ? [t[0][0], t[0][1]] : [0, 0]) as TMFaixa] }); }} className="text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-600 text-emerald-300 hover:border-emerald-400" title="Cria um trecho para você DIGITAR o Z de começo e de fim">+ Digitar Z início/fim</button>
                         </div>
                       )}
