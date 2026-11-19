@@ -4964,7 +4964,9 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       setOps((arr) => arr.map((o) => {
         if (o.id !== sel.opId) return o;
         const lst = o.desenhos || [];
-        const ja = lst.some((u) => igual(u, d));
+        const jaTem = lst.some((u) => igual(u, d));
+        if (jaTem && sel.modo === "cf") return o; // Começo/Fim: só põe o desenho (clicar de novo não tira)
+        const ja = jaTem;
         const novo = ja ? lst.filter((u) => !igual(u, d)) : [...lst, d];
         // ordem do clique também conta o desenho (ex.: clicou primeiro no desenho e depois na linha = começa no desenho)
         const zsD = d.map((q) => q.z);
@@ -4973,7 +4975,8 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         const slD: 1 | -1 | undefined = seq.length >= 2 ? (seq[seq.length - 1] < seq[0] ? 1 : seq[seq.length - 1] > seq[0] ? -1 : o.sentidoLinha) : o.sentidoLinha;
         return { ...o, desenhos: novo.length ? novo : undefined, selSeq: seq.length ? seq : undefined, sentidoLinha: slD };
       }));
-      return;
+      if (sel.modo === "linha") return;
+      // Começo/Fim: o ponto clicado (em cima do desenho) segue como começo / fim normal da região
     }
     // ZERO DA ORIGEM POR CLIQUE: "__orig<k>" — o clique na peça define a face e o deslocamento da origem k (ex.: G55 contrafuso / Head 2)
     if (sel.opId.startsWith("__orig") && geo) {

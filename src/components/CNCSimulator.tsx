@@ -3533,6 +3533,32 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
         }
         return;
       }
+      // Começo/Fim em cima de uma LINHA DESENHADA: o ponto fica exatamente no desenho e o desenho entra no percurso da operação
+      {
+        const entC = skHit(sketchEnts.filter((se) => se.type === "line" || se.type === "arc"), mx, my, T, 12);
+        if (entC) {
+          const pl = skEntPolyline(entC);
+          if (pl.length >= 2) {
+            const cw = skToWorld(mx, my, T);
+            let bp = pl[0], bd = Infinity;
+            for (let i = 1; i < pl.length; i++) {
+              const u = pl[i - 1], v = pl[i];
+              const dz = v.z - u.z, dr = v.r - u.r, L2 = dz * dz + dr * dr;
+              let t = L2 > 1e-12 ? ((cw.z - u.z) * dz + (cw.r - u.r) * dr) / L2 : 0;
+              t = Math.max(0, Math.min(1, t));
+              const q = { z: u.z + t * dz, r: u.r + t * dr };
+              // perto da ponta (8 px) gruda nela
+              const dPx = (pt: { z: number; r: number }) => Math.hypot((pt.z - cw.z) * zoom, (pt.r - cw.r) * zoom);
+              const cand = dPx(u) < 8 ? u : dPx(v) < 8 ? v : q;
+              const d = Math.hypot(cand.z - cw.z, cand.r - cw.r);
+              if (d < bd) { bd = d; bp = cand; }
+            }
+            setRegiaoClicks((prev) => [...prev, bp]);
+            onRegiaoPick({ z: bp.z, x: bp.r * 2, desenho: pl.map((q) => ({ z: q.z, x: q.r * 2 })) } as any);
+            return;
+          }
+        }
+      }
       // Começo/Fim: projeta o toque na LINHA da peça mais perto (ponto exato onde clicou);
           // só "gruda" no canto se o toque estiver a menos de 8 px dele
           if (partLayers && partLayers.length) {
