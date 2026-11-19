@@ -760,7 +760,8 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const slSel = (opIn as any).sentidoLinha;
     const inverterSel = slSel === -1 ? !espH2 : slSel === 1 ? espH2 : false;
     // DESENHO do usuário também vira de lado no Head 2 espelhado
-    const op: StarTMOp = espH2 && (opIn as any).desenhos?.length ? ({ ...op0, desenhos: (opIn as any).desenhos.map((dd: StarTMDesenho) => dd.map((q) => ({ z: sFH2 - q.z, x: q.x }))) } as StarTMOp) : op0;
+    const op1: StarTMOp = espH2 && (opIn as any).desenhos?.length ? ({ ...op0, desenhos: (opIn as any).desenhos.map((dd: StarTMDesenho) => dd.map((q) => ({ z: sFH2 - q.z, x: q.x }))) } as StarTMOp) : op0;
+    const op: StarTMOp = espH2 && (opIn as any).pontos?.length ? ({ ...op1, pontos: (opIn as any).pontos.map((q: { z: number; x: number }) => ({ z: sFH2 - q.z, x: q.x })) } as StarTMOp) : op1; // PONTO A PONTO também vira no Head 2 espelhado
     const lines: string[] = [];
     const p = op.p;
     const fxs = op.faixas.length ? op.faixas : faixaPadraoStar(op.tipo, geo, p, espH2 ? undefined : op.cab) || [];
@@ -837,7 +838,38 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     lines.push("T" + tNum + "00(" + desc + ")");
     lines.push("/M25");
 
-    if (op.tipo === "face") {
+    // PONTO A PONTO: os pontos clicados no simulador (numerados) viram o caminho da ferramenta, RÍGIDO, na ordem do clique.
+    // Chega por fora (externo: acima do maior Ø / interno: abaixo do menor Ø), anda em G1 de ponto em ponto e sai pelo mesmo lado.
+    const ppPts = (((op as any).pontos || []) as { z: number; x: number }[]).filter((q) => isFinite(q.z) && isFinite(q.x));
+    if (ppPts.length >= 2 && !["furo", "centro", "corte", "roscaExt", "roscaInt"].includes(op.tipo)) {
+      const intPP = ["desbInt", "acabInt", "canalInt"].includes(op.tipo);
+      const fPP = p.f ?? 0.1;
+      const xSegPP = intPP ? Math.max(0, Math.min(...ppPts.map((q) => q.x)) - 1) : Math.max(bD + 1, Math.max(...ppPts.map((q) => q.x)) + 1);
+      emitSpindle(lines, p, intPP ? Math.max(...ppPts.map((q) => q.x)) : bD, 1, acionada);
+      lines.push("(PONTO A PONTO - " + ppPts.length + " PONTOS - CAMINHO RIGIDO NA ORDEM DOS CLIQUES)");
+      // RESTO DE OPERAÇÃO: desce em G0 até 0,5 mm do material que a(s) operação(ões) indicada(s) deixou(aram) no ponto 1 (0 = do bruto) e só aí entra em G1
+      const p1 = ppPts[0];
+      let xAp = p1.x;
+      if (intPP) {
+        const rI = perfilRestoInt(opIn, geo, espH2);
+        const dAb = rI && rI.dMin > 0 ? rI.dMin : (p.d0 ?? 0) > 0 ? (p.d0 as number) : 0;
+        if (dAb > 0) xAp = Math.min(p1.x, dAb - 0.5);
+        if (rI) lines.push("(RESTO DA " + rI.nome + ": ENTRA EM G0 ATE D" + fmt(xAp) + ")");
+      } else {
+        const rE = perfilRestoExt(opIn, canal, geo, espH2);
+        const nv = rE ? rE.nivel(p1.z) : bD;
+        xAp = Math.max(p1.x, Math.min(bD, nv) + 0.5);
+        if (rE) lines.push("(RESTO DA " + rE.nome + ": ENTRA EM G0 ATE D" + fmt(xAp) + ")");
+      }
+      g0Inicial(xSegPP, zFrontClear);
+      lines.push("G0Z" + fmt(zCoord(p1.z)));
+      lines.push("G0X" + fmt(xAp)); // G0 até 0,5 do material (ou direto no ponto 1 se ele já está no ar)
+      const semF = !(Math.abs(xAp - p1.x) > 1e-4);
+      if (!semF) lines.push("G1X" + fmt(p1.x) + "F" + fmt(fPP));
+      for (let i = 1; i < ppPts.length; i++) lines.push("G1X" + fmt(ppPts[i].x) + "Z" + fmt(zCoord(ppPts[i].z)) + (i === 1 && semF ? "F" + fmt(fPP) : ""));
+      lines.push("G0X" + fmt(xSegPP));
+      lines.push("G0Z" + fmt(zFrontClear));
+    } else if (op.tipo === "face") {
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
       const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
       // Z do programa: o lado de FORA (sobremetal) é o MENOR Z — vale para o H1 (face da frente) e o H2 (face do corte)
@@ -1558,9 +1590,9 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             lines.push("G0Z" + fmt(zE));
           }
           if (op.ciclo && !usaQ) {
-            // G76 (2 linhas): P mm rr aa = passes de acabamento / sem chanfro de saída / ângulo (55 = entrada pelo flanco)
+            // G76 (2 linhas): P mm rr aa = passes de acabamento / sem chanfro de saída / ângulo da ferramenta (60 métrica-UN-NPT, 55 BSP-BSPT)
             const q1 = h / Math.sqrt(nPR); // 1ª passada para dar exatamente o nº de passadas pedido (área constante)
-            lines.push("G76P" + String(nMola).padStart(2, "0") + "00" + "55" + "Q50R0.02");
+            lines.push("G76P" + String(nMola).padStart(2, "0") + "00" + (ang55 ? "55" : "60") + "Q50R0.02"); // ângulo da ferramenta = ângulo da rosca: métrica / UN / NPT = 60° | BSP / BSPT (Whitworth) = 55°
             lines.push("G76X" + fmt(dFinalCiclo) + "Z" + fmt(zFimCiclo) + (cone ? "R" + fmt(rConeEntre(zE)) : "") + "P" + Math.round(h * 1000) + "Q" + Math.round(q1 * 1000) + "F" + fmt(avancoR));
           } else {
             // G92 passada por passada (G92 faz CÔNICA com R): área constante + flanco modificado
@@ -1985,7 +2017,10 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
     return lines;
   };
 
-  return { gerarOpLinhas, ferramentasUsadas, deslH1 };
+  // RESTO DE OPERAÇÃO para os geradores próprios (Siemens / Index): mesma conta do motor único, na geometria da peça (lado 1)
+  const restoExtOp = (o: StarTMOp) => perfilRestoExt(o, "H1", geoBaseStar, false);
+  const restoIntOp = (o: StarTMOp) => perfilRestoInt(o, geoBaseStar, false);
+  return { gerarOpLinhas, ferramentasUsadas, deslH1, restoExtOp, restoIntOp };
 }
 
 export function tmGerarStar18iTB(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg): StarGerarResult {

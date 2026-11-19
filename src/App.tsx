@@ -392,7 +392,7 @@ export default function App() {
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [projVer, setProjVer] = useState<number>(0); // muda ao carregar um projeto (simuladores recarregam)
   const [showIniciar, setShowIniciar] = useState<boolean>(false); // assistente ▶ Iniciar Programa
-  const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" } | null>(null); // escolhendo região no simulador
+  const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" | "pp" } | null>(null); // escolhendo região no simulador
   const [regiaoPick, setRegiaoPick] = useState<{ seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null>(null);
   const [regiaoLimparSeq, setRegiaoLimparSeq] = useState<number>(0);
   const [painelRegioes, setPainelRegioes] = useState<TMRegiao[]>([]);
@@ -3159,6 +3159,7 @@ interface TMOp {
   faixas: TMFaixa[];
   desenhos?: { z: number; x: number }[][];
   selSeq?: number[]; // "Linha por linha": Z do meio de cada coisa clicada (linha do perfil OU desenho), na ordem do clique
+  pontos?: { z: number; x: number }[]; // PONTO A PONTO: caminho rígido da ferramenta, na ordem dos cliques (Z da peça, X em Ø)
   sentidoLinha?: 1 | -1; // "Linha por linha": 1 = de frente para trás | -1 = de trás para a frente (ordem/sentido dos cliques) // linhas DESENHADAS no simulador escolhidas no "Linha por linha" (Z da peça, X em Ø)
   p: Record<string, number>;
   nomeFerr?: string; // nome da ferramenta
@@ -3890,7 +3891,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
     }
     pendAp = { x: apX, z: apZ, interno };
       // MOTOR ÚNICO (sem ciclo): o caminho vem do mesmo cálculo da Star; aqui só traduz a escrita para esta máquina
-      if (TM_MOTOR_UNICO.includes(op.tipo) && !op.ciclo && (op.cab ?? "H1") === "H1") {
+      if (TM_MOTOR_UNICO.includes(op.tipo) && (!op.ciclo || (op.pontos?.length ?? 0) >= 2) && (op.cab ?? "H1") === "H1") { // PONTO A PONTO vai sempre pelo motor único (mesmo com ciclo marcado)
         if (!emiStar) emiStar = criarEmissorOpsStar(ops as any, geo as any, { nome: nm, bD, rpmMax: cfg.rpmMax, material: cfg.material, origens: cfg.origens as any, zero: cfg.zero, brutoDz: cfg.brutoDz } as any);
         const ini0 = out.length;
         const lsStar = emiStar.gerarOpLinhas(op as any, "H1");
@@ -4695,8 +4696,8 @@ export const PainelPrograma: React.FC<{
   showStock: boolean;
   setShowStock: (v: boolean) => void;
   onAnexarStep: (alvo: "peca" | "bruto") => void;
-  regiaoSel: { opId: string; modo: "cf" | "linha" } | null;
-  setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" } | null) => void;
+  regiaoSel: { opId: string; modo: "cf" | "linha" | "pp" } | null;
+  setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" | "pp" } | null) => void;
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
   onLimparRegiao: () => void;
   onRegioes: (r: TMRegiao[]) => void;
@@ -4955,6 +4956,18 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     if (!pick || !regiaoSel) return;
     const r = sZ === 1 ? pick.r : { ...pick.r, z: zFromDisp(pick.r.z), za: pick.r.za === undefined ? undefined : zFromDisp(pick.r.za), zb: pick.r.zb === undefined ? undefined : zFromDisp(pick.r.zb) };
     const sel = regiaoSel;
+    // PONTO A PONTO: cada clique vira o próximo ponto (numerado) do caminho rígido da ferramenta
+    if (sel.modo === "pp" && !sel.opId.startsWith("__orig")) {
+      const pt = { z: r.z, x: pick.r.x };
+      if (!isFinite(pt.z) || !isFinite(pt.x)) return;
+      setOps((arr) => arr.map((o) => {
+        if (o.id !== sel.opId) return o;
+        const pts = [...(o.pontos || []), pt];
+        const zs = pts.map((q) => q.z);
+        return { ...o, pontos: pts, faixas: [[Math.min(...zs), Math.max(...zs)] as TMFaixa], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined };
+      }));
+      return;
+    }
     // LINHA DESENHADA (esboço do simulador) escolhida no "Linha por linha": vira parte do percurso da operação
     // (clicar de novo na mesma linha tira ela). Não mexe na região do perfil.
     const desP = (pick.r as any).desenho as { z: number; x: number }[] | undefined;
@@ -4973,7 +4986,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         const cD = (Math.min(...zsD) + Math.max(...zsD)) / 2;
         const seq = ja ? (o.selSeq || []).filter((z) => Math.abs(z - cD) > 1e-3) : [...(o.selSeq || []), cD];
         const slD: 1 | -1 | undefined = seq.length >= 2 ? (seq[seq.length - 1] < seq[0] ? 1 : seq[seq.length - 1] > seq[0] ? -1 : o.sentidoLinha) : o.sentidoLinha;
-        return { ...o, desenhos: novo.length ? novo : undefined, selSeq: seq.length ? seq : undefined, sentidoLinha: slD };
+        return { ...o, desenhos: novo.length ? novo : undefined, selSeq: seq.length ? seq : undefined, sentidoLinha: slD, pontos: undefined };
       }));
       if (sel.modo === "linha") return;
       // Começo/Fim: o ponto clicado (em cima do desenho) segue como começo / fim normal da região
@@ -5020,7 +5033,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         } else if (fxN.length === 1 && zClk !== undefined && ja < 0) {
           sl = Math.abs(zClk - fxN[0][1]) <= Math.abs(zClk - fxN[0][0]) ? 1 : -1;
         } else if (fxN.length === 1) sl = o.sentidoLinha;
-        return { ...o, faixas: fxN, selSeq: seqN.length ? seqN : undefined, sentidoLinha: sl };
+        return { ...o, faixas: fxN, selSeq: seqN.length ? seqN : undefined, sentidoLinha: sl, pontos: undefined };
       }));
       return;
     }
@@ -5060,7 +5073,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       const faixas: TMFaixa[] = [[Math.min(z1, rz), Math.max(z1, rz)]];
       if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY, ...(o.tipo === "face" ? { xi: Math.round(Math.max(pXY.xI, pXY.xF) * 1000) / 1000, xf: Math.min(pXY.xI, pXY.xF) < 0.5 ? -1.6 : Math.round(Math.min(pXY.xI, pXY.xF) * 1000) / 1000 } : {}) } }; // faceamento: X do clique vira Ø inicial / Ø final
       const p = xDeep !== null ? { ...o.p, xff: Math.round(xDeep * 100) / 100, xffClk: 1 } : (o.p as any).xffClk ? { ...o.p, xff: 0, xffClk: 0 } : o.p;
-      return { ...o, faixas, p: { ...p, ...pXY }, sentidoLinha: undefined, selSeq: undefined };
+      return { ...o, faixas, p: { ...p, ...pXY }, sentidoLinha: undefined, selSeq: undefined, pontos: undefined };
     }));
     setRegiaoSel(null);
   }, [pick ? pick.seq : -1]);
@@ -5074,7 +5087,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     const t = c[i]; c[i] = c[j]; c[j] = t;
     return c;
   });
-  const escolherRegiao = (id: string, modo: "cf" | "linha") => {
+  const escolherRegiao = (id: string, modo: "cf" | "linha" | "pp") => {
     primeiroRef.current = null;
     onLimparRegiao();
     if (regiaoSel && regiaoSel.opId === id && regiaoSel.modo === modo) setRegiaoSel(null);
@@ -6437,8 +6450,8 @@ return (
                           <span className="text-[10px] text-zinc-400">Região:</span>
                           <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
-                          <button onClick={() => setOp(o.id, { faixas: toda(o), sentidoLinha: undefined, selSeq: undefined })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
-                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                          <button onClick={() => { if (!(regiaoSel && regiaoSel.opId === o.id && regiaoSel.modo === "pp")) setOp(o.id, { pontos: undefined }); escolherRegiao(o.id, "pp"); }} title="Ponto a ponto: clique os pontos no desenho na ordem do caminho (vão sendo numerados). A ferramenta anda RÍGIDA de ponto em ponto." className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "pp" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Ponto a ponto{(o.pontos?.length ?? 0) > 0 ? " (" + o.pontos!.length + ")" : ""}</button>
+                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined, pontos: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
                           <button onClick={() => { const t = toda(o); setOp(o.id, { faixas: [...o.faixas, (t.length ? [t[0][0], t[0][1]] : [0, 0]) as TMFaixa] }); }} className="text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-600 text-emerald-300 hover:border-emerald-400" title="Cria um trecho para você DIGITAR o Z de começo e de fim">+ Digitar Z início/fim</button>
                         </div>
                       )}

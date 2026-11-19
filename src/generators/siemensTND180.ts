@@ -9,6 +9,7 @@ import {
   emitirContornoArcos,
   detectarCanaisStar,
   planoCanalStar,
+  criarEmissorOpsStar,
 } from "./star18iTB";
 import { MAQUINAS_DNA } from "../data/maquinasDNA";
 
@@ -227,6 +228,22 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
 
   const origs = cfg.origens || [];
   const ativos = ops.filter((o) => o.ativo);
+  // RESTO DE OPERAÇÃO: mesma conta do motor único (o que a(s) operação(ões) do campo "Resto" deixou(aram) na peça)
+  let emiResto: ReturnType<typeof criarEmissorOpsStar> | null = null;
+  try { emiResto = criarEmissorOpsStar(ops, geo, cfg); } catch { emiResto = null; }
+  const restoExtS = (o: StarTMOp) => { try { return emiResto ? emiResto.restoExtOp(o) : null; } catch { return null; } };
+  const restoIntS = (o: StarTMOp) => { try { return emiResto ? emiResto.restoIntOp(o) : null; } catch { return null; } };
+  // RESTO no CANAL: o bedame desce em G0 até 0,5 acima do material que a operação do "Resto" deixou (na largura do bedame)
+  const xRestoC = (o: StarTMOp, zProg: number, larg: number, xTopo: number, zMap: (z: number) => number) => {
+    const r = restoExtS(o);
+    if (!r) return xTopo;
+    const z0 = zMap(0), k = zMap(1) - z0;
+    if (Math.abs(k) < 1e-9) return xTopo;
+    const zg = (zProg - z0) / k;
+    let mx = 0;
+    for (let d = -larg; d <= larg + 1e-9; d += 0.05) mx = Math.max(mx, r.nivel(zg + d));
+    return Math.min(xTopo, mx + 0.5);
+  };
 
   const temH2OuLado2 = ativos.some((o) => {
     if (o.cab === "H2") return true;
@@ -351,7 +368,30 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
 
     const zFrontClear = zS(geo.zFront) + Math.max(1, aprox);
 
-    if (op.tipo === "face") {
+    // PONTO A PONTO: caminho RÍGIDO pelos pontos clicados (na ordem), igual ao motor único das outras máquinas
+    const ppPts = (((op as any).pontos || []) as { z: number; x: number }[]).filter((q) => isFinite(q.z) && isFinite(q.x));
+    if (ppPts.length >= 2 && !["furo", "centro", "corte", "roscaExt", "roscaInt", "macho"].includes(op.tipo)) {
+      const intPP = ["desbInt", "acabInt", "canalInt"].includes(op.tipo);
+      const fPP = p.f ?? 0.1;
+      const xSegPP = intPP ? Math.max(0, Math.min(...ppPts.map((q) => q.x)) - 1) : Math.max(bD + 1, Math.max(...ppPts.map((q) => q.x)) + 1);
+      
+      W(";PONTO A PONTO - " + ppPts.length + " PONTOS - CAMINHO RIGIDO NA ORDEM DOS CLIQUES");
+      const p1 = ppPts[0];
+      // chega em G0 até 0,5 do bruto (externo) ou do pré-furo (interno) - ou direto no ponto 1 se ele já está no ar - e entra em G1
+      // RESTO: G0 até 0,5 do que a operação do "Resto" deixou no ponto 1 (0 = do bruto / pré-furo)
+      const rIpp = intPP ? restoIntS(op) : null;
+      const rEpp = intPP ? null : restoExtS(op);
+      const dAbPP = rIpp && rIpp.dMin > 0 ? rIpp.dMin : (p.d0 ?? 0) > 0 ? (p.d0 as number) : 0;
+      const xAp = intPP ? (dAbPP > 0 ? Math.min(p1.x, dAbPP - 0.5) : p1.x) : Math.max(p1.x, Math.min(bD, rEpp ? rEpp.nivel(p1.z) : bD) + 0.5);
+      W("G0X" + fmt(xSegPP) + "Z" + fmt(zFrontClear));
+      W("G0Z" + fmt(zS(p1.z)));
+      W("G0X" + fmt(xAp));
+      const semF = !(Math.abs(xAp - p1.x) > 1e-4);
+      if (!semF) W("G1X" + fmt(p1.x) + "F" + fmt(fPP));
+      for (let i = 1; i < ppPts.length; i++) W("G1X" + fmt(ppPts[i].x) + "Z" + fmt(zS(ppPts[i].z)) + (i === 1 && semF ? "F" + fmt(fPP) : ""));
+      W("G0X" + fmt(xSegPP));
+      W("G0Z" + fmt(zFrontClear));
+    } else if (op.tipo === "face") {
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
       const zFim = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
       const zTopo = zIni - zFim < 0.001 ? zFim + (p.sobre ?? 0.5) : zIni;
@@ -498,6 +538,8 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
           const xMin = Math.min(...compOff.map((q) => q.x), ...rawOff.map((q) => q.x));
             // degraus retos da peça (+ sobremetal): o passe PARA neles (ex.: Ø28,4 + 0,4 = Ø28,8), igual à TBSy
             const platE = Array.from(new Set(compOff.filter((q, k) => k < compOff.length - 1 && Math.abs(compOff[k + 1].x - q.x) < 2e-3 && Math.abs(compOff[k + 1].z - q.z) > 0.05).map((q) => Math.round(q.x * 1000) / 1000)));
+          const rEdS = restoExtS(op);
+          if (rEdS) W(";RESTO DA " + rEdS.nome + ": PASSES SO ONDE ELA DEIXOU MATERIAL");
           let xp = bD;
           let gXp = 0;
           while (gXp++ < 1000 && xp > xMin + 1e-6) {
@@ -510,9 +552,13 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
             const zlRaw = zOndeAlvo(rawOff, xp + 1e-6, false);
             const zl = Math.max(zlComp, zlRaw);
             if (zl >= pts[0].z - 1e-4) continue;
+            // RESTO: o passe só corta onde a operação do "Resto" deixou material acima dele; até lá vai em G0
+            let zMatR = pts[0].z;
+            if (rEdS) { let achou = false; for (let zz = pts[0].z; zz >= zl - 1e-9; zz -= 0.05) { if (rEdS.nivel(zz) > xp + 1e-6) { zMatR = zz; achou = true; break; } } if (!achou) continue; }
             const zEndS = zS(zl);
             const xRet = Math.min(bD + 2, xp + Math.min(2 * apDesb, 1.5));
             W(`G0X${fmt(xp)}`);
+            if (zMatR < pts[0].z - 0.5) W(`G0Z${fmt(zS(zMatR + 0.5))}`);
             W(`G1Z${fmt(zEndS)}F${fmt(p.f ?? 0.25)}`);
             W(`G1X${fmt(xRet)}Z${fmt(zEndS + 0.5)}`);
             W(`G0Z${fmt(zStart)}`);
@@ -596,8 +642,10 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
               let gC = 0;
               while (gC++ < 200) {
                 W(`G0Z${fmt(zCur)}`);
+                const xIniC = xRestoC(op, zCur, larg, xStart, zS);
+                if (xIniC < xStart - 1e-4) W(`G0X${fmt(xIniC)}`);
                 if (pk > 0) {
-                  let xCur = xStart;
+                  let xCur = xIniC;
                   let gP = 0;
                   while (gP++ < 200 && xCur > dFundoG + 1e-4) {
                     xCur = Math.max(dFundoG, xCur - 2 * pk);
@@ -700,7 +748,8 @@ export function tmGerarSiemensTND180(ops: StarTMOp[], geo: StarTMGeo, cfg: StarG
         const real = p.real === 1;
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
         const pts = compensarRaio(limitaMergulho(perfilMono(s, true, real), angM), p.rp ?? 0.4, true);
-        const dSeg = op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
+        const rIdS = op.tipo === "desbInt" ? restoIntS(op) : null; // RESTO: começa do Ø que a operação do "Resto" já abriu
+      const dSeg = rIdS && rIdS.dMin > 0 ? rIdS.dMin : op.tipo === "desbInt" && (p.d0 ?? 0) > 0 ? p.d0 : geo.intDmin;
         const xEnt = Math.max(1, dSeg - ((p.fi ?? 1) > 0 ? p.fi : 1));
         const zStart = zS(pts[0].z) + aprox;
         W(`G0X${fmt(bD + 2)}Z${fmt(Math.max(zFrontClear, zStart))}M7`);

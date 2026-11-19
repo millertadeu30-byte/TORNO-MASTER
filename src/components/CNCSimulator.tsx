@@ -66,7 +66,7 @@ interface CNCSimulatorProps {
   bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
   cursorStyle?: CursorStyle; // cores e tamanho da mira e do quadradinho do desenho (Aparência)
   // Painel ▶ Programa da peça: escolher a REGIÃO de cada operação clicando na peça e mostrar as regiões
-  regiaoModo?: "cf" | "linha" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
+  regiaoModo?: "cf" | "linha" | "pp" | null; // cf = toque no começo e no fim | linha = toque em cada linha do perfil
   regiaoLimparSeq?: number; // incrementa quando o usuário limpa a seleção para apagar as marquinhas
   onRegiaoPick?: (r: { z: number; x: number; za?: number; zb?: number }) => void;
   regioes?: { cor: string; faixas: [number, number][]; ativa: boolean; grupo?: string; ap?: { x: number; z: number }; fundo?: { z: number; x: number } }[];
@@ -3493,6 +3493,14 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const mx = rct.width > 0 ? ((e.clientX - rct.left) / rct.width) * cnv.width : 0;
       const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
       const T = sketchView(cnv);
+      // PONTO A PONTO: cada toque vira o próximo ponto numerado (gruda nas pontas/linhas do desenho e da peça)
+      if (regiaoModo === "pp") {
+        const sp = sketchPick(mx, my, cnv);
+        const pw = sp ? sp.p : skToWorld(mx, my, T);
+        setRegiaoClicks((prev) => [...prev, pw]);
+        onRegiaoPick({ z: pw.z, x: pw.r * 2, ponto: true } as any);
+        return;
+      }
       if (regiaoModo === "linha") {
         // LINHA DESENHADA (esboço): escolher ela põe o desenho no percurso da operação (encosta no perfil = o caminho segue por ela)
         {
