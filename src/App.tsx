@@ -114,7 +114,7 @@ import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
-import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY } from "./generators/star18iTB";
+import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY, anexarDesenhosIv } from "./generators/star18iTB";
 import { calculateCycleTimeDetailed, loadMachineParams } from "./utils/cycleTimeCalculator";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
@@ -3157,6 +3157,8 @@ interface TMOp {
   ciclo: boolean;
   cor: string;
   faixas: TMFaixa[];
+  desenhos?: { z: number; x: number }[][];
+  sentidoLinha?: 1 | -1; // "Linha por linha": 1 = de frente para trás | -1 = de trás para a frente (ordem/sentido dos cliques) // linhas DESENHADAS no simulador escolhidas no "Linha por linha" (Z da peça, X em Ø)
   p: Record<string, number>;
   nomeFerr?: string; // nome da ferramenta
   cab?: "H1" | "H2"; // onde fica na máquina: H1 = HEAD1 torre inferior (canal 1) | H2 = HEAD2 torre superior (canal 2)
@@ -3288,14 +3290,7 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "vc", rot: "Vc m/min", def: 100, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
 };
 
-// ESTENDER INÍCIO / FIM do percurso: vale em todas as operações de perfil (motor único, todas as máquinas)
-const TM_PARAMS_ESTENDER: TMParam[] = [
-  { k: "eiL", rot: "Estender início: comprimento mm (0 = não)", def: 0, step: 0.5 },
-  { k: "eiA", rot: "Estender início: ângulo° (0 = reto em Z, 90 = sobe em X)", def: 0, step: 5 },
-  { k: "efL", rot: "Estender fim: comprimento mm (0 = não)", def: 0, step: 0.5 },
-  { k: "efA", rot: "Estender fim: ângulo° (0 = reto em Z, 90 = sobe em X)", def: 0, step: 5 },
-];
-(["desbExt", "acabExt", "desbInt", "acabInt", "canal"] as TMOpTipo[]).forEach((t) => { if (TM_TIPOS[t] && !TM_TIPOS[t].params.some((pr) => pr.k === "eiL")) TM_TIPOS[t].params.push(...TM_PARAMS_ESTENDER); });
+// (o antigo "Estender início / fim" saiu: agora o percurso segue a linha DESENHADA escolhida no "Linha por linha")
 const tmFmt = (n: number) => {
   let s = (Math.round(n * 1000) / 1000).toFixed(3).replace(/0+$/, "");
   if (s.endsWith(".")) s += "0";
@@ -3737,16 +3732,11 @@ function tmTraduzStarErgomat(ls: string[], zMap: (z: number) => number, comM08: 
   return res;
 }
 
-// ESTENDER INÍCIO / FIM DO PERCURSO (mesma regra do motor único): comprimento mm + ângulo (0 = reto em Z, 90 = sobe em X)
-function tmEstenderIv(s: TMIntervalo[], p: Record<string, number>): TMIntervalo[] {
-  if (!s.length) return s;
-  const ang = (v: number | undefined) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180;
-  let r = s;
-  const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0;
-  if (eiL > 0) { const a = ang(p.eiA); const q = r[0]; r = [{ ...q, zA: q.zA + eiL * Math.cos(a), zB: q.zA, xa: Math.max(0, q.xa + 2 * eiL * Math.sin(a)), xb: q.xa }, ...r]; }
-  if (efL > 0) { const a = ang(p.efA); const q = r[r.length - 1]; r = [...r, { ...q, zA: q.zB, zB: q.zB - efL * Math.cos(a), xa: q.xb, xb: Math.max(0, q.xb + 2 * efL * Math.sin(a)) }]; }
-  return r;
+// DESENHO escolhido na operação: no ponto em que a linha desenhada encosta no perfil, o percurso segue por ela (mesma regra do motor único)
+function tmEstenderIv(s: TMIntervalo[], _p: Record<string, number>, op?: TMOp, avisos?: string[]): TMIntervalo[] {
+  return anexarDesenhosIv(s, op?.desenhos, avisos);
 }
+
 function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMax: number; material: string; origens?: TMOrigem[]; zero?: PartZeroConfig; brutoDz?: number; recuoTroca?: { modo?: "G53" | "G0_ABS"; x?: number; z?: number; xCanal2?: number; zCanal2?: number } }) {
   const f = tmFmt;
   const fmtInt = (n: number) => (Number.isInteger(n) ? String(n) : f(n));
@@ -4048,7 +4038,7 @@ function tmGerar(ops: TMOp[], geo: TMGeo, cfg: { nome: string; bD: number; rpmMa
         const sX = tmCortarIvXZ(s, (p.xI ?? 0) > 0 ? { x: mX(p.xI), z: zCom } : undefined, (p.xF ?? 0) > 0 ? { x: mX(p.xF), z: zFimX } : undefined);
         if (sX !== s) { W("(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 0 ? " - INICIO D" + f(p.xI) : "") + ((p.xF ?? 0) > 0 ? " - FIM D" + f(p.xF) : "") + ");"); s = sX; }
       }
-      s = tmEstenderIv(s, p); // ESTENDER início / fim do percurso
+      { const avD: string[] = []; s = tmEstenderIv(s, p, op, avD); avD.forEach((t) => W(t + ";")); } // DESENHO escolhido na operação (substitui o antigo Estender)
       if (!s.length) { W("(REGIAO SEM PERFIL EXTERNO);"); fimInt(); return; }
       const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo); // G71 Fanuc normal: nunca entra em rebaixo (perfil só cresce)
       const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : TM_PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90; // ângulo de mergulho (só quando entra nos rebaixos)
@@ -4964,6 +4954,21 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     if (!pick || !regiaoSel) return;
     const r = sZ === 1 ? pick.r : { ...pick.r, z: zFromDisp(pick.r.z), za: pick.r.za === undefined ? undefined : zFromDisp(pick.r.za), zb: pick.r.zb === undefined ? undefined : zFromDisp(pick.r.zb) };
     const sel = regiaoSel;
+    // LINHA DESENHADA (esboço do simulador) escolhida no "Linha por linha": vira parte do percurso da operação
+    // (clicar de novo na mesma linha tira ela). Não mexe na região do perfil.
+    const desP = (pick.r as any).desenho as { z: number; x: number }[] | undefined;
+    if (desP && desP.length >= 2 && !sel.opId.startsWith("__orig")) {
+      const d = desP.map((q) => ({ z: sZ === 1 ? q.z : zFromDisp(q.z), x: q.x }));
+      const igual = (u: { z: number; x: number }[], v: { z: number; x: number }[]) => u.length === v.length && (u.every((q, i) => Math.hypot(q.z - v[i].z, q.x - v[i].x) < 1e-3) || u.every((q, i) => Math.hypot(q.z - v[v.length - 1 - i].z, q.x - v[v.length - 1 - i].x) < 1e-3));
+      setOps((arr) => arr.map((o) => {
+        if (o.id !== sel.opId) return o;
+        const lst = o.desenhos || [];
+        const ja = lst.some((u) => igual(u, d));
+        const novo = ja ? lst.filter((u) => !igual(u, d)) : [...lst, d];
+        return { ...o, desenhos: novo.length ? novo : undefined };
+      }));
+      return;
+    }
     // ZERO DA ORIGEM POR CLIQUE: "__orig<k>" — o clique na peça define a face e o deslocamento da origem k (ex.: G55 contrafuso / Head 2)
     if (sel.opId.startsWith("__orig") && geo) {
       const k = parseInt(sel.opId.slice(6), 10);
@@ -4991,7 +4996,18 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       setOps((arr) => arr.map((o) => {
         if (o.id !== sel.opId) return o;
         const ja = o.faixas.findIndex((fx) => Math.abs(fx[0] - nova[0]) < 1e-3 && Math.abs(fx[1] - nova[1]) < 1e-3);
-        return { ...o, faixas: ja >= 0 ? o.faixas.filter((_, k) => k !== ja) : [...o.faixas, nova] };
+        const fxN = ja >= 0 ? o.faixas.filter((_, k) => k !== ja) : [...o.faixas, nova];
+        // SENTIDO DA SELEÇÃO: várias linhas = da 1ª clicada para a última | uma linha só = começa na ponta mais perto do toque
+        const zcR = (pick.r as any).zClick as number | undefined;
+        const zClk = zcR === undefined ? undefined : sZ === 1 ? zcR : zFromDisp(zcR);
+        let sl: 1 | -1 | undefined;
+        if (fxN.length >= 2) {
+          const c0 = (fxN[0][0] + fxN[0][1]) / 2, c1 = (fxN[fxN.length - 1][0] + fxN[fxN.length - 1][1]) / 2;
+          sl = c1 < c0 ? 1 : c1 > c0 ? -1 : undefined;
+        } else if (fxN.length === 1 && zClk !== undefined && ja < 0) {
+          sl = Math.abs(zClk - fxN[0][1]) <= Math.abs(zClk - fxN[0][0]) ? 1 : -1;
+        } else if (fxN.length === 1) sl = o.sentidoLinha;
+        return { ...o, faixas: fxN, sentidoLinha: sl };
       }));
       return;
     }
@@ -5031,7 +5047,7 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
       const faixas: TMFaixa[] = [[Math.min(z1, rz), Math.max(z1, rz)]];
       if (!ehIntRg) return { ...o, faixas, p: { ...o.p, ...pXY, ...(o.tipo === "face" ? { xi: Math.round(Math.max(pXY.xI, pXY.xF) * 1000) / 1000, xf: Math.min(pXY.xI, pXY.xF) < 0.5 ? -1.6 : Math.round(Math.min(pXY.xI, pXY.xF) * 1000) / 1000 } : {}) } }; // faceamento: X do clique vira Ø inicial / Ø final
       const p = xDeep !== null ? { ...o.p, xff: Math.round(xDeep * 100) / 100, xffClk: 1 } : (o.p as any).xffClk ? { ...o.p, xff: 0, xffClk: 0 } : o.p;
-      return { ...o, faixas, p: { ...p, ...pXY } };
+      return { ...o, faixas, p: { ...p, ...pXY }, sentidoLinha: undefined };
     }));
     setRegiaoSel(null);
   }, [pick ? pick.seq : -1]);
@@ -6408,8 +6424,8 @@ return (
                           <span className="text-[10px] text-zinc-400">Região:</span>
                           <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
-                          <button onClick={() => setOp(o.id, { faixas: toda(o) })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
-                          <button onClick={() => { setOp(o.id, { faixas: [] }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                          <button onClick={() => setOp(o.id, { faixas: toda(o), sentidoLinha: undefined })} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-zinc-400">Toda</button>
+                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
                           <button onClick={() => { const t = toda(o); setOp(o.id, { faixas: [...o.faixas, (t.length ? [t[0][0], t[0][1]] : [0, 0]) as TMFaixa] }); }} className="text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-600 text-emerald-300 hover:border-emerald-400" title="Cria um trecho para você DIGITAR o Z de começo e de fim">+ Digitar Z início/fim</button>
                         </div>
                       )}

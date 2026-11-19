@@ -1520,8 +1520,20 @@ export function simularGCodeEColisoes(
       if (!xs.length) return null;
       return { ext: Math.max(...xs), int: xs.length >= 2 ? Math.min(...xs) : null };
     };
+    // ROSCA: o passe de rosca SEMPRE entra no perfil (tira o filete) - não é colisão com a peça (fixações continuam valendo)
+    const linhaRosca = new Set<number>();
+    {
+      let modoR = "";
+      gcodeText.split("\n").forEach((ln, i) => {
+        const cl = ln.replace(/\([^)]*\)/g, "").split(";")[0].toUpperCase();
+        if (/G0?[0-3](?![0-9])/.test(cl)) modoR = "mov";
+        if (/G(32|33|34|76|78)(?![0-9])/.test(cl) || /CYCLE97|LCYC97/.test(cl) || (/G92(?![0-9])/.test(cl) && /[XZUW]\s*[-+]?[\d.]/.test(cl))) modoR = "rosca";
+        if (modoR === "rosca" && /[XZUW]\s*[-+]?[\d.]/.test(cl)) linhaRosca.add(i);
+      });
+    }
     const zDir = simInvertZ ? -1 : 1;
     plotList.forEach((it, idx) => {
+      if (linhaRosca.has(Math.floor((it as any).linhaId ?? -1))) return; // rosca: não confere contra a peça
       const rapido = it.color === "#ff2a2a";
       const diagonal = rapido && Math.abs(it.x2 - it.x1) > 1e-4 && Math.abs(it.z2 - it.z1) > 1e-4;
       const tol = rapido ? 0.05 : 0.6;
@@ -3482,6 +3494,19 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
       const my = rct.height > 0 ? ((e.clientY - rct.top) / rct.height) * cnv.height : 0;
       const T = sketchView(cnv);
       if (regiaoModo === "linha") {
+        // LINHA DESENHADA (esboço): escolher ela põe o desenho no percurso da operação (encosta no perfil = o caminho segue por ela)
+        {
+          const entD = skHit(sketchEnts.filter((se) => se.type === "line" || se.type === "arc"), mx, my, T, 12);
+          if (entD) {
+            const pl = skEntPolyline(entD);
+            if (pl.length >= 2) {
+              setRegiaoClicks((prev) => [...prev, pl[Math.floor(pl.length / 2)]]);
+              const zsD = pl.map((q) => q.z);
+              onRegiaoPick({ z: (Math.min(...zsD) + Math.max(...zsD)) / 2, x: Math.max(...pl.map((q) => q.r)) * 2, desenho: pl.map((q) => ({ z: q.z, x: q.r * 2 })) } as any);
+              return;
+            }
+          }
+        }
         // acha a LINHA (ou arco) do perfil mais perto do toque e manda o começo e o fim dela em Z
         if (!partLayers || !partLayers.length) return;
         const pecaL = partLayers.find((Lr) => Lr.id === "peca") || partLayers[0];
@@ -3504,7 +3529,7 @@ export const CNCSimulator: React.FC<CNCSimulatorProps> = ({
           const clickW = melhorPt ? skToWorld(melhorPt.x, melhorPt.y, T) : skToWorld(mx, my, T);
           setRegiaoClicks((prev) => [...prev, clickW]);
           const zs = m.map((p) => p.z);
-          onRegiaoPick({ z: (Math.min(...zs) + Math.max(...zs)) / 2, x: Math.max(...m.map((p) => p.x)), za: Math.min(...zs), zb: Math.max(...zs) });
+          onRegiaoPick({ z: (Math.min(...zs) + Math.max(...zs)) / 2, x: Math.max(...m.map((p) => p.x)), za: Math.min(...zs), zb: Math.max(...zs), zClick: clickW.z } as any); // zClick: ponta mais perto do toque = começo (sentido da seleção)
         }
         return;
       }

@@ -690,7 +690,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const sF = geo.zFront + geo.zBack;
     const fxo = espH2 ? fxRaw.map((fx) => [sF - Math.max(fx[0], fx[1]), sF - Math.min(fx[0], fx[1])] as StarTMFaixa) : fxRaw;
     let so = subIntervalos(geoC.ext, fxo);
-    if (so.length && ref.tipo !== "face") { const [aX, bX] = pontosXZ(po, fxo); so = estenderIntervalos(cortarIntervalosXZ(so, aX, bX), po, false); } // o que a operação de referência fez de verdade (X de começo/fim e extensão)
+    if (so.length && ref.tipo !== "face") { const [aX, bX] = pontosXZ(po, fxo); so = estenderIntervalos(cortarIntervalosXZ(so, aX, bX), po, false, { desenhos: espH2 ? ((ref as any).desenhos || []).map((dd: StarTMDesenho) => dd.map((q) => ({ z: sF - q.z, x: q.x }))) : (ref as any).desenhos } as any); } // o que a operação de referência fez de verdade (X de começo/fim e extensão)
     if (!so.length) return null;
     const zMax = Math.max(...so.map((q) => Math.max(q.zA, q.zB))), zMin = Math.min(...so.map((q) => Math.min(q.zA, q.zB)));
     if (ref.tipo === "face") return { nivel: (z: number) => (z > zMax + 1e-6 ? 0 : bD), nome: "OP " + nRs };
@@ -755,7 +755,12 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const gerarOpLinhasBase = (opIn: StarTMOp, canal: "H1" | "H2"): string[] => {
     const espH2 = canal === "H2" && !h2NaFrente;
     const geo = espH2 ? geoEspH2 : geoBaseStar;
-    const op: StarTMOp = espH2 && (opIn.faixas.length || opIn.p.zp0 !== undefined) ? { ...opIn, p: opIn.p.zp0 !== undefined ? { ...opIn.p, zp0: sFH2 - opIn.p.zp0 } : opIn.p, faixas: opIn.faixas.map((fx) => [sFH2 - Math.max(fx[0], fx[1]), sFH2 - Math.min(fx[0], fx[1])] as StarTMFaixa) } : opIn;
+    const op0: StarTMOp = espH2 && (opIn.faixas.length || opIn.p.zp0 !== undefined) ? { ...opIn, p: opIn.p.zp0 !== undefined ? { ...opIn.p, zp0: sFH2 - opIn.p.zp0 } : opIn.p, faixas: opIn.faixas.map((fx) => [sFH2 - Math.max(fx[0], fx[1]), sFH2 - Math.min(fx[0], fx[1])] as StarTMFaixa) } : opIn;
+    // SENTIDO DA SELEÇÃO ("Linha por linha"): -1 = clicou de trás para a frente. No Head 2 espelhado o lado vira junto.
+    const slSel = (opIn as any).sentidoLinha;
+    const inverterSel = slSel === -1 ? !espH2 : slSel === 1 ? espH2 : false;
+    // DESENHO do usuário também vira de lado no Head 2 espelhado
+    const op: StarTMOp = espH2 && (opIn as any).desenhos?.length ? ({ ...op0, desenhos: (opIn as any).desenhos.map((dd: StarTMDesenho) => dd.map((q) => ({ z: sFH2 - q.z, x: q.x }))) } as StarTMOp) : op0;
     const lines: string[] = [];
     const p = op.p;
     const fxs = op.faixas.length ? op.faixas : faixaPadraoStar(op.tipo, geo, p, espH2 ? undefined : op.cab) || [];
@@ -868,7 +873,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       let gS = 0;
       while (gS++ < 500 && s.length > 1 && s[0].zA - s[0].zB < 1e-9) s = s.slice(1);
       if (op.tipo === "desbExt") { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim (acabamento já faz pelo cortarPerfilPontos)
-      s = estenderIntervalos(s, p, false); // ESTENDER início / fim do percurso
+      s = estenderIntervalos(s, p, false, op, lines); // ESTENDER início / fim do percurso
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbExt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -1091,6 +1096,15 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
           const mesmoRaio = !!c && Math.abs((c.rp ?? 0.4) - (p.rp ?? 0.4)) < 1e-6;
           if (op.ciclo && c && mesmoRaio) {
             lines.push("G70P" + c.p + "Q" + c.q);
+          } else if (inverterSel) {
+            // SENTIDO DA SELEÇÃO ("Linha por linha"): o acabamento anda de trás para a frente, na ordem em que as linhas foram clicadas
+            const ptsR = cortarPerfilPontos(pts, (p.xI ?? 0) > 0 ? { x: p.xI, z: Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1]))) } : undefined, (p.xF ?? 0) > 0 ? { x: p.xF, z: Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1]))) } : undefined).slice().reverse();
+            const xLivre = Math.max(bD + 1, Math.max(...ptsR.map((q) => q.x)) + 1);
+            lines.push("(SENTIDO DA SELECAO - COMECA EM Z" + fmt(zCoord(ptsR[0].z)) + " E TERMINA EM Z" + fmt(zCoord(ptsR[ptsR.length - 1].z)) + ")");
+            lines.push("G0X" + fmt(xLivre));
+            lines.push("G0Z" + fmt(zCoord(ptsR[0].z)));
+            lines.push("G1X" + fmt(ptsR[0].x) + "F" + fmt(p.f ?? 0.1));
+            emitirContornoArcos(lines, ptsR, zCoord, fmt, "fanuc", p.f ?? 0.1, { xSaida: xLivre, emitStart: false });
           } else {
             const ptsAc = cortarPerfilPontos(pts, (p.xI ?? 0) > 0 ? { x: p.xI, z: Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1]))) } : undefined, (p.xF ?? 0) > 0 ? { x: p.xF, z: Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1]))) } : undefined);
               const zHiAc = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
@@ -1390,7 +1404,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                     const pr: { z: number; x: number }[] = [];
                     pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4 && (v.x - u.x) * (q.x - v.x) + (v.z - u.z) * (q.z - v.z) > 0) pr.pop(); } pr.push(q); }); // só junta reta que continua no mesmo sentido (desce/sobe na parede fica)
                     { const [aX, bX] = pontosXZ(p, fxs, Lb); const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
-{ const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0; const ang = (v: any) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180; if (eiL > 0 && pr.length) { const a = ang(p.eiA); const q = pr[0]; pr.unshift({ z: q.z + eiL * Math.cos(a), x: q.x + 2 * eiL * Math.sin(a) }); } if (efL > 0 && pr.length) { const a = ang(p.efA); const q = pr[pr.length - 1]; pr.push({ z: q.z - efL * Math.cos(a), x: q.x + 2 * efL * Math.sin(a) }); } } // ESTENDER início / fim do contorno do canal
+pr.splice(0, pr.length, ...anexarDesenhosPts(pr, (op as any).desenhos, lines)); // DESENHO escolhido na operação: o contorno do canal segue por ele onde encosta
 const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     const topoA = Math.max(nivelSpan(zPA), pr[0].x) + 0.5;
                     const topoB = Math.max(nivelSpan(zPB), pr[pr.length - 1].x) + 0.5;
@@ -1725,7 +1739,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         // a FACE do fundo NÃO entra no contorno: quem faceia o fundo é o bloco FUNDO (respeita a barra, a folga e o recuo X)
         let s = s0Int.filter((q) => !(Math.abs(q.zA - q.zB) < 1e-6 && Math.abs(q.zA - zFundoS0) < 1e-4));
       { const [aX, bX] = pontosXZ(p, fxs); const sX = cortarIntervalosXZ(s, aX, bX); if (sX !== s) { lines.push(msgXZ(p)); s = sX; } } // X de começo / fim
-          s = estenderIntervalos(s, p, true); // ESTENDER início / fim do percurso
+          s = estenderIntervalos(s, p, true, op, lines); // ESTENDER início / fim do percurso
       if (s.length) {
         const real = p.real === 1 && !(op.tipo === "desbInt" && op.ciclo);
         const angM = real ? ((p.ang ?? 0) > 0 ? p.ang : PASTILHA_ANG[p.pas ?? 2] ?? 27) : 90;
@@ -1830,6 +1844,15 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
           const mesmoRaio = !!c && Math.abs((c.rp ?? 0.4) - (p.rp ?? 0.4)) < 1e-6;
           if (op.ciclo && c && mesmoRaio) {
             lines.push("G70P" + c.p + "Q" + c.q);
+          } else if (inverterSel && op.tipo === "acabInt") {
+            // SENTIDO DA SELEÇÃO ("Linha por linha"): entra pelo furo por dentro (Ø menor que o caminho), vai até o fim escolhido e acaba de trás para a frente
+            const ptsR = pts.slice().reverse();
+            const xDentro = Math.max(0, Math.min(xEnt, Math.min(...ptsR.map((q) => q.x)) - 1));
+            lines.push("(SENTIDO DA SELECAO - COMECA EM Z" + fmt(zCoord(ptsR[0].z)) + " E TERMINA EM Z" + fmt(zCoord(ptsR[ptsR.length - 1].z)) + ")");
+            lines.push("G0X" + fmt(xDentro));
+            lines.push("G0Z" + fmt(zCoord(ptsR[0].z)));
+            lines.push("G1X" + fmt(ptsR[0].x) + "F" + fmt(p.f ?? 0.08));
+            emitirContornoArcos(lines, ptsR, zCoord, fmt, "fanuc", p.f ?? 0.08, { xSaida: xDentro, emitStart: false });
           } else {
             emitirContornoArcos(lines, pts, zCoord, fmt, "fanuc", p.f ?? 0.08, { xSaida: xEnt });
           }
@@ -2210,16 +2233,74 @@ const msgXZ = (p: any) => "(COMECA/TERMINA NO PONTO ESCOLHIDO" + ((p.xI ?? 0) > 
 
 // ESTENDER INÍCIO / FIM DO PERCURSO (como nos CAM): prolonga o perfil escolhido antes do começo e depois do fim,
 // com o comprimento (mm) e o ângulo (graus a partir do eixo Z: 0 = reto em Z para fora, 90 = sobe reto em X) de cada operação.
-function estenderIntervalos(s: StarTMIntervalo[], p: any, interno: boolean): StarTMIntervalo[] {
-  if (!s.length) return s;
-  const sg = interno ? -1 : 1; // externo: sai para o Ø maior | interno: sai para o centro (sempre para o lado sem material)
-  const ang = (v: any) => (Math.max(0, Math.min(90, Number(v) || 0)) * Math.PI) / 180;
-  let r = s;
-  const eiL = Number(p.eiL) || 0, efL = Number(p.efL) || 0;
-  if (eiL > 0) { const a = ang(p.eiA); const q = r[0]; r = [{ ...q, zA: q.zA + eiL * Math.cos(a), zB: q.zA, xa: Math.max(0, q.xa + sg * 2 * eiL * Math.sin(a)), xb: q.xa }, ...r]; }
-  if (efL > 0) { const a = ang(p.efA); const q = r[r.length - 1]; r = [...r, { ...q, zA: q.zB, zB: q.zB - efL * Math.cos(a), xa: q.xb, xb: Math.max(0, q.xb + sg * 2 * efL * Math.sin(a)) }]; }
-  return r;
+// ================= DESENHO DO USUÁRIO NO PERCURSO (substitui o antigo "Estender") =================
+// A linha desenhada no simulador e escolhida no "Linha por linha" vira parte do caminho da ferramenta:
+// no ponto em que ela ENCOSTA no perfil da operação (até 0,05 mm), o percurso segue pelo desenho.
+//  - encosta só numa ponta, no FIM do perfil (ou depois do meio): o percurso sai pelo desenho
+//  - encosta só numa ponta, no COMEÇO do perfil: o percurso entra pelo desenho
+//  - encosta nas DUAS pontas: o desenho troca o trecho do perfil entre elas (desvio)
+// Pontos em Z (geometria) e X em DIÂMETRO. Vale para o motor único (todas as máquinas).
+export type StarTMDesenho = { z: number; x: number }[];
+export function anexarDesenhosIv<T extends { zA: number; zB: number; xa: number; xb: number }>(s: T[], desenhos: StarTMDesenho[] | undefined, avisos?: string[]): T[] {
+  if (!s.length || !desenhos || !desenhos.length) return s;
+  const TOL = 0.05;
+  type Iv = { zA: number; zB: number; xa: number; xb: number };
+  let r: Iv[] = s.map((q) => ({ ...q }));
+  const acha = (pt: { z: number; x: number }) => {
+    let best: { i: number; t: number; d: number } | null = null;
+    r.forEach((q, i) => {
+      const az = q.zA, ar = q.xa / 2, dz = q.zB - q.zA, dr = (q.xb - q.xa) / 2;
+      const L2 = dz * dz + dr * dr;
+      let t = L2 > 1e-12 ? ((pt.z - az) * dz + (pt.x / 2 - ar) * dr) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(az + t * dz - pt.z, ar + t * dr - pt.x / 2);
+      if (d <= TOL && (!best || d < best.d - 1e-9)) best = { i, t, d };
+    });
+    return best as { i: number; t: number; d: number } | null;
+  };
+  const ponto = (h: { i: number; t: number }) => { const q = r[h.i]; return { z: q.zA + h.t * (q.zB - q.zA), x: q.xa + h.t * (q.xb - q.xa) }; };
+  const corta = (h: { i: number; t: number }): [Iv[], Iv[]] => {
+    const q = r[h.i], pt = ponto(h);
+    const antes = r.slice(0, h.i), depois = r.slice(h.i + 1);
+    if (h.t > 1e-9) antes.push({ ...q, zB: pt.z, xb: pt.x });
+    if (h.t < 1 - 1e-9) depois.unshift({ ...q, zA: pt.z, xa: pt.x });
+    return [antes, depois];
+  };
+  const ivDe = (pts: { z: number; x: number }[]): Iv[] => pts.slice(1).map((q, k) => ({ zA: pts[k].z, zB: q.z, xa: pts[k].x, xb: Math.max(0, q.x) })).filter((q) => Math.hypot(q.zA - q.zB, (q.xa - q.xb) / 2) > 1e-6);
+  desenhos.forEach((pl0) => {
+    if (!pl0 || pl0.length < 2 || !r.length) return;
+    const hA = acha(pl0[0]), hB = acha(pl0[pl0.length - 1]);
+    if (!hA && !hB) { avisos?.push("(DESENHO NAO ENCOSTA NO PERFIL DESTA OPERACAO - IGNORADO)"); return; }
+    if (hA && hB) {
+      const inv = hA.i + hA.t > hB.i + hB.t;
+      const pl = inv ? [...pl0].reverse() : pl0;
+      const h1 = inv ? hB : hA, h2 = inv ? hA : hB;
+      const p1 = ponto(h1), p2 = ponto(h2);
+      const [antes] = corta(h1);
+      const [, depois] = corta(h2);
+      r = [...antes, ...ivDe([p1, ...pl.slice(1, -1), p2]), ...depois];
+      return;
+    }
+    const h = (hA || hB) as { i: number; t: number };
+    const pl = hA ? pl0 : [...pl0].reverse(); // começa na junção
+    const pj = ponto(h);
+    if (h.i + h.t > r.length / 2) { const [antes] = corta(h); r = [...antes, ...ivDe([pj, ...pl.slice(1)])]; }
+    else { const [, depois] = corta(h); r = [...ivDe([...pl.slice(1)].reverse().concat([pj])), ...depois]; }
+  });
+  return r as unknown as T[];
 }
+export function anexarDesenhosPts(pts: { z: number; x: number }[], desenhos: StarTMDesenho[] | undefined, avisos?: string[]): { z: number; x: number }[] {
+  if (pts.length < 2 || !desenhos || !desenhos.length) return pts;
+  const iv = pts.slice(1).map((q, k) => ({ zA: pts[k].z, zB: q.z, xa: pts[k].x, xb: q.x }));
+  const r = anexarDesenhosIv(iv, desenhos, avisos);
+  if (!r.length) return pts;
+  return [{ z: r[0].zA, x: r[0].xa }, ...r.map((q) => ({ z: q.zB, x: q.xb }))];
+}
+function estenderIntervalos(s: StarTMIntervalo[], _p: any, _interno: boolean, op?: StarTMOp, avisos?: string[]): StarTMIntervalo[] {
+  // o antigo "Estender início/fim" (comprimento + ângulo) saiu: agora o percurso segue o DESENHO escolhido na operação
+  return anexarDesenhosIv(s, (op as any)?.desenhos, avisos);
+}
+
 function cortarPerfilPontos(pts: StarTMPt[], a?: { x: number; z: number }, b?: { x: number; z: number }): StarTMPt[] {
   if (pts.length < 2 || (!a && !b)) return pts;
   const proj = (q: { x: number; z: number }) => {
