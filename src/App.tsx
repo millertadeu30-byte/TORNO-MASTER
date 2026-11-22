@@ -392,9 +392,10 @@ export default function App() {
   const [activePaneIdx, setActivePaneIdx] = useState<number>(0);
   const [projVer, setProjVer] = useState<number>(0); // muda ao carregar um projeto (simuladores recarregam)
   const [showIniciar, setShowIniciar] = useState<boolean>(false); // assistente ▶ Iniciar Programa
-  const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" | "pp" } | null>(null); // escolhendo região no simulador
+  const [regiaoSel, setRegiaoSel] = useState<{ opId: string; modo: "cf" | "linha" | "pp" | "f3d" } | null>(null); // escolhendo região no simulador
   const [regiaoPick, setRegiaoPick] = useState<{ seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null>(null);
   const [regiaoLimparSeq, setRegiaoLimparSeq] = useState<number>(0);
+  const [faces3dSel, setFaces3dSel] = useState<any[]>([]); // ACIONADA: faces da peça escolhidas no 3D (pintadas de verde)
   const [painelRegioes, setPainelRegioes] = useState<TMRegiao[]>([]);
   const [opsOcultos, setOpsOcultos] = useState<string[]>([]); // operações com o traço oculto no simulador
   const [fixComando, setFixComando] = useState<{ seq: number; zones: TMFixZone[] } | null>(null);
@@ -413,6 +414,7 @@ export default function App() {
     return ["", "", ""]; // o app abre VAZIO (sem programa de exemplo)
   });
   const [activeLine, setActiveLine] = useState<number>(0);
+  const map3dRef = useRef<{ base: number; orig: number[] } | null>(null); // 3D: linha do gráfico -> linha do CANAL 2 (sincronismo editor x 3D)
   const [isAutoSaveActive, setIsAutoSaveActive] = useState<boolean>(() => {
     return localStorage.getItem("cnc_autoSaveActive") === "true";
   });
@@ -1121,7 +1123,7 @@ export default function App() {
     if (tem("activePaneIdx")) setActivePaneIdx(a.activePaneIdx);
     if (tem("simMode")) setSimMode(a.simMode);
     if (tem("simInvertZ")) setSimInvertZ(a.simInvertZ);
-    if (tem("show3DSimulator")) setShow3DSimulator(a.show3DSimulator);
+    setShow3DSimulator(false); // ao carregar um projeto o gráfico abre SEMPRE em 2D (o 3D só quando o usuário pedir)
     if (tem("showPart")) setShowPart(a.showPart);
     if (tem("showStock")) setShowStock(a.showStock);
     if (tem("editorBg")) setEditorBg(a.editorBg);
@@ -2576,7 +2578,7 @@ export default function App() {
                 setRegiaoSel={setRegiaoSel}
                 pick={regiaoPick}
                 onLimparRegiao={() => setRegiaoLimparSeq((n) => n + 1)}
-                onRegioes={setPainelRegioes}
+                onRegioes={setPainelRegioes} onFaces3D={setFaces3dSel}
               onOcultos={setOpsOcultos}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
                 onGerar={(r, vivo) => {
@@ -2684,8 +2686,12 @@ export default function App() {
                       key={"proj" + projVer}
                       partLayers={partLayers}
                       partSolid={partSolid}
+                pickFaces3D={!!(showIniciar && regiaoSel && regiaoSel.modo === "f3d")}
+                onPickFace3D={(f) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r: { z: 0, x: 0, face3d: f } as any }))}
+                facesSel3D={faces3dSel}
                       gcodeText={(() => {
                   // 3D: mostra o H1 e TAMBÉM a usinagem do H2 (blocos M75…M76 do Canal 2), com o Z virado a partir do zero do Head 2
+                  map3dRef.current = null;
                   const base = editorTexts[0] || "";
                   const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
                   const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
@@ -2694,7 +2700,8 @@ export default function App() {
                   const extra: string[] = [];
                   let on = false;
                   let g55TB = false;
-                  editorTexts[1].split("\n").forEach((ln) => {
+                  const origs: number[] = [];
+                  editorTexts[1].split("\n").forEach((ln, li) => {
                     const u = ln.replace(/^\//, "").trim();
                     const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
                     if (/M75(?!\d)/.test(semC)) { on = true; return; }
@@ -2705,19 +2712,21 @@ export default function App() {
                       if (/G53(?!\d)/.test(semC)) return;
                       const mG = semC.match(/G5[4-9]/g);
                       if (mG) g55TB = mG[mG.length - 1] === "G55";
-                      if (!g55TB) { extra.push(u); return; }
+                      if (!g55TB) { extra.push(u); origs.push(li); return; }
                     }
                     let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v + dirIn3D * parseFloat(v)) * 1000) / 1000));
                     if (dirIn3D < 0) l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
+                    origs.push(li);
                   });
                   if (!extra.length) return editorTexts[activePaneIdx];
                   // mantém as linhas do H1 no mesmo número (só desliga o fim de programa) e põe o H2 depois
                   const linhas = base.split("\n").map((l) => (/^\s*%\s*$/.test(l) ? "" : /M99|M30/.test(l) ? "(" + l.replace(/[()]/g, "") + ")" : l));
+                  map3dRef.current = { base: linhas.length + 1, orig: origs };
                   return linhas.join("\n") + "\n(USINAGEM DO HEAD 2 - Z VIRADO PELO ZERO DO H2)\n" + extra.join("\n");
                 })()}
-                      activeLine={activeLine}
-                      onLineChange={analyzeActiveLine}
+                      activeLine={(() => { const mp = map3dRef.current; if (!mp || activePaneIdx !== 1) return activeLine; const j = mp.orig.findIndex((o) => o >= activeLine); return j >= 0 ? mp.base + j : activeLine; })()}
+                      onLineChange={(i) => { const mp = map3dRef.current; if (mp && i >= mp.base) { const o = mp.orig[i - mp.base]; if (typeof o === "number") { setActivePaneIdx(1); setActiveLine(o); } return; } if (mp && activePaneIdx !== 0) setActivePaneIdx(0); analyzeActiveLine(i); }}
                       isHighContrast={isHighContrast}
                       onClose={() => setShow3DSimulator(false)}
                 bgColor={graphBg || undefined}
@@ -2725,7 +2734,7 @@ export default function App() {
                   ) : (
                     <CNCSimulator
                       key={"proj" + projVer}
-                      regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      regiaoModo={showIniciar && regiaoSel && regiaoSel.modo !== "f3d" ? regiaoSel.modo : null}
                       regiaoLimparSeq={regiaoLimparSeq}
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
@@ -2783,8 +2792,12 @@ export default function App() {
                       key={"proj" + projVer}
                       partLayers={partLayers}
                       partSolid={partSolid}
+                pickFaces3D={!!(showIniciar && regiaoSel && regiaoSel.modo === "f3d")}
+                onPickFace3D={(f) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r: { z: 0, x: 0, face3d: f } as any }))}
+                facesSel3D={faces3dSel}
                       gcodeText={(() => {
                   // 3D: mostra o H1 e TAMBÉM a usinagem do H2 (blocos M75…M76 do Canal 2), com o Z virado a partir do zero do Head 2
+                  map3dRef.current = null;
                   const base = editorTexts[0] || "";
                   const dois = layoutCount >= 2 || /\.P-?2$|^O1000$/i.test(fileNames[1] || "");
                   const zH2v = (() => { const z1 = (fixComando?.zones || []).find((f: any) => typeof f.zH2 === "number")?.zH2; if (typeof z1 === "number") return z1; try { const v = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]"); return (Array.isArray(v) ? v : []).find((f: any) => typeof f.zH2 === "number")?.zH2; } catch { return undefined; } })(); // mesmo zero do H2 que o 2D usa
@@ -2793,7 +2806,8 @@ export default function App() {
                   const extra: string[] = [];
                   let on = false;
                   let g55TB = false;
-                  editorTexts[1].split("\n").forEach((ln) => {
+                  const origs: number[] = [];
+                  editorTexts[1].split("\n").forEach((ln, li) => {
                     const u = ln.replace(/^\//, "").trim();
                     const semC = u.replace(/\([^)]*\)/g, "").toUpperCase();
                     if (/M75(?!\d)/.test(semC)) { on = true; return; }
@@ -2804,19 +2818,21 @@ export default function App() {
                       if (/G53(?!\d)/.test(semC)) return;
                       const mG = semC.match(/G5[4-9]/g);
                       if (mG) g55TB = mG[mG.length - 1] === "G55";
-                      if (!g55TB) { extra.push(u); return; }
+                      if (!g55TB) { extra.push(u); origs.push(li); return; }
                     }
                     let l2 = u.replace(/Z(-?[\d.]+)/g, (_m, v) => "Z" + (Math.round((zH2v + dirIn3D * parseFloat(v)) * 1000) / 1000));
                     if (dirIn3D < 0) l2 = l2.replace(/(^|[^0-9.])G0?([23])(?![0-9.])/g, (_m, pre, d) => pre + "G" + (d === "2" ? "3" : "2"));
                     extra.push(l2);
+                    origs.push(li);
                   });
                   if (!extra.length) return editorTexts[activePaneIdx];
                   // mantém as linhas do H1 no mesmo número (só desliga o fim de programa) e põe o H2 depois
                   const linhas = base.split("\n").map((l) => (/^\s*%\s*$/.test(l) ? "" : /M99|M30/.test(l) ? "(" + l.replace(/[()]/g, "") + ")" : l));
+                  map3dRef.current = { base: linhas.length + 1, orig: origs };
                   return linhas.join("\n") + "\n(USINAGEM DO HEAD 2 - Z VIRADO PELO ZERO DO H2)\n" + extra.join("\n");
                 })()}
-                      activeLine={activeLine}
-                      onLineChange={analyzeActiveLine}
+                      activeLine={(() => { const mp = map3dRef.current; if (!mp || activePaneIdx !== 1) return activeLine; const j = mp.orig.findIndex((o) => o >= activeLine); return j >= 0 ? mp.base + j : activeLine; })()}
+                      onLineChange={(i) => { const mp = map3dRef.current; if (mp && i >= mp.base) { const o = mp.orig[i - mp.base]; if (typeof o === "number") { setActivePaneIdx(1); setActiveLine(o); } return; } if (mp && activePaneIdx !== 0) setActivePaneIdx(0); analyzeActiveLine(i); }}
                       isHighContrast={isHighContrast}
                       onClose={() => setShow3DSimulator(false)}
                 bgColor={graphBg || undefined}
@@ -2824,7 +2840,7 @@ export default function App() {
                   ) : (
                     <CNCSimulator
                       key={"proj" + projVer}
-                      regiaoModo={showIniciar && regiaoSel ? regiaoSel.modo : null}
+                      regiaoModo={showIniciar && regiaoSel && regiaoSel.modo !== "f3d" ? regiaoSel.modo : null}
                       regiaoLimparSeq={regiaoLimparSeq}
                       onRegiaoPick={(r) => setRegiaoPick((p) => ({ seq: (p ? p.seq : 0) + 1, r }))}
                       regioes={showIniciar ? painelRegioes : undefined}
@@ -3159,7 +3175,8 @@ interface TMOp {
   faixas: TMFaixa[];
   desenhos?: { z: number; x: number }[][];
   selSeq?: number[]; // "Linha por linha": Z do meio de cada coisa clicada (linha do perfil OU desenho), na ordem do clique
-  pontos?: { z: number; x: number }[]; // PONTO A PONTO: caminho rígido da ferramenta, na ordem dos cliques (Z da peça, X em Ø)
+  pontos?: { z: number; x: number }[];
+  faces3d?: { id: number; tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number; rmin?: number; rmax?: number }[]; // ACIONADA: faces clicadas no 3D // PONTO A PONTO: caminho rígido da ferramenta, na ordem dos cliques (Z da peça, X em Ø)
   sentidoLinha?: 1 | -1; // "Linha por linha": 1 = de frente para trás | -1 = de trás para a frente (ordem/sentido dos cliques) // linhas DESENHADAS no simulador escolhidas no "Linha por linha" (Z da peça, X em Ø)
   p: Record<string, number>;
   nomeFerr?: string; // nome da ferramenta
@@ -3287,7 +3304,7 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
   furoAxial: { nome: "Furo axial fora de centro (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T1818", params: [
     { k: "rpm", rot: "Rotação da ferramenta rpm", def: 2000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 60, step: 5 }, { k: "d", rot: "Ø broca mm", def: 3, step: 0.1 }, { k: "pcd", rot: "Ø do círculo dos furos mm", def: 10, step: 0.1 }, { k: "nf", rot: "Nº de furos", def: 4, step: 1 }, { k: "a0", rot: "Ângulo C do 1º furo °", def: 0, step: 1 }, { k: "q", rot: "Pica-pau mm (0 = direto)", def: 1, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
   fresaFaces: { nome: "Fresar faces / sextavado / quadrado (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T0808", params: [
-    { k: "rpm", rot: "Rotação da fresa rpm", def: 3000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 120, step: 5 }, { k: "df", rot: "Ø da fresa mm", def: 6, step: 0.5 }, { k: "nfc", rot: "Faces", def: 4, step: 1, opcoes: ["1 face", "2 faces", "3 faces", "4 faces (quadrado)", "6 faces (sextavado)", "8 faces"] }, { k: "s", rot: "Medida entre faces (chave) mm — 1 face: 2x a distância do centro", def: 10, step: 0.1 }, { k: "a0", rot: "Ângulo C da 1ª face °", def: 0, step: 1 }, { k: "ap", rot: "Prof. por passe mm (no raio)", def: 0.5, step: 0.1 }, { k: "me", rot: "Modo dos eixos", def: 0, step: 1, opcoes: ["Eixo Y — fresa radial, C parado em cada face", "G12.1 — interpolação polar, fresa axial (X + C)"] }, { k: "pz", rot: "Prof. por passe em Z mm (fresa axial)", def: 2, step: 0.5, quando: ["me", [1]] } ] },
+    { k: "rpm", rot: "Rotação da fresa rpm", def: 3000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 120, step: 5 }, { k: "df", rot: "Ø da fresa mm", def: 6, step: 0.5 }, { k: "nfc", rot: "Faces", def: 4, step: 1, opcoes: ["1 face", "2 faces", "3 faces", "4 faces (quadrado)", "6 faces (sextavado)", "8 faces"] }, { k: "s", rot: "Medida entre faces (chave) mm — 1 face: 2x a distância do centro", def: 10, step: 0.1 }, { k: "a0", rot: "Ângulo C da 1ª face °", def: 0, step: 1 }, { k: "ap", rot: "Prof. por passe mm (no raio)", def: 0.5, step: 0.1 }, { k: "me", rot: "Modo dos eixos", def: 0, step: 1, opcoes: ["Eixo Y — fresa radial, C parado em cada face", "G12.1 — interpolação polar, fresa axial (X + C)"] }, { k: "pz", rot: "Prof. por passe em Z mm (fresa axial)", def: 2, step: 0.5, quando: ["me", [1]] }, { k: "tr", rot: "Trabalho da fresa (faces clicadas no 3D)", def: 0, step: 1, opcoes: ["Topo — ponta da fresa radial encosta na face", "Lateral — flanco da fresa axial (paralela ao Z)"], quando: ["me", [0]] }, { k: "lf", rot: "Comprimento útil da fresa mm", def: 20, step: 1 }, { k: "cc", rot: "Sentido do corte", def: 0, step: 1, opcoes: ["Concordante", "Discordante", "Ida e volta (corta nos dois sentidos)"] }, { k: "rv", rot: "Raio nos vértices ,R mm (0 = canto vivo)", def: 0, step: 0.5, quando: ["me", [1]] } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
     { k: "vc", rot: "Vc m/min", def: 100, step: 5, quando: ["mr", [0]] }, { k: "mr", rot: "Rotação", def: 1, step: 1, opcoes: ["G96 Vc constante + G92 limite", "G97 rotação fixa"] }, { k: "lim", rot: "Limite de rotação G92 S (rpm)", def: 3000, step: 100, quando: ["mr", [0]] }, { k: "rpm", rot: "Rotação fixa G97 S (rpm)", def: 0, step: 50, quando: ["mr", [1]] }, { k: "f", rot: "Avanço mm/v", def: 0.05, step: 0.01 }, { k: "larg", rot: "Largura bedame mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final X", def: -0.5, step: 0.1 }, { k: "rp", rot: "Raio da ponta da ferramenta mm", def: 0.4, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 }, { k: "ax", rot: "Ponto de aproximação X Ø (0 = auto)", def: 0, step: 0.5 }, { k: "az", rot: "Ponto de aproximação Z", def: 2, step: 0.5 } ] },
 };
@@ -4696,16 +4713,18 @@ export const PainelPrograma: React.FC<{
   showStock: boolean;
   setShowStock: (v: boolean) => void;
   onAnexarStep: (alvo: "peca" | "bruto") => void;
-  regiaoSel: { opId: string; modo: "cf" | "linha" | "pp" } | null;
-  setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" | "pp" } | null) => void;
+  regiaoSel: { opId: string; modo: "cf" | "linha" | "pp" | "f3d" } | null;
+  setRegiaoSel: (v: { opId: string; modo: "cf" | "linha" | "pp" | "f3d" } | null) => void;
   pick: { seq: number; r: { z: number; x: number; za?: number; zb?: number } } | null;
   onLimparRegiao: () => void;
   onRegioes: (r: TMRegiao[]) => void;
+  onFaces3D?: (f: any[]) => void;
   onOcultos?: (ids: string[]) => void;
   onFix: (z: TMFixZone[]) => void;
   onGerar: (r: { textos: [string, string]; nomes: [string, string]; doisCanais?: boolean; unicoCanal?: boolean }, vivo?: boolean) => void;
   onClose: () => void;
-}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, stockZero, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes, onOcultos, onFix, onGerar, onClose }) => {
+}> = ({ partProfile, partZero, setPartZero, onSentidoZ, stockProfile, stockZero, showStock, setShowStock, onAnexarStep, regiaoSel, setRegiaoSel, pick, onLimparRegiao, onRegioes,
+  onFaces3D, onOcultos, onFix, onGerar, onClose }) => {
   const ler = <T,>(k: string, padrao: T): T => {
     try { const v = localStorage.getItem(k); return v ? { ...padrao, ...JSON.parse(v) } : padrao; } catch { return padrao; }
   };
@@ -4956,6 +4975,22 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     if (!pick || !regiaoSel) return;
     const r = sZ === 1 ? pick.r : { ...pick.r, z: zFromDisp(pick.r.z), za: pick.r.za === undefined ? undefined : zFromDisp(pick.r.za), zb: pick.r.zb === undefined ? undefined : zFromDisp(pick.r.zb) };
     const sel = regiaoSel;
+    // ACIONADA: FACE clicada no 3D -> entra (ou sai) da lista de faces da operação
+    if (sel.modo === "f3d") {
+      const f3 = (pick.r as any).face3d;
+      if (!f3) return;
+      const fz = sZ === 1 ? f3 : { ...f3, zmin: Math.min(zFromDisp(f3.zmin), zFromDisp(f3.zmax)), zmax: Math.max(zFromDisp(f3.zmin), zFromDisp(f3.zmax)) };
+      setOps((arr) => arr.map((o) => {
+        if (o.id !== sel.opId) return o;
+        const lst = o.faces3d || [];
+        const ja = lst.some((q) => q.id === fz.id);
+        const novo = ja ? lst.filter((q) => q.id !== fz.id) : [...lst, fz];
+        // a REGIÃO da operação passa a ser exatamente de onde as faces clicadas começam até onde terminam em Z
+        const fx: TMFaixa[] = novo.length ? [[Math.min(...novo.map((q) => q.zmin)), Math.max(...novo.map((q) => q.zmax))] as TMFaixa] : o.faixas;
+        return { ...o, faces3d: novo.length ? novo : undefined, faixas: fx };
+      }));
+      return;
+    }
     // PONTO A PONTO: cada clique vira o próximo ponto (numerado) do caminho rígido da ferramenta
     if (sel.modo === "pp" && !sel.opId.startsWith("__orig")) {
       const pt = { z: r.z, x: pick.r.x };
@@ -5087,7 +5122,13 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     const t = c[i]; c[i] = c[j]; c[j] = t;
     return c;
   });
-  const escolherRegiao = (id: string, modo: "cf" | "linha" | "pp") => {
+  // ACIONADA: o 3D pinta as faces já escolhidas da operação que está sendo editada
+  useEffect(() => {
+    if (!onFaces3D) return;
+    const oF = regiaoSel ? ops.find((x) => x.id === regiaoSel.opId) : null;
+    onFaces3D(oF && oF.faces3d ? oF.faces3d : []);
+  }, [ops, regiaoSel]);
+  const escolherRegiao = (id: string, modo: "cf" | "linha" | "pp" | "f3d") => {
     primeiroRef.current = null;
     onLimparRegiao();
     if (regiaoSel && regiaoSel.opId === id && regiaoSel.modo === modo) setRegiaoSel(null);
@@ -6451,7 +6492,10 @@ return (
                           <button onClick={() => escolherRegiao(o.id, "cf")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "cf" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Começo / Fim</button>
                           <button onClick={() => escolherRegiao(o.id, "linha")} className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "linha" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Linha por linha</button>
                           <button onClick={() => { if (!(regiaoSel && regiaoSel.opId === o.id && regiaoSel.modo === "pp")) setOp(o.id, { pontos: undefined }); escolherRegiao(o.id, "pp"); }} title="Ponto a ponto: clique os pontos no desenho na ordem do caminho (vão sendo numerados). A ferramenta anda RÍGIDA de ponto em ponto." className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "pp" ? "bg-amber-600 border-amber-400 text-white" : "border-zinc-600 hover:border-zinc-400")}>Ponto a ponto{(o.pontos?.length ?? 0) > 0 ? " (" + o.pontos!.length + ")" : ""}</button>
-                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined, pontos: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
+                          {TM_TIPOS[o.tipo].grupo === "ACIONADA" && (
+                            <button onClick={() => escolherRegiao(o.id, "f3d")} title="Abra o 3D (peça REAL) e clique nas faces que a fresa vai usinar. Cada face clicada fica verde; clicar de novo tira." className={"text-[10px] font-bold px-2 py-0.5 rounded border " + (escolhendo && regiaoSel && regiaoSel.modo === "f3d" ? "bg-emerald-600 border-emerald-400 text-white" : "border-emerald-700 text-emerald-300 hover:border-emerald-400")}>Faces no 3D{(o.faces3d?.length ?? 0) > 0 ? " (" + o.faces3d!.length + ")" : ""}</button>
+                          )}
+                          <button onClick={() => { setOp(o.id, { faixas: [], desenhos: undefined, sentidoLinha: undefined, selSeq: undefined, pontos: undefined, faces3d: undefined }); onLimparRegiao(); }} className="text-[10px] px-2 py-0.5 rounded border border-zinc-600 hover:border-red-400">Limpar</button>
                           <button onClick={() => { const t = toda(o); setOp(o.id, { faixas: [...o.faixas, (t.length ? [t[0][0], t[0][1]] : [0, 0]) as TMFaixa] }); }} className="text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-600 text-emerald-300 hover:border-emerald-400" title="Cria um trecho para você DIGITAR o Z de começo e de fim">+ Digitar Z início/fim</button>
                         </div>
                       )}
@@ -6483,8 +6527,10 @@ return (
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                         {T.params.filter((pr) => (!pr.so || pr.so.includes(o.ciclo ? o.cicloSel || T.ciclo : "LINHA")) && (!pr.soUso || pr.soUso.includes(o.p.uso ?? 0)) && (!pr.quando || pr.quando[1].includes(o.p[pr.quando[0]] ?? 0))).map((pr) => (
                           <label key={pr.k} className="flex items-center justify-between gap-2 text-[11px] text-zinc-300">
-                            <span className="truncate">{(pr.rotPor && pr.rotPor[(o.ciclo ? o.cicloSel || T.ciclo : "LINHA")]) || pr.rot}</span>
-                            {pr.check ? (
+                            <span className="truncate">{o.tipo === "fresaFaces" && ((o as any).faces3d || []).length && pr.k === "nfc" ? "Repetir a face clicada em C (faces)" : (pr.rotPor && pr.rotPor[(o.ciclo ? o.cicloSel || T.ciclo : "LINHA")]) || pr.rot}</span>
+                            {o.tipo === "fresaFaces" && ((o as any).faces3d || []).length && pr.k === "a0" ? (
+                              <span className="text-[10px] text-zinc-500 italic">vem da face clicada</span>
+                            ) : pr.check ? (
                               <input type="checkbox" className="w-4 h-4" checked={(o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def) === 1} onChange={(e) => setOp(o.id, { p: { ...o.p, [pr.k]: e.target.checked ? 1 : 0 } })} />
                             ) : pr.opcoes ? (
                               <select value={o.p[pr.k] !== undefined ? o.p[pr.k] : pr.def} onChange={(e) => { const v = Number(e.target.value); setOp(o.id, { p: { ...o.p, [pr.k]: v, ...(pr.k === "pas" ? { ang: TM_PASTILHA_ANG[v] } : {}) } }); }} className={inp + " w-28"}>

@@ -33,6 +33,9 @@ interface CNCSimulator3DProps {
   bgColor?: string; // Cor de fundo do gráfico escolhida em "Aparência" (opcional)
   partLayers?: { id: string; label: string; color: string; dashed: boolean; curves: { x: number; z: number }[][] }[]; // Peça / bruto do STEP (perfil do torno)
   partSolid?: PartSolidInfo | null; // Peça REAL do STEP (com rasgos): eixo + zero da peça
+  pickFaces3D?: boolean; // ACIONADA: clicar nas faces da peça real para usinar
+  onPickFace3D?: (f: Face3DInfo) => void;
+  facesSel3D?: Face3DInfo[]; // faces já escolhidas (ficam pintadas)
 }
 
 interface Point3D {
@@ -54,6 +57,9 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   bgColor,
   partLayers,
   partSolid,
+  pickFaces3D = false,
+  onPickFace3D,
+  facesSel3D,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -153,7 +159,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     let curY = 0;  // Default Y
     let curZ = 5;  // Default Z
     let curC = 0;  // Default C angle
-    let polarOn = false, polX = 0, polC = 0; // G12.1 (interpolação polar)
+    let polarOn = false, polX = 0, polC = 0, polNeg = false; // G12.1 (interpolação polar)
+    let curFer: { d: number; l: number; lat: boolean } | null = null; // fresa atual (para desenhar)
     let curRapid = true;
 
     // First start point
@@ -161,7 +168,13 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
     lines.forEach((lineText, idx) => {
       // Remove comments ( ... ) or ; ...
-      const cleanLine = lineText.split(";")[0].replace(/\([^)]*\)/g, "").trim().toUpperCase();
+      let semCom = lineText.split(";")[0];
+      for (let g = 0; g < 10 && /\([^()]*\)/.test(semCom); g++) semCom = semCom.replace(/\([^()]*\)/g, ""); // tira comentários, mesmo com parênteses dentro
+      const cleanLine = semCom.replace(/\(.*$/, "").trim().toUpperCase();
+      // FRESA (acionada): o comentário (FRESA D.. L.. TOPO/LATERAL) diz o tamanho e o lado de trabalho para desenhar a ferramenta
+      const mFr = lineText.toUpperCase().match(/\(FRESA D([\d.]+) L([\d.]+) (TOPO|LATERAL)\)/);
+      if (mFr) curFer = { d: parseFloat(mFr[1]), l: parseFloat(mFr[2]), lat: mFr[3] === "LATERAL" };
+      else if (/(^|[^A-Z])T\d/.test(cleanLine)) curFer = null;
       if (!cleanLine) return;
 
       // Check for G04 / G4 dwell command (e.g., G4 X.3, G04 X0.5, G4 U0.5, G4 P1000)
@@ -205,11 +218,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
           moved = true;
         }
 
-        // G12.1 (interpolação polar): X e C são coordenadas cartesianas na FACE (em raio, como no manual TBSy) -> vira raio + ângulo C para o 3D
-        if (/G12\.1/.test(cleanLine)) { polarOn = true; polX = curX / 2; polC = 0; }
-        if (/G13\.1/.test(cleanLine)) polarOn = false;
+        // G12.1 (interpolação polar): X (em DIÂMETRO) e C (linear, mm) são coordenadas cartesianas na FACE -> vira raio + ângulo C para o 3D
+        if (/G12\.1/.test(cleanLine)) { polarOn = true; polNeg = curX < 0; const cr0 = (curC * Math.PI) / 180; polX = (curX / 2) * Math.cos(cr0); polC = (curX / 2) * Math.sin(cr0); } // começa de onde a ferramenta está (X e C atuais)
+        if (/G13\.1/.test(cleanLine) && polarOn) { polarOn = false; if (polNeg) { curX = -curX; curC = curC - 180; } } // volta para o X/C da máquina (torre com X negativo)
         if (polarOn && (xMatch || cMatch)) {
-          if (xMatch) polX = parseFloat(xMatch[1]);
+          if (xMatch) polX = parseFloat(xMatch[1]) / 2; // X em DIÂMETRO (padrão da calculadora polígono)
           if (cMatch) polC = parseFloat(cMatch[1]);
           curX = 2 * Math.hypot(polX, polC);
           curC = (Math.atan2(polC, polX) * 180) / Math.PI;
@@ -235,10 +248,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         y: curY,
         z: curZ,
         c: curC,
+        fer: curFer,
         line: idx,
         isRapid: curRapid,
         rawText: cleanLine,
-      });
+      } as any);
     });
 
     return points;
@@ -547,6 +561,13 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       localStorage.setItem("cnc_partRot3D", String(partRotDeg));
     } catch {}
   }, [partMode3D, partRotDeg]);
+  // PONTO DO PROGRAMA -> 3D: X em diâmetro vira raio, e o eixo C GIRA o ponto em volta do eixo da peça
+  // (assim a usinagem com C aparece em cima da face certa; a peça real também tem o giro escolhido)
+  const p3D = (pt: { x: number; y: number; z: number; c?: number }) => {
+    const cr = (((pt.c ?? 0) + (partMode3D === "real" ? partRotDeg : 0)) * Math.PI) / 180;
+    const rx = pt.x / 2, ry = pt.y;
+    return new THREE.Vector3(rx * Math.cos(cr) - ry * Math.sin(cr), rx * Math.sin(cr) + ry * Math.cos(cr), pt.z);
+  };
   const [solid, setSolid] = useState<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry } | null>(null);
   const [solidMsg, setSolidMsg] = useState<string>("");
   const solidKey = partSolid
@@ -588,6 +609,82 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       cancel = true;
     };
   }, [solidKey, partMode3D]);
+  // FACES ESCOLHIDAS (acionada): pinta de verde as faces clicadas da peça real
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const old = scene.getObjectByName("facesSel3D");
+    if (old) { scene.remove(old); old.traverse((o) => { const gg = (o as THREE.Mesh).geometry; if (gg) gg.dispose(); }); }
+    if (!solid || !facesSel3D || !facesSel3D.length || partMode3D !== "real") return;
+    const tf = solid.mesh.userData.triFace as number[] | undefined;
+    const pa = solid.mesh.getAttribute("position") as THREE.BufferAttribute;
+    const ixs = solid.mesh.getIndex();
+    if (!tf || !pa || !ixs) return;
+    const ids = new Set(facesSel3D.map((f) => f.id));
+    const arr: number[] = [];
+    for (let t = 0; t < tf.length; t++) if (ids.has(tf[t])) for (let k = 0; k < 3; k++) { const v = ixs.getX(t * 3 + k); arr.push(pa.getX(v), pa.getY(v), pa.getZ(v)); }
+    if (!arr.length) return;
+    const gS = new THREE.BufferGeometry();
+    gS.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+    const mS = new THREE.Mesh(gS, new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthTest: false }));
+    mS.rotation.z = (partRotDeg * Math.PI) / 180;
+    mS.name = "facesSel3D";
+    mS.renderOrder = 10;
+    scene.add(mS);
+  }, [solid, facesSel3D, partMode3D, partRotDeg]);
+  // ORIGENS no 3D: G54 (zero da peça, lado 1) e G55 (contrafuso, lado 2) com as setas X (vermelho), Y (verde), Z (azul)
+  // e o sentido do C. É daqui que saem todas as coordenadas do programa.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const old = scene.getObjectByName("origens3D");
+    if (old) { scene.remove(old); old.traverse((o) => { const oo = o as any; if (oo.geometry) oo.geometry.dispose(); if (oo.material) { if (oo.material.map) oo.material.map.dispose(); oo.material.dispose(); } }); }
+    const grp = new THREE.Group();
+    grp.name = "origens3D";
+    let rMax = 10;
+    (partLayers || []).forEach((L) => L.curves.forEach((c) => c.forEach((p) => { rMax = Math.max(rMax, p.x / 2); })));
+    const L = Math.max(4, rMax * 0.7);
+    const txt = (t: string, cor: string) => {
+      const cv = document.createElement("canvas");
+      cv.width = 512; cv.height = 96;
+      const g2 = cv.getContext("2d");
+      if (g2) { g2.font = "bold 52px monospace"; g2.fillStyle = "rgba(0,0,0,0.55)"; g2.fillRect(0, 8, Math.min(512, 30 * t.length + 20), 80); g2.fillStyle = cor; g2.fillText(t, 10, 66); }
+      const tx = new THREE.CanvasTexture(cv);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tx, depthTest: false, transparent: true }));
+      sp.scale.set(L * 1.6, L * 0.3, 1);
+      sp.renderOrder = 30;
+      return sp;
+    };
+    const seta = (de: THREE.Vector3, dirV: THREE.Vector3, cor: number) => {
+      const ar = new THREE.ArrowHelper(dirV.clone().normalize(), de, L, cor, L * 0.22, L * 0.12);
+      ar.traverse((o) => { const mm = (o as any).material; if (mm) { mm.depthTest = false; mm.transparent = true; } o.renderOrder = 25; });
+      return ar;
+    };
+    const origem = (nome: string, z: number, sentZ: number, cor: string) => {
+      const o0 = new THREE.Vector3(0, 0, z);
+      grp.add(seta(o0, new THREE.Vector3(1, 0, 0), 0xef4444)); // X
+      grp.add(seta(o0, new THREE.Vector3(0, 1, 0), 0x22c55e)); // Y
+      grp.add(seta(o0, new THREE.Vector3(0, 0, sentZ), 0x3b82f6)); // Z (+ sai da peça)
+      // C: arco em volta do eixo, no sentido positivo
+      const arc: THREE.Vector3[] = [];
+      for (let k = 0; k <= 24; k++) { const an = (k / 24) * Math.PI * 0.75; arc.push(new THREE.Vector3(Math.cos(an) * L * 0.7, Math.sin(an) * L * 0.7, z)); }
+      const la = new THREE.Line(new THREE.BufferGeometry().setFromPoints(arc), new THREE.LineBasicMaterial({ color: 0xf59e0b, depthTest: false, transparent: true }));
+      la.renderOrder = 25;
+      grp.add(la);
+      const lx = txt("X+", "#ef4444"); lx.position.set(L * 1.25, 0, z); grp.add(lx);
+      const ly = txt("Y+", "#22c55e"); ly.position.set(0, L * 1.25, z); grp.add(ly);
+      const lz = txt("Z+", "#3b82f6"); lz.position.set(0, 0, z + sentZ * L * 1.25); grp.add(lz);
+      const lc = txt("C+", "#f59e0b"); lc.position.set(Math.cos(Math.PI * 0.75) * L * 0.8, Math.sin(Math.PI * 0.75) * L * 0.8, z); grp.add(lc);
+      const ln = txt(nome, cor); ln.position.set(-L * 1.2, -L * 0.6, z); grp.add(ln);
+    };
+    origem("G54 ZERO", 0, 1, "#facc15");
+    try {
+      const fz = JSON.parse(localStorage.getItem("cnc_fixacoes2D") || "[]");
+      const f2 = Array.isArray(fz) ? fz.find((q: any) => typeof q.zH2 === "number") : null;
+      if (f2 && Math.abs(f2.zH2) > 1e-6) origem("G55 CONTRAFUSO", f2.zH2, -1, "#38bdf8");
+    } catch { /* sem origem 2 */ }
+    scene.add(grp);
+  }, [partLayers, gcodeText]);
   // libera a memória da peça real antiga quando troca
   useEffect(() => () => {
     if (solid) {
@@ -869,7 +966,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       return;
     }
 
-    const vec = new THREE.Vector3(targetPt.x / 2, targetPt.y, targetPt.z);
+    const vec = p3D(targetPt);
     vec.project(cameraRef.current);
 
     const width = mountRef.current.clientWidth;
@@ -970,7 +1067,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     // 1. Check ALL trajectory vertices in the program (no step limits)
     for (let i = 0; i < trajectoryPoints.length; i++) {
       const pt = trajectoryPoints[i];
-      const vec = new THREE.Vector3(pt.x / 2, pt.y, pt.z);
+      const vec = p3D(pt);
       vec.project(cameraRef.current);
 
       const px = (vec.x * 0.5 + 0.5) * width;
@@ -998,7 +1095,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
           const interpY = p1.y + (p2.y - p1.y) * t;
           const interpZ = p1.z + (p2.z - p1.z) * t;
 
-          const vec = new THREE.Vector3(interpX / 2, interpY, interpZ);
+          const vec = p3D({ x: interpX, y: interpY, z: interpZ, c: (p1 as any).c });
           vec.project(cameraRef.current);
 
           const px = (vec.x * 0.5 + 0.5) * width;
@@ -1024,7 +1121,25 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     setHoveredPoint(closestPt);
   };
 
-  const handleCanvasClick = () => {
+  const handleCanvasClick = (e?: React.MouseEvent) => {
+    // ACIONADA: clicar numa FACE da peça real (STEP) -> manda para a operação
+    if (pickFaces3D && onPickFace3D && e && mountRef.current && cameraRef.current && sceneRef.current) {
+      const rct = mountRef.current.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((e.clientX - rct.left) / rct.width) * 2 - 1, -((e.clientY - rct.top) / rct.height) * 2 + 1);
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(ndc, cameraRef.current as any);
+      const grp = sceneRef.current.getObjectByName("pecaSTEP3D");
+      const alvos: THREE.Object3D[] = [];
+      if (grp) grp.traverse((o) => { if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).geometry && (o as THREE.Mesh).geometry.userData && (o as THREE.Mesh).geometry.userData.triFace) alvos.push(o); });
+      const hit = rc.intersectObjects(alvos, false)[0];
+      if (hit && hit.faceIndex !== undefined && hit.faceIndex !== null) {
+        const gm = (hit.object as THREE.Mesh).geometry as THREE.BufferGeometry;
+        const tf = gm.userData.triFace as number[];
+        const info = analisarFace3D(gm, tf ? tf[hit.faceIndex] : -1, hit.faceIndex);
+        if (info) onPickFace3D(info);
+      }
+      return;
+    }
     if (hoveredPoint && hoveredPoint.line >= 0) {
       setCurrentStepIdx(hoveredPoint.idx);
       onLineChange(hoveredPoint.line);
@@ -1050,8 +1165,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       const p2 = trajectoryPoints[i + 1];
 
       // Convert Lathe X (diameter) to 3D Radius position (X_radius = X_diam / 2)
-      const v1 = new THREE.Vector3(p1.x / 2, p1.y, p1.z);
-      const v2 = new THREE.Vector3(p2.x / 2, p2.y, p2.z);
+      const v1 = p3D(p1);
+      const v2 = p3D(p2);
 
       const lineGeo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
 
@@ -1066,15 +1181,19 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         pathGroup.add(line);
       } else {
         const isYMove = Math.abs(p2.y - p1.y) > 0.001;
+        const fresando = !!(p2 as any).fer; // ACIONADA: o corte da fresa aparece SEMPRE, mesmo atrás da peça
         const mat = new THREE.LineBasicMaterial({
-          color: isYMove ? 0x00f3ff : 0x10b981, // Cyan for Y-milling, Emerald green for regular feed
+          color: isYMove ? 0x00f3ff : fresando ? 0x22ff88 : 0x10b981, // Cyan for Y-milling, Emerald green for regular feed
           linewidth: isYMove ? 3 : 2,
+          depthTest: !fresando,
+          transparent: fresando,
         });
         const line = new THREE.Line(lineGeo, mat);
+        if (fresando) line.renderOrder = 999;
         pathGroup.add(line);
       }
     }
-  }, [trajectoryPoints, currentStepIdx, showFullPath]);
+  }, [trajectoryPoints, currentStepIdx, showFullPath, partRotDeg, partMode3D]);
 
   // Update Tool Position & C-Axis Ring in 3D Scene
   useEffect(() => {
@@ -1083,14 +1202,38 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     const { x, y, z, c } = currentPoint;
 
     // Tool Position: X is radius = X_diam / 2
-    toolGroupRef.current.position.set(x / 2, y, z);
+    toolGroupRef.current.position.copy(p3D({ x, y, z, c }));
+    toolGroupRef.current.rotation.z = (((c || 0) + (partMode3D === "real" ? partRotDeg : 0)) * Math.PI) / 180; // a ferramenta gira junto com o C (fica de frente para a face)
 
     // C-axis Rotation: Rotate C-Axis Reference Ring around Z axis (radians)
     if (cAxisGroupRef.current) {
       const cRad = (c * Math.PI) / 180;
       cAxisGroupRef.current.rotation.z = cRad;
     }
-  }, [currentPoint]);
+    // FRESA desenhada (diâmetro x comprimento útil) na operação de fresa: TOPO = radial, ponta na face | LATERAL = axial, corpo para +Z
+    const sceneF = sceneRef.current;
+    if (sceneF) {
+      const oldF = sceneF.getObjectByName("fresa3D") as THREE.Mesh | undefined;
+      if (oldF) { sceneF.remove(oldF); oldF.geometry.dispose(); (oldF.material as THREE.Material).dispose(); }
+      const fer = (currentPoint as any).fer as { d: number; l: number; lat: boolean } | null | undefined;
+      if (fer && fer.d > 0 && fer.l > 0) {
+        const meshF = new THREE.Mesh(new THREE.CylinderGeometry(fer.d / 2, fer.d / 2, fer.l, 28), new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.3, transparent: true, opacity: 0.85 }));
+        meshF.name = "fresa3D";
+        const tip = p3D({ x, y, z, c });
+        const crF = (((c || 0) + (partMode3D === "real" ? partRotDeg : 0)) * Math.PI) / 180;
+        if (fer.lat) {
+          meshF.rotation.x = Math.PI / 2;
+          meshF.position.set(tip.x, tip.y, tip.z + fer.l / 2);
+        } else {
+          const sg = x >= 0 ? 1 : -1;
+          const dirF = new THREE.Vector3(Math.cos(crF) * sg, Math.sin(crF) * sg, 0);
+          meshF.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirF);
+          meshF.position.copy(tip).addScaledVector(dirF, fer.l / 2);
+        }
+        sceneF.add(meshF);
+      }
+    }
+  }, [currentPoint, partRotDeg, partMode3D]);
 
   // Automatic Playback Timer
   useEffect(() => {
@@ -2065,6 +2208,64 @@ export interface PartSolidInfo {
 }
 
 /** Monta a peça real já no sistema do torno do 3D: Z = eixo (mesmo zero da peça), X/Y = em volta do eixo */
+/* =====================================================================================
+ * FACE CLICADA NO 3D (usinagem com acionada): junta os triângulos da face do STEP e mede
+ * onde ela está no sistema da peça (Z do perfil, ângulo C em volta do eixo, distância do centro).
+ *  - plana lateral (sextavado, rebaixo): C = ângulo da normal, d = distância do centro, faixa em Y e Z
+ *  - plana frontal: Z da face e raio mín./máx.
+ * =================================================================================== */
+export interface Face3DInfo {
+  id: number;
+  tipo: "plana" | "frontal" | "outra";
+  c: number; // ângulo C da normal da face (graus, 0..360)
+  d: number; // distância da face ao centro (raio) mm
+  ymin: number; ymax: number; // largura da face no sentido Y (perpendicular à normal)
+  zmin: number; zmax: number; // comprimento da face em Z
+  rmin?: number; rmax?: number; // face frontal: raio interno / externo
+}
+function analisarFace3D(g: THREE.BufferGeometry, faceId: number, triClicado: number): Face3DInfo | null {
+  const pos = g.getAttribute("position") as THREE.BufferAttribute;
+  const ix = g.getIndex();
+  if (!pos || !ix) return null;
+  const tf = (g.userData && g.userData.triFace) as number[] | undefined;
+  const nTri = ix.count / 3;
+  const tris: number[] = [];
+  if (tf && faceId >= 0) { for (let t = 0; t < nTri; t++) if (tf[t] === faceId) tris.push(t); } else tris.push(triClicado);
+  if (!tris.length) return null;
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), nS = new THREE.Vector3();
+  const pts: THREE.Vector3[] = [];
+  const nrm: THREE.Vector3[] = [];
+  tris.forEach((t) => {
+    A.fromBufferAttribute(pos, ix.getX(t * 3)); B.fromBufferAttribute(pos, ix.getX(t * 3 + 1)); C.fromBufferAttribute(pos, ix.getX(t * 3 + 2));
+    const n = new THREE.Vector3().subVectors(B, A).cross(new THREE.Vector3().subVectors(C, A));
+    const ar = n.length();
+    if (ar < 1e-12) return;
+    nS.addScaledVector(n, 1); // ponderado pela área
+    nrm.push(n.clone().divideScalar(ar));
+    pts.push(A.clone(), B.clone(), C.clone());
+  });
+  if (!pts.length || nS.length() < 1e-12) return null;
+  const n = nS.clone().normalize();
+  const plana = nrm.every((q) => Math.abs(q.dot(n)) > 0.995);
+  const zs = pts.map((p) => p.z);
+  const zmin = Math.min(...zs), zmax = Math.max(...zs);
+  if (plana && Math.abs(n.z) > 0.95) {
+    const rs = pts.map((p) => Math.hypot(p.x, p.y));
+    return { id: faceId, tipo: "frontal", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax, rmin: Math.min(...rs), rmax: Math.max(...rs) };
+  }
+  if (plana && Math.abs(n.z) < 0.2) {
+    const th = Math.atan2(n.y, n.x);
+    const ct = Math.cos(th), st = Math.sin(th);
+    const ds = pts.map((p) => p.x * ct + p.y * st);
+    const d = ds.reduce((s, v) => s + v, 0) / ds.length;
+    const ys = pts.map((p) => -p.x * st + p.y * ct);
+    let cDeg = (th * 180) / Math.PI;
+    cDeg = ((cDeg % 360) + 360) % 360;
+    return { id: faceId, tipo: "plana", c: Math.round(cDeg * 1000) / 1000, d: Math.round(d * 1000) / 1000, ymin: Math.min(...ys), ymax: Math.max(...ys), zmin, zmax };
+  }
+  return { id: faceId, tipo: "outra", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax };
+}
+
 async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry }> {
   if (!pl.axis) throw new Error("Anexe o STEP de novo para ver a peça real");
   const occt = await loadOcct();
@@ -2088,6 +2289,8 @@ async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ me
   const dir = pl.face === "direita" ? 1 : -1;
   const pos: number[] = [];
   const idx: number[] = [];
+  const triFace: number[] = []; // cada triângulo -> nº da FACE do STEP (para clicar numa face no 3D)
+  let faceCount = 0;
   for (const m of res.meshes) {
     const p = m.attributes && m.attributes.position && m.attributes.position.array;
     const ix = m.index && m.index.array;
@@ -2102,11 +2305,19 @@ async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ me
       pos.push(xx, yy, zz);
     }
     for (let i = 0; i < ix.length; i++) idx.push(base + ix[i]);
+    {
+      const nTri = Math.floor(ix.length / 3);
+      const fa: number[] = new Array(nTri).fill(-1);
+      const bf = (m as any).brep_faces as { first: number; last: number }[] | undefined;
+      if (bf && bf.length) bf.forEach((f) => { const id = faceCount++; for (let t = f.first; t <= f.last && t < nTri; t++) fa[t] = id; });
+      for (let t = 0; t < nTri; t++) triFace.push(fa[t]);
+    }
   }
   if (!pos.length) throw new Error("O STEP não tem superfícies para mostrar");
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);
+  g.userData.triFace = triFace;
   g.computeVertexNormals();
   const edges = new THREE.EdgesGeometry(g, 30); // só as arestas "de verdade" (cantos), não a malha toda
   return { mesh: g, edges };

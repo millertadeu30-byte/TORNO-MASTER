@@ -680,11 +680,13 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
     const txt = (o as any).rsTxt !== undefined && String((o as any).rsTxt).trim() !== "" ? String((o as any).rsTxt) : String(o.p.rs ?? 0).replace(".", ","); // 6.7 digitado como número = "6,7"
     return Array.from(new Set(txt.split(/[,;\s+]+/).map((t) => parseInt(t, 10)).filter((n) => n > 0)));
   };
+  // LADO da peça para o RESTO: na TBSy a TS2 trabalha no mesmo fuso que a TI1 (só o HIBO é o outro lado)
+  const ladoRestoStar = (o: StarTMOp) => ((o as any).posto ? ((o as any).posto === "HIBO" ? "H2" : "H1") : o.cab ?? "H1");
   const restoExtUm = (nRs: number, opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
     if (!(nRs > 0)) return null;
     const ref = ops[nRs - 1];
     if (!ref || !ref.ativo || ref === opAtual || !(ref.tipo === "desbExt" || ref.tipo === "acabExt" || ref.tipo === "canal" || ref.tipo === "face")) return null;
-    if ((ref.cab ?? "H1") !== (opAtual.cab ?? "H1")) return null;
+    if (ladoRestoStar(ref) !== ladoRestoStar(opAtual)) return null;
     const po = ref.p;
     const fxRaw = ref.faixas.length ? ref.faixas : faixaPadraoStar(ref.tipo, geo, po, ref.cab) || [];
     const sF = geo.zFront + geo.zBack;
@@ -721,7 +723,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const restoIntUm = (nRs: number, opAtual: StarTMOp, geoC: StarTMGeo, espH2: boolean): RestoIntR | null => {
     if (!(nRs > 0)) return null;
     const ref = ops[nRs - 1];
-    if (!ref || !ref.ativo || ref === opAtual || (ref.cab ?? "H1") !== (opAtual.cab ?? "H1")) return null;
+    if (!ref || !ref.ativo || ref === opAtual || ladoRestoStar(ref) !== ladoRestoStar(opAtual)) return null;
     if (ref.tipo === "furo") {
       // FURAÇÃO: o Ø da broca só está aberto da boca até o OMBRO da broca (depois vem o cone da ponta).
       // Só vale como "furo já aberto" da operação inteira se a broca cobre toda a região; senão serve só para os passes entrarem em G0 até onde já está aberto
@@ -1657,7 +1659,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
           const dEm = 2 * rPecaC(zC);
           const xF = (p.xf ?? 0) > 0 ? p.xf : 0;
           const qR = (p.q ?? 1) > 0 ? 2 * p.q : 1e9;
-          lines.push("(FURO RADIAL D" + fmt(p.d ?? 3) + " EM Z" + fmt(zCoord(zC)) + " - " + nF + " FURO(S) - ATE D" + fmt(xF) + " - CONFERIR C/ACIONADA)");
+          lines.push("(FURO RADIAL D" + fmt(p.d ?? 3) + " EM Z" + fmt(zCoord(zC)) + " - " + nF + " FUROS - ATE D" + fmt(xF) + " - CONFERIR C/ACIONADA)");
           g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(zC)));
           if (zCoord(zC) > zFrontClear + 1e-4) lines.push("G0Z" + fmt(zCoord(zC)));
           for (let k = 0; k < nF; k++) {
@@ -1692,49 +1694,235 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             lines.push("G0Z" + fmt(zEA));
           }
         } else {
+          // G12.1 (INTERPOLAÇÃO POLAR) no padrão da CALCULADORA POLÍGONO do app: X em DIÂMETRO, C linear (mm), perfil da peça com compensação G41/G42 e ",R" nos vértices
+          const g12Poligono = (fcs: { th: number; d: number; rTop: number }[], zA: number, zB: number, dfP: number, apP: number, pzP: number, rvP: number, modoC: number, fP: number, espelho: boolean, rSeg: number) => {
+            const rfP = dfP / 2;
+            // POSIÇÃO DE ESPERA: 1 mm além do maior material na região da fresa (rSeg) + raio da fresa -> G0 em C bem perto da peça sem bater
+            const rOut = Math.max(rSeg, ...fcs.map((q) => q.rTop)) + rfP + 1;
+            const ord = fcs.map((q) => ({ ...q, th: ((q.th % 360) + 360) % 360 })).sort((a, b) => a.th - b.th);
+            const n = ord.length;
+            let fechado = n >= 3;
+            for (let k = 0; k < n && fechado; k++) { const g = k < n - 1 ? ord[k + 1].th - ord[k].th : ord[0].th + 360 - ord[k].th; if (g >= 180 - 1e-6) fechado = false; }
+            const dTot = Math.max(0, ...ord.map((q) => q.rTop - q.d));
+            const dls: number[] = [];
+            for (let dl = dTot - apP, g = 0; dl > 1e-6 && g++ < 500; dl -= apP) dls.push(dl);
+            dls.push(0);
+            const zsP: number[] = [];
+            for (let z = zA - pzP, g = 0; z > zB + 1e-6 && g++ < 500; z -= pzP) zsP.push(z);
+            zsP.push(zB);
+            // CONCORDANTE (fresa girando horário): contorno externo no sentido HORÁRIO com G41 | DISCORDANTE: ANTI-HORÁRIO com G42 (igual à calculadora)
+            // modoC: 0 = CONCORDANTE | 1 = DISCORDANTE | 2 = IDA E VOLTA (alterna a cada passada, começando concordante)
+            let nPass = 0;
+            let ccw = modoC === 1;
+            const gFin = () => (ccw ? "G42" : "G41");
+            const gCmp = () => (espelho ? (gFin() === "G41" ? "G42" : "G41") : gFin()); // torre superior: a tradução TBSy espelha o X e devolve o G41/G42 certo
+            const conc = modoC === 0;
+            const gFinal = modoC === 2 ? "G41/G42" : gFin();
+            const P = (x: number, y: number) => "X" + fmt(2 * (espelho ? -x : x)) + "C" + fmt(y);
+            const rad = (a: number) => (a * Math.PI) / 180;
+            let angAt = 0;
+            // MOVIMENTO EM VAZIO = G0: o Fanuc não aceita G0 dentro do G12.1, então sai do G12.1 (G13.1), gira o C em G0 com a fresa por fora da peça e entra de novo (G12.1)
+            let polOn = false;
+            const cM = (a: number) => ((((espelho ? a - 180 : a) % 360) + 360) % 360); // C da máquina para a fresa ficar no ângulo "a" da peça
+            let rAt = Math.max(rOut, bD / 2 + 1);
+            const chega = (aDest: number, rDest: number) => {
+              // vai em G0 (fora do G12.1) até o ângulo e o raio pedidos; afasta antes de girar e gira antes de aproximar
+              const dA = ((((aDest - angAt) % 360) + 540) % 360) - 180;
+              if (polOn) lines.push("G13.1");
+              const gC = Math.abs(dA) > 1e-6 ? "G0C" + fmt(cM(aDest)) : "";
+              const gX = Math.abs(rDest - rAt) > 1e-6 ? "G0X" + fmt(2 * rDest) : "";
+              if (rDest > rAt) { if (gX) lines.push(gX); if (gC) lines.push(gC); } else { if (gC) lines.push(gC); if (gX) lines.push(gX); }
+              lines.push("G12.1");
+              polOn = true;
+              angAt = aDest;
+              rAt = rDest;
+            };
+            lines.push("(G12.1 INTERPOLACAO POLAR - FRESA AXIAL D" + fmt(dfP) + " - X EM DIAMETRO E C LINEAR - CAMINHO DO CENTRO DA FRESA SEM G41/G42 - " + (modoC === 2 ? "IDA E VOLTA" : conc ? "CONCORDANTE" : "DISCORDANTE") + (rvP > 0 ? " - RAIO NOS VERTICES R" + fmt(rvP) : " - CANTO VIVO") + " - " + (fechado ? "POLIGONO FECHADO" : n + " FACES ABERTAS") + " - " + dls.length + " PASSADAS X " + zsP.length + " EM Z - CONFERIR)");
+            if (pzP > (p.lf ?? 20)) lines.push("(ATENCAO: PROF. POR PASSE EM Z MAIOR QUE O COMPRIMENTO UTIL DA FRESA)");
+            lines.push("G0C" + fmt(cM(0)));
+            lines.push("G0X" + fmt(2 * Math.max(rOut, bD / 2 + 1)));
+            zsP.forEach((zc) => {
+              lines.push("G0Z" + fmt(zCoord(zc)));
+              polOn = false;
+              dls.forEach((dl) => {
+                if (modoC === 2) ccw = nPass++ % 2 === 1;
+                                const L2 = ord.map((q) => ({ nx: Math.cos(rad(q.th)), ny: Math.sin(rad(q.th)), h: q.d + dl + rfP, th: q.th, rT: q.rTop })); // CENTRO DA FRESA: a linha da face afastada 1 raio da fresa (sem G41/G42)
+                const rS = rvP > 0 ? ",R" + fmt(rvP + rfP) : ""; // raio no canto da peça + raio da fresa = raio do caminho do centro
+                if (fechado) {
+                  const V = L2.map((a, k) => { const b = L2[(k + 1) % n]; const det = a.nx * b.ny - a.ny * b.nx; return { x: (a.h * b.ny - b.h * a.ny) / det, y: (a.nx * b.h - b.nx * a.h) / det }; }); // V[k] = canto entre a face k e a seguinte
+                  const m0 = { x: L2[0].h * L2[0].nx, y: L2[0].h * L2[0].ny };
+                  chega(L2[0].th, rOut);
+                  lines.push("G1" + P(m0.x, m0.y) + "F" + fmt(fP));
+                  (ccw ? V : [...V].reverse()).forEach((v) => lines.push("G1" + P(v.x, v.y) + rS));
+                  lines.push("G1" + P(m0.x, m0.y));
+                  lines.push("G13.1"); // sai da face em G0 (radial, C parado)
+                  lines.push("G0X" + fmt(2 * rOut));
+                  polOn = false;
+                  rAt = rOut;
+                  angAt = L2[0].th;
+                } else {
+                  (ccw ? L2 : [...L2].reverse()).forEach((q) => {
+                    const tx = -q.ny, ty = q.nx;
+                    const hP = q.h - rfP; const lE = Math.sqrt(Math.max(0, Math.max(q.rT, hP) ** 2 - hP * hP)) + rfP + 2;
+                    const sg = ccw ? 1 : -1;
+                    const S = { x: q.h * q.nx - sg * lE * tx, y: q.h * q.ny - sg * lE * ty };
+                    const E = { x: q.h * q.nx + sg * lE * tx, y: q.h * q.ny + sg * lE * ty };
+                    chega((Math.atan2(S.y, S.x) * 180) / Math.PI, Math.hypot(S.x, S.y)); // chega em G0 direto no começo do passe (já fora do material)
+                    lines.push("G1" + P(E.x, E.y) + "F" + fmt(fP));
+                    const aE = (Math.atan2(E.y, E.x) * 180) / Math.PI;
+                    lines.push("G13.1"); // já está fora do material: sai em G0 (radial, C parado)
+                    lines.push("G0X" + fmt(2 * rOut));
+                    polOn = false;
+                    rAt = rOut;
+                    angAt = aE;
+                  });
+                }
+              });
+              if (polOn) lines.push("G13.1");
+              polOn = false;
+            });
+            lines.push("G0X" + fmt(2 * Math.max(rOut, bD / 2 + 1)));
+          };
+          // FACES CLICADAS NO 3D: cada face plana lateral vira uma usinagem com fresa radial, C parado no ângulo da face, varrendo em Y
+          const f3d = (((op as any).faces3d || []) as { id: number; tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number }[]);
+          if (f3d.length) {
+            const dfF3 = Math.max(0.5, p.df ?? 6);
+            const rf3 = dfF3 / 2;
+            const ap3 = Math.max(0.05, p.ap ?? 0.5);
+            const R03 = bD / 2;
+            const xSeg3 = bD + 2;
+            const cOff = (op as any).posto === "TS2" ? 180 : 0; // torre superior trabalha do outro lado (X negativo)
+            const zG = (z: number) => (espH2 ? sFH2 - z : z);
+            const rE3 = perfilRestoExt(opIn, canal, geo, espH2);
+            // sem "Resto" preenchido: usa o que os torneamentos anteriores (desbaste / acabamento externo do mesmo lado) deixaram
+            let nivelAutoF: ((z: number) => number) | null = null;
+            if (!rE3) {
+              const iOpF = ops.findIndex((o) => o.id === opIn.id);
+              const refsF: { nivel: (z: number) => number }[] = [];
+              for (let kk = 0; kk < iOpF; kk++) { const ro = ops[kk]; if (ro && ro.ativo && (ro.tipo === "desbExt" || ro.tipo === "acabExt")) { const rr = restoExtUm(kk + 1, opIn, canal, geo, espH2); if (rr) refsF.push(rr); } }
+              if (refsF.length) nivelAutoF = (z: number) => Math.min(...refsF.map((r) => r.nivel(z)));
+            }
+            const lateral = Math.round(p.tr ?? 0) === 1 || Math.round(p.me ?? 0) === 1; // G12.1 = fresa AXIAL trabalhando de lado // 0 = TOPO (ponta da fresa radial na face) | 1 = LATERAL (flanco da fresa axial)
+            const lfF = Math.max(1, p.lf ?? 20);
+            lines.push("(FRESA D" + fmt(dfF3) + " L" + fmt(lfF) + (lateral ? " LATERAL" : " TOPO") + ")");
+            // REPETIR EM C: o campo "Faces" repete cada face clicada em volta da peça (360/N), sem duplicar face já clicada
+            const nRepF = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 0)))];
+            const f3dR: typeof f3d = [];
+            f3d.forEach((fc) => { for (let k = 0; k < (fc.tipo === "plana" ? nRepF : 1); k++) { const cK = (((fc.c + (k * 360) / nRepF) % 360) + 360) % 360; if (f3dR.some((q) => q.tipo === fc.tipo && Math.abs(((((q.c - cK) % 360) + 540) % 360) - 180) < 0.5 && Math.abs(q.zmin - fc.zmin) < 0.01 && Math.abs(q.zmax - fc.zmax) < 0.01)) continue; f3dR.push({ ...fc, c: Math.round(cK * 1000) / 1000 }); } });
+            if (nRepF > 1) lines.push("(REPETIR EM C: " + nRepF + " FACES A CADA " + fmt(360 / nRepF) + " GRAUS A PARTIR DA FACE CLICADA)");
+            // "COMEÇA EM Z" / "TERMINA EM Z" editados mandam: a face que tocava a ponta antiga vai até a ponta nova
+            const fxIn = ((opIn.faixas || []) as [number, number][]);
+            if (fxIn.length && f3dR.length) {
+              const fLo = Math.min(...fxIn.map((g) => Math.min(g[0], g[1]))), fHi = Math.max(...fxIn.map((g) => Math.max(g[0], g[1])));
+              const uLo = Math.min(...f3dR.map((q) => q.zmin)), uHi = Math.max(...f3dR.map((q) => q.zmax));
+              // só as faces PLANAS são usinadas: a ponta editada vale para a(s) plana(s) que estava(m) na ponta (mesmo que tenha sido clicada uma face curva junto)
+              const plU = f3dR.filter((q) => q.tipo === "plana");
+              const pLo = plU.length ? Math.min(...plU.map((q) => q.zmin)) : uLo, pHi = plU.length ? Math.max(...plU.map((q) => q.zmax)) : uHi;
+              const edLo = Math.abs(fLo - uLo) > 1e-6, edHi = Math.abs(fHi - uHi) > 1e-6;
+              for (let k = 0; k < f3dR.length; k++) { const q = f3dR[k]; f3dR[k] = { ...q, zmin: edLo && Math.abs(q.zmin - pLo) < 1e-6 ? fLo : Math.max(q.zmin, fLo), zmax: edHi && Math.abs(q.zmax - pHi) < 1e-6 ? fHi : Math.min(q.zmax, fHi) }; }
+            }
+            if (Math.round(p.me ?? 0) === 1) {
+              // G12.1 com as faces clicadas: fresa AXIAL contornando, C interpolado
+              const plF = f3dR.filter((q) => q.tipo === "plana" && q.zmax - q.zmin > 0.01);
+              if (!plF.length) lines.push("(NENHUMA FACE PLANA LATERAL PARA O G12.1)");
+              else {
+                const zAp = Math.max(...plF.map((q) => Math.max(zG(q.zmin), zG(q.zmax)))), zBp = Math.min(...plF.map((q) => Math.min(zG(q.zmin), zG(q.zmax))));
+                const nivP: ((z: number) => number) | null = rE3 ? rE3.nivel : nivelAutoF;
+                const fcsP = plF.map((q) => { let rT = R03; if (nivP) { let mx = 0; const za = Math.min(zG(q.zmin), zG(q.zmax)), zb = Math.max(zG(q.zmin), zG(q.zmax)); for (let zz = za - rf3; zz <= zb + rf3 + 1e-9; zz += 0.1) mx = Math.max(mx, nivP(zz) / 2); rT = Math.min(R03, Math.max(mx, q.d)); } return { th: q.c, d: q.d, rTop: rT }; });
+                // maior material na região que a fresa ocupa (ponta ± comprimento útil): a espera em G0 fica 1 mm acima dele
+                const lfP = Math.max(1, p.lf ?? 20);
+                let rSegP = R03;
+                if (nivP) { let mx = 0; for (let zz = zBp - lfP; zz <= zAp + lfP + 1e-9; zz += 0.2) mx = Math.max(mx, nivP(zz) / 2); rSegP = Math.min(R03, Math.max(mx, ...fcsP.map((q) => q.rTop))); }
+                lines.push("(FRESAR " + plF.length + " FACES ESCOLHIDAS NO 3D - G12.1)");
+                g12Poligono(fcsP, zAp, zBp, dfF3, ap3, Math.max(0.1, p.pz ?? 2), Math.max(0, p.rv ?? 0), Math.round(p.cc ?? 0), fC, !!cOff, rSegP);
+              }
+            } else {
+            // CONCORDANTE / DISCORDANTE (fresa girando horário): concordante avança em Y+ (Y- na torre superior) - CONFERIR NA MAQUINA
+            const sgY = (Math.round(p.cc ?? 0) === 0 ? 1 : -1) * (cOff ? -1 : 1);
+            const idaVolta = Math.round(p.cc ?? 0) === 2; // IDA E VOLTA
+            // giro do C entre faces: 1 mm acima do maior material na região da fresa (ponta ± comprimento útil / raio)
+            const nivG: ((z: number) => number) | null = rE3 ? rE3.nivel : nivelAutoF;
+            let xGira = xSeg3;
+            { const plG = f3dR.filter((q) => q.tipo === "plana"); if (nivG && plG.length) { const sp = lateral ? lfF : rf3; const za = Math.min(...plG.map((q) => Math.min(zG(q.zmin), zG(q.zmax)))) - sp, zb = Math.max(...plG.map((q) => Math.max(zG(q.zmin), zG(q.zmax)))) + sp; let mx = 0; for (let zz = za; zz <= zb + 1e-9; zz += 0.2) mx = Math.max(mx, nivG(zz) / 2); xGira = Math.min(xSeg3, 2 * (Math.min(R03, mx) + 1 + (lateral ? rf3 : 0))); } } // IDA E VOLTA: corta nos dois sentidos (ganha tempo, sem volta em vazio)
+            lines.push("(FRESAR " + f3dR.length + " FACES ESCOLHIDAS NO 3D - FRESA RADIAL D" + fmt(dfF3) + " - EIXO Y COM C PARADO" + (cOff ? " - C +180 PELA TORRE SUPERIOR - CONFERIR" : "") + ")");
+            lines.push("G0X" + fmt(xSeg3));
+            let zAtualF: number | null = null;
+            let yAtualF: number | null = null; // IDA E VOLTA: onde o Y parou (para a próxima face continuar dali)
+            f3dR.forEach((fc, nF) => {
+              if (fc.tipo !== "plana") { lines.push("(FACE " + (nF + 1) + ": POR ENQUANTO SO FACE PLANA LATERAL - IGNORADA)"); return; }
+              const cAng = (((fc.c + cOff) % 360) + 360) % 360;
+              const zA = Math.max(zG(fc.zmin), zG(fc.zmax)), zB = Math.min(zG(fc.zmin), zG(fc.zmax));
+              const larg = zA - zB;
+              const zs3: number[] = [];
+              if (lateral) {
+                // LATERAL: a PONTA da fresa axial desce em Z; o flanco (comprimento útil) cobre a face
+                const passoL = Math.max(0.5, Math.min(lfF * 0.8, larg));
+                for (let z = zA - passoL, g = 0; z > zB + 1e-6 && g++ < 200; z -= passoL) zs3.push(z);
+                zs3.push(zB);
+              } else if (larg <= dfF3 + 1e-6) zs3.push((zA + zB) / 2);
+              else { const nZ = Math.ceil((larg - dfF3) / (0.7 * dfF3)) + 1; for (let k = 0; k < nZ; k++) zs3.push(zA - rf3 - ((larg - dfF3) * k) / (nZ - 1)); }
+              // MATERIAL QUE EXISTE NA FACE: o do "Resto" escolhido; sem resto, o que os torneamentos ANTERIORES (desbaste/acabamento externo) deixaram; sem nenhum, o bruto
+              let rTopo = R03;
+              const nivelF: ((z: number) => number) | null = rE3 ? rE3.nivel : nivelAutoF;
+              if (nivelF) { let mx = 0; for (let zz = zB - rf3; zz <= zA + rf3 + 1e-9; zz += 0.1) mx = Math.max(mx, nivelF(zz) / 2); rTopo = Math.min(R03, Math.max(mx, fc.d)); }
+              const rs3: number[] = [];
+              for (let r = rTopo - ap3, g = 0; r > fc.d + 1e-6 && g++ < 500; r -= ap3) rs3.push(r);
+              rs3.push(fc.d);
+              // entra e sai em Y fora do material (corda do bruto na altura da face + raio da fresa)
+              const corda = Math.sqrt(Math.max(0, rTopo * rTopo - fc.d * fc.d));
+              const yI = Math.min(fc.ymin, -corda) - rf3 - 1, yF = Math.max(fc.ymax, corda) + rf3 + 1;
+              lines.push("(FACE " + (nF + 1) + " - C" + fmt(cAng) + " - X" + fmt(2 * fc.d) + " - Z" + fmt(zCoord(zA)) + " A " + fmt(zCoord(zB)) + " - " + rs3.length + " PASSADAS)");
+              lines.push("G0C" + fmt(cAng));
+              // recuo entre passes/níveis: só 1 mm acima do material da face (não volta ao diâmetro da barra)
+              const xSobe = 2 * ((lateral ? rf3 : 0) + rTopo + 1);
+              let vaiF = true; // IDA E VOLTA: continua do lado em que terminou (sem volta em vazio)
+              zs3.forEach((zc, kz) => {
+                const yS = sgY > 0 ? yI : yF, yE = sgY > 0 ? yF : yI;
+                if (idaVolta) {
+                  // IDA E VOLTA: cada passe começa onde o anterior terminou; no próximo Z sobe só o necessário e desce do MESMO lado
+                  if (kz === 0) {
+                    // próxima face começa do LADO em Y onde a anterior terminou (não volta em vazio)
+                    const yIni = yAtualF === null ? yS : Math.abs(yAtualF - yS) <= Math.abs(yAtualF - yE) ? yS : yE;
+                    vaiF = yIni === yS;
+                    const mudaY = !(yAtualF !== null && Math.abs(yAtualF - yIni) < 1e-6);
+                    const mudaZ = zAtualF === null || Math.abs(zAtualF - zc) > 1e-6;
+                    if (mudaY || mudaZ) lines.push("G0" + (mudaZ ? "Z" + fmt(zCoord(zc)) : "") + (mudaY ? "Y" + fmt(yIni) : ""));
+                    zAtualF = zc;
+                  }
+                  else { lines.push("G0X" + fmt(xSobe)); lines.push("G0Z" + fmt(zCoord(zc))); zAtualF = zc; }
+                  rs3.forEach((r) => {
+                    lines.push("G0X" + fmt(2 * (lateral ? r + rf3 : r)));
+                    lines.push("G1Y" + fmt(vaiF ? yE : yS) + "F" + fmt(fC));
+                    yAtualF = vaiF ? yE : yS;
+                    vaiF = !vaiF;
+                  });
+                  return;
+                }
+                // CONCORDANTE / DISCORDANTE: todas as passadas cortam no MESMO sentido em Y; a volta é em vazio, acima do material
+                if (kz > 0) lines.push("G0X" + fmt(xSobe));
+                lines.push("G0Z" + fmt(zCoord(zc)) + "Y" + fmt(yS));
+                rs3.forEach((r, kr) => {
+                  if (kr > 0) { lines.push("G0X" + fmt(xSobe)); lines.push("G0Y" + fmt(yS)); }
+                  lines.push("G0X" + fmt(2 * (lateral ? r + rf3 : r))); // TOPO: a ponta encosta na face | LATERAL: o centro fica 1 raio da fresa acima
+                  lines.push("G1Y" + fmt(yE) + "F" + fmt(fC));
+                });
+              });
+              // antes de girar o C para a próxima face: afasta só até ficar 1 mm livre do material em volta (xGira)
+              lines.push("G0X" + fmt(Math.max(xSobe, xGira)));
+            });
+            lines.push("G0X" + fmt(xSeg3));
+            lines.push("G0Y0");
+            }
+          } else {
           // MODO DOS EIXOS: 0 = eixo Y (fresa radial, C parado em cada face) | 1 = G12.1 interpolação polar (fresa axial, X + C)
           const facesG = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
-          if (Math.round(p.me ?? 0) === 1 && facesG >= 3) {
-            // G12.1: a fresa AXIAL contorna o polígono na face, com o eixo C girando junto (interpolação polar).
-            // Coordenadas X e C em RAIO, como no exemplo do sextavado do manual TBSy. O raio da fresa já vem compensado (sem G41/G42).
+          if (Math.round(p.me ?? 0) === 1) {
+            // G12.1: fresa AXIAL contorna o polígono com o C interpolado - mesmo cálculo da CALCULADORA POLÍGONO (X diâmetro, C linear, G41/G42, ",R")
             const sG = Math.max(0.5, p.s ?? 10);
-            const dfG = Math.max(0.5, p.df ?? 6);
-            const rfG = dfG / 2;
-            const apG = Math.max(0.05, p.ap ?? 0.5);
-            const pzG = Math.max(0.1, p.pz ?? Math.min(2, dfG));
             const a0G = p.a0 ?? 0;
-            const R0G = bD / 2;
-            const hs: number[] = [];
-            for (let h = R0G - apG, gH = 0; h > sG / 2 + 1e-6 && gH++ < 500; h -= apG) hs.push(h);
-            hs.push(sG / 2);
-            const zsG: number[] = [];
-            for (let z = zIniC - pzG, gZ = 0; z > zFimC + 1e-6 && gZ++ < 500; z -= pzG) zsG.push(z);
-            zsG.push(zFimC);
-            const cosN = Math.cos(Math.PI / facesG);
-            const xOutG = bD + 2 * dfG + 4;
-            lines.push("(FRESAR " + facesG + " FACES - G12.1 INTERPOLACAO POLAR - CHAVE " + fmt(sG) + " - FRESA AXIAL D" + fmt(dfG) + " - X E C EM RAIO COMO NO MANUAL TBSY - RAIO DA FRESA JA COMPENSADO - CONFERIR)");
-            lines.push("G0C0");
-            lines.push("G0X" + fmt(xOutG));
-            zsG.forEach((zg) => {
-              lines.push("G0Z" + fmt(zCoord(zg)));
-              lines.push("G12.1");
-              hs.forEach((hh) => {
-                const Rv = (hh + rfG) / cosN;
-                const vs: { x: number; c: number }[] = [];
-                for (let k = 0; k < facesG; k++) {
-                  const ang = ((a0G + 180 / facesG + (k * 360) / facesG) * Math.PI) / 180;
-                  vs.push({ x: Rv * Math.cos(ang), c: Rv * Math.sin(ang) });
-                }
-                const ang0 = Math.atan2(vs[0].c, vs[0].x);
-                const ro = Rv + rfG + 2;
-                const fora = { x: ro * Math.cos(ang0), c: ro * Math.sin(ang0) };
-                lines.push("G1X" + fmt(fora.x) + "C" + fmt(fora.c) + "F" + fmt(fC));
-                for (let k = 0; k <= facesG; k++) { const v = vs[k % facesG]; lines.push("G1X" + fmt(v.x) + "C" + fmt(v.c)); }
-                lines.push("G1X" + fmt(fora.x) + "C" + fmt(fora.c));
-              });
-              lines.push("G13.1");
-            });
-            lines.push("G0X" + fmt(xOutG));
+            const fcsG = Array.from({ length: facesG }, (_, k) => ({ th: a0G + (k * 360) / facesG, d: sG / 2, rTop: bD / 2 }));
+            lines.push("(FRESAR " + facesG + " FACES - G12.1 - CHAVE " + fmt(sG) + ")");
+            g12Poligono(fcsG, zIniC, zFimC, Math.max(0.5, p.df ?? 6), Math.max(0.05, p.ap ?? 0.5), Math.max(0.1, p.pz ?? 2), Math.max(0, p.rv ?? 0), Math.round(p.cc ?? 0), fC, (op as any).posto === "TS2", bD / 2);
           } else {
           // FRESAR FACES: fresa radial com eixo Y; cada face no ângulo C, passes em X até a medida, varrendo em Y
           const facesOp = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
@@ -1747,7 +1935,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
           const zsF: number[] = [];
           if (larguraZ <= dfF + 1e-6) zsF.push((zIniC + zFimC) / 2);
           else { const nZ = Math.ceil((larguraZ - dfF) / (0.7 * dfF)) + 1; for (let k = 0; k < nZ; k++) zsF.push(zIniC - dfF / 2 - ((larguraZ - dfF) * k) / (nZ - 1)); }
-          lines.push("(FRESAR " + facesOp + " FACE(S) - MEDIDA " + fmt(sF) + " - FRESA D" + fmt(dfF) + (larguraZ < dfF - 1e-6 ? " - ATENCAO: FRESA MAIOR QUE A REGIAO EM Z" : "") + " - CONFERIR EIXO Y/C)");
+          lines.push("(FRESAR " + facesOp + " FACES - MEDIDA " + fmt(sF) + " - FRESA D" + fmt(dfF) + (larguraZ < dfF - 1e-6 ? " - ATENCAO: FRESA MAIOR QUE A REGIAO EM Z" : "") + " - CONFERIR EIXO Y/C)");
           g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(zsF[0])));
           for (let fc = 0; fc < facesOp; fc++) {
             lines.push("G0C" + fmt(((p.a0 ?? 0) + (fc * 360) / facesOp) % 360));
@@ -1765,6 +1953,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             }
           }
           lines.push("G0Y0");
+          }
           }
         }
       } else if (op.tipo === "centro") {
@@ -2375,7 +2564,7 @@ export function anexarDesenhosIv<T extends { zA: number; zB: number; xa: number;
     mudou = false;
     pend = pend.filter((pl) => { const ok = tenta(pl); if (ok) mudou = true; return !ok; });
   }
-  if (pend.length) avisos?.push("(" + pend.length + " DESENHO(S) NAO ENCOSTA(M) NO PERCURSO DESTA OPERACAO - IGNORADO)");
+  if (pend.length) avisos?.push("(" + pend.length + " DESENHOS NAO ENCOSTA(M) NO PERCURSO DESTA OPERACAO - IGNORADO)");
   return r as unknown as T[];
 }
 export function anexarDesenhosPts(pts: { z: number; x: number }[], desenhos: StarTMDesenho[] | undefined, avisos?: string[]): { z: number; x: number }[] {
@@ -2477,6 +2666,7 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
   let lim: string | null = null;
   let primeiroMov = true;
   let primeiroG1 = true;
+  let polar = false; // dentro do G12.1 ... G13.1
   let acion = false; // FERRAMENTA ACIONADA na TBSy: eixo C ligado (M17), rotação S2 (M23), avanço mm/min (G94)
   let pendM5 = false;
   const troca = o.flipZ !== o.negX; // espelhar um eixo inverte o sentido do arco
@@ -2501,7 +2691,8 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
     if ((mm = cod.match(/^G50S(\d+)$/))) { lim = mm[1]; return; }
     if ((mm = cod.match(/^G99G96S(\d+)M3$/))) { out.push("G96" + mGiro + sp + mm[1]); if (lim) out.push("G92S=" + lim); lim = null; return; }
     if ((mm = cod.match(/^G99G97S(\d+)M3$/))) { out.push("G97" + sp + mm[1] + mGiro); return; }
-    const pal: string[] = cod.match(/[A-Z][-+]?[\d.]*/g) || [];
+    const virg = (cod.match(/,[RC]-?[\d.]+/) || [""])[0]; // ",R" / ",C" (raio / chanfro no canto) passa direto
+    const pal: string[] = cod.replace(/,[RC]-?[\d.]+/, "").match(/[A-Z][-+]?[\d.]*/g) || [];
     const temPQ = pal.some((w) => w[0] === "P") && pal.some((w) => w[0] === "Q");
     const g76 = pal.includes("G76");
     const temZ = pal.some((w) => w[0] === "Z");
@@ -2514,7 +2705,7 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
         const g = parseFloat(v);
         if (g === 0 || g === 1) { w.push("G" + g); mov = true; if (g === 1) g1 = true; }
         else if (g === 2 || g === 3) { w.push(troca ? (g === 2 ? "G3" : "G2") : "G" + g); mov = true; g1 = true; }
-        else { if (g === 4) pausa = true; w.push(p); }
+        else { if (g === 4) pausa = true; if (Math.abs(g - 12.1) < 1e-6) polar = true; if (Math.abs(g - 13.1) < 1e-6) polar = false; w.push(polar && o.negX && (g === 41 || g === 42) ? (g === 41 ? "G42" : "G41") : p); } // G12.1 na torre superior: X espelhado -> troca G41/G42
       } else if (v === "") w.push(p);
       else if (L === "X") w.push((pausa ? "U" : "X") + f(!pausa && o.negX ? -parseFloat(v) : parseFloat(v)));
       else if (L === "Z") w.push("Z" + f(o.flipZ ? o.zMap(parseFloat(v)) : parseFloat(v)));
@@ -2526,7 +2717,7 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
     if (!w.length) return;
     if (mov && primeiroMov) { const iG0 = w.indexOf("G0"); if (iG0 >= 0) w.splice(iG0 + 1, 0, o.g); else w.unshift(o.g); w.push(o.aprox); primeiroMov = false; }
     if (g1 && primeiroG1 && !acion) { const iG = w.findIndex((x) => /^G[123]$/.test(x)); if (iG >= 0) w.splice(iG + 1, 0, "G95"); primeiroG1 = false; }
-    out.push((pula ? "/" : "") + w.join("") + com);
+    out.push((pula ? "/" : "") + w.join("") + virg + com);
   });
   if (pendM5) out.push("M5");
   if (acion) { out.push("M18(DESLIGA EIXO C)"); out.push("M25(DESLIGA FERRAMENTA ACIONADA)"); out.push("G95"); }
