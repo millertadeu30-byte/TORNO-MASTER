@@ -1524,11 +1524,18 @@ export function simularGCodeEColisoes(
     const linhaRosca = new Set<number>();
     {
       let modoR = "";
+      let polarF = false, yAtual = 0;
       gcodeText.split("\n").forEach((ln, i) => {
         const cl = ln.replace(/\([^)]*\)/g, "").split(";")[0].toUpperCase();
         if (/G0?[0-3](?![0-9])/.test(cl)) modoR = "mov";
         if (/G(32|33|34|76|78)(?![0-9])/.test(cl) || /CYCLE97|LCYC97/.test(cl) || (/G92(?![0-9])/.test(cl) && /[XZUW]\s*[-+]?[\d.]/.test(cl))) modoR = "rosca";
         if (modoR === "rosca" && /[XZUW]\s*[-+]?[\d.]/.test(cl)) linhaRosca.add(i);
+        // FRESAMENTO (acionada): com o eixo Y fora do centro ou em G12.1/G7.1 o 2D (torneamento) não consegue julgar o caminho -> quem confere é o 3D
+        if (/G12\.1|G7\.1/.test(cl)) polarF = true;
+        if (/G13\.1|G7\.1\s*H0/.test(cl)) polarF = false;
+        const yM = cl.match(/(?<![A-Z])Y\s*([-+]?\d*\.?\d+)/);
+        if (yM) yAtual = parseFloat(yM[1]);
+        if (polarF || Math.abs(yAtual) > 1e-6 || /G12\.1|G13\.1/.test(cl)) linhaRosca.add(i);
       });
     }
     const zDir = simInvertZ ? -1 : 1;

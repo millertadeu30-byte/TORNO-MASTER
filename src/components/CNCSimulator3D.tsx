@@ -95,10 +95,10 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   useEffect(() => { localStorage.setItem("cnc3d_showPaineis", String(showPaineis)); }, [showPaineis]);
   // Traços de usinagem no 3D: ligado/desligado (botãozinho no canto de baixo, fica gravado no aparelho)
   const [showToolpath3D, setShowToolpath3D] = useState<boolean>(() => {
-    try { return localStorage.getItem("cnc3d_showToolpath") !== "0"; } catch { return true; }
+    try { return localStorage.getItem("cnc3d_showToolpath2") === "1"; } catch { return false; } // traço do torneamento no 3D começa DESLIGADO (o 3D fica limpo); liga no botãozinho
   });
   useEffect(() => {
-    try { localStorage.setItem("cnc3d_showToolpath", showToolpath3D ? "1" : "0"); } catch {}
+    try { localStorage.setItem("cnc3d_showToolpath2", showToolpath3D ? "1" : "0"); } catch {}
     if (pathLinesGroupRef.current) pathLinesGroupRef.current.visible = showToolpath3D;
   });
   // Se uma cor de fundo foi escolhida em "Aparência", ajusta o tema (linhas/grade) para manter contraste
@@ -153,6 +153,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     let curY = 0;  // Default Y
     let curZ = 5;  // Default Z
     let curC = 0;  // Default C angle
+    let polarOn = false, polX = 0, polC = 0; // G12.1 (interpolação polar)
     let curRapid = true;
 
     // First start point
@@ -204,6 +205,15 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
           moved = true;
         }
 
+        // G12.1 (interpolação polar): X e C são coordenadas cartesianas na FACE (em raio, como no manual TBSy) -> vira raio + ângulo C para o 3D
+        if (/G12\.1/.test(cleanLine)) { polarOn = true; polX = curX / 2; polC = 0; }
+        if (/G13\.1/.test(cleanLine)) polarOn = false;
+        if (polarOn && (xMatch || cMatch)) {
+          if (xMatch) polX = parseFloat(xMatch[1]);
+          if (cMatch) polC = parseFloat(cMatch[1]);
+          curX = 2 * Math.hypot(polX, polC);
+          curC = (Math.atan2(polC, polX) * 180) / Math.PI;
+        }
         // Incremental U (X diameter) and W (Z) if not a cycle line
         if (!cleanLine.includes("G71") && !cleanLine.includes("G72") && !cleanLine.includes("G73") && !cleanLine.includes("G76")) {
           const uMatch = cleanLine.match(/(?<![A-Z])U\s*([-+]?\d*\.?\d+)/);
@@ -666,10 +676,16 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   }, [showAxisC]);
 
   // Orbit / Pan / Zoom Mouse Events
+  // MOUSE estilo SolidWorks + TOQUE no tablet: dedos/botões apertados agora (para pinça de 2 dedos)
+  const toquesRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const handlePointerDown = (e: React.PointerEvent) => {
     if (viewLockedRef.current) return; // vista travada: não gira nem arrasta
+    if (e.button === 1) e.preventDefault(); // botão do meio: não deixa o navegador abrir o "rolar automático"
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* sem captura */ }
+    toquesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     isMouseDownRef.current = true;
-    isRightClickRef.current = e.button === 2 || e.shiftKey;
+    // botão do MEIO ou ESQUERDO gira | botão DIREITO, Shift ou Ctrl + meio arrasta (pan)
+    isRightClickRef.current = e.button === 2 || e.shiftKey || (e.button === 1 && (e.ctrlKey || e.metaKey));
     previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
   };
 
@@ -746,6 +762,31 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isMouseDownRef.current) return;
+    // DOIS DEDOS (tablet): pinça = zoom, arrastar os dois = mover
+    if (toquesRef.current.has(e.pointerId) && toquesRef.current.size >= 2) {
+      const pts0 = [...toquesRef.current.values()].slice(0, 2);
+      toquesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const pts1 = [...toquesRef.current.values()].slice(0, 2);
+      const d0 = Math.hypot(pts0[0].x - pts0[1].x, pts0[0].y - pts0[1].y);
+      const d1 = Math.hypot(pts1[0].x - pts1[1].x, pts1[0].y - pts1[1].y);
+      const dx = (pts1[0].x + pts1[1].x) / 2 - (pts0[0].x + pts0[1].x) / 2;
+      const dy = (pts1[0].y + pts1[1].y) / 2 - (pts0[0].y + pts0[1].y) / 2;
+      if (d1 > 1 && d0 > 1) cameraDistanceRef.current = Math.max(0.01, Math.min(100000, cameraDistanceRef.current * (d0 / d1)));
+      const camP = cameraRef.current;
+      if (camP) {
+        camP.updateMatrixWorld(true);
+        const mt = camP.matrixWorld;
+        const rv = new THREE.Vector3(mt.elements[0], mt.elements[1], mt.elements[2]).normalize();
+        const uv = new THREE.Vector3(mt.elements[4], mt.elements[5], mt.elements[6]).normalize();
+        const ps = cameraDistanceRef.current * 0.0012;
+        cameraTargetRef.current.addScaledVector(rv, -dx * ps);
+        cameraTargetRef.current.addScaledVector(uv, dy * ps);
+      }
+      updateCameraPosition();
+      previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    if (toquesRef.current.has(e.pointerId)) toquesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     const deltaX = e.clientX - previousMousePositionRef.current.x;
     const deltaY = e.clientY - previousMousePositionRef.current.y;
@@ -771,7 +812,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       }
 
       // Rotação proporcional e ultra suave ao arrastar com o botão esquerdo
-      const rotateSpeed = 0.005;
+      const rotateSpeed = 0.008; // giro mais solto, parecido com o SolidWorks
       cameraAnglesRef.current.theta -= deltaX * rotateSpeed;
       cameraAnglesRef.current.phi = Math.max(
         0.05,
@@ -783,15 +824,36 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e?: React.PointerEvent) => {
+    if (e) toquesRef.current.delete(e.pointerId);
+    if (toquesRef.current.size >= 1) {
+      // ainda tem um dedo na tela: continua girando a partir dele, sem pulo
+      const resta = [...toquesRef.current.values()][0];
+      previousMousePositionRef.current = { x: resta.x, y: resta.y };
+      return;
+    }
     isMouseDownRef.current = false;
     isRightClickRef.current = false;
+    try { updateMirinhaScreenPos(); } catch { /* sem mira */ }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
     if (viewLockedRef.current) return; // vista travada: não muda o zoom
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 1.12 : 0.88;
+    // ZOOM NO CURSOR (estilo SolidWorks): o ponto embaixo do mouse fica parado enquanto aproxima/afasta
+    const camW = cameraRef.current;
+    const cont = mountRef.current;
+    if (camW && cont) {
+      const rct = cont.getBoundingClientRect();
+      if (rct.width > 0 && rct.height > 0) {
+        const nx = ((e.clientX - rct.left) / rct.width) * 2 - 1;
+        const ny = -((e.clientY - rct.top) / rct.height) * 2 + 1;
+        const tProj = cameraTargetRef.current.clone().project(camW);
+        const pW = new THREE.Vector3(nx, ny, tProj.z).unproject(camW);
+        cameraTargetRef.current.add(pW.sub(cameraTargetRef.current).multiplyScalar(1 - zoomFactor));
+      }
+    }
     // Zoom sem limites (de 0.01 a 100000)
     cameraDistanceRef.current = Math.max(0.01, Math.min(100000, cameraDistanceRef.current * zoomFactor));
     updateCameraPosition();
@@ -892,10 +954,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
   // Handle Canvas Mouse Move Hover Snap
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (isMouseDownRef.current) {
-      updateMirinhaScreenPos();
-      return;
-    }
+    if (isMouseDownRef.current) return; // girando/arrastando: não recalcula a mira a cada pixel (deixa o giro leve); atualiza ao soltar
 
     if (!mountRef.current || !cameraRef.current || trajectoryPoints.length === 0) return;
 
@@ -1388,6 +1447,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onWheel={handleWheel}
+        onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+        onAuxClick={(e) => e.preventDefault()}
         onClick={handleCanvasClick}
         onContextMenu={(e) => e.preventDefault()}
         className="flex-1 relative cursor-grab active:cursor-grabbing min-h-0 select-none overflow-hidden"

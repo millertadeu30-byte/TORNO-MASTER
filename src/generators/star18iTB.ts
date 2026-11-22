@@ -1692,6 +1692,50 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             lines.push("G0Z" + fmt(zEA));
           }
         } else {
+          // MODO DOS EIXOS: 0 = eixo Y (fresa radial, C parado em cada face) | 1 = G12.1 interpolação polar (fresa axial, X + C)
+          const facesG = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
+          if (Math.round(p.me ?? 0) === 1 && facesG >= 3) {
+            // G12.1: a fresa AXIAL contorna o polígono na face, com o eixo C girando junto (interpolação polar).
+            // Coordenadas X e C em RAIO, como no exemplo do sextavado do manual TBSy. O raio da fresa já vem compensado (sem G41/G42).
+            const sG = Math.max(0.5, p.s ?? 10);
+            const dfG = Math.max(0.5, p.df ?? 6);
+            const rfG = dfG / 2;
+            const apG = Math.max(0.05, p.ap ?? 0.5);
+            const pzG = Math.max(0.1, p.pz ?? Math.min(2, dfG));
+            const a0G = p.a0 ?? 0;
+            const R0G = bD / 2;
+            const hs: number[] = [];
+            for (let h = R0G - apG, gH = 0; h > sG / 2 + 1e-6 && gH++ < 500; h -= apG) hs.push(h);
+            hs.push(sG / 2);
+            const zsG: number[] = [];
+            for (let z = zIniC - pzG, gZ = 0; z > zFimC + 1e-6 && gZ++ < 500; z -= pzG) zsG.push(z);
+            zsG.push(zFimC);
+            const cosN = Math.cos(Math.PI / facesG);
+            const xOutG = bD + 2 * dfG + 4;
+            lines.push("(FRESAR " + facesG + " FACES - G12.1 INTERPOLACAO POLAR - CHAVE " + fmt(sG) + " - FRESA AXIAL D" + fmt(dfG) + " - X E C EM RAIO COMO NO MANUAL TBSY - RAIO DA FRESA JA COMPENSADO - CONFERIR)");
+            lines.push("G0C0");
+            lines.push("G0X" + fmt(xOutG));
+            zsG.forEach((zg) => {
+              lines.push("G0Z" + fmt(zCoord(zg)));
+              lines.push("G12.1");
+              hs.forEach((hh) => {
+                const Rv = (hh + rfG) / cosN;
+                const vs: { x: number; c: number }[] = [];
+                for (let k = 0; k < facesG; k++) {
+                  const ang = ((a0G + 180 / facesG + (k * 360) / facesG) * Math.PI) / 180;
+                  vs.push({ x: Rv * Math.cos(ang), c: Rv * Math.sin(ang) });
+                }
+                const ang0 = Math.atan2(vs[0].c, vs[0].x);
+                const ro = Rv + rfG + 2;
+                const fora = { x: ro * Math.cos(ang0), c: ro * Math.sin(ang0) };
+                lines.push("G1X" + fmt(fora.x) + "C" + fmt(fora.c) + "F" + fmt(fC));
+                for (let k = 0; k <= facesG; k++) { const v = vs[k % facesG]; lines.push("G1X" + fmt(v.x) + "C" + fmt(v.c)); }
+                lines.push("G1X" + fmt(fora.x) + "C" + fmt(fora.c));
+              });
+              lines.push("G13.1");
+            });
+            lines.push("G0X" + fmt(xOutG));
+          } else {
           // FRESAR FACES: fresa radial com eixo Y; cada face no ângulo C, passes em X até a medida, varrendo em Y
           const facesOp = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
           const sF = Math.max(0.5, p.s ?? 10);
@@ -1721,6 +1765,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             }
           }
           lines.push("G0Y0");
+          }
         }
       } else if (op.tipo === "centro") {
       const zIni = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
@@ -2432,6 +2477,8 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
   let lim: string | null = null;
   let primeiroMov = true;
   let primeiroG1 = true;
+  let acion = false; // FERRAMENTA ACIONADA na TBSy: eixo C ligado (M17), rotação S2 (M23), avanço mm/min (G94)
+  let pendM5 = false;
   const troca = o.flipZ !== o.negX; // espelhar um eixo inverte o sentido do arco
   const sp = o.posto === "HIBO" ? "S2=" : "S1=";
   const mGiro = o.posto === "HIBO" ? "M23" : "M3";
@@ -2446,6 +2493,10 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
     const com = ip >= 0 ? zC(l.slice(ip)) : "";
     const cod = (ip >= 0 ? l.slice(0, ip) : l).trim();
     if (/^T\d+$/.test(cod) || cod === "M25" || /^T0M0?1$/.test(cod) || /^M0?1$/.test(cod) || cod === "G0T0" || cod === "M101" || cod === "G97") return;
+    // ACIONADA (manual TBSy): o "M5 / G98 M36 S" do motor vira M17 (liga eixo C) + M23 S2= (liga a acionada) + G94 (mm/min)
+    if (cod === "M5") { pendM5 = true; return; }
+    { const ma = cod.match(/^G98M36S(\d+)$/); if (ma) { pendM5 = false; acion = true; out.push("M17(LIGA EIXO C)"); out.push("M23S2=" + ma[1] + "(LIGA FERRAMENTA ACIONADA)"); out.push("G94(AVANCO MM/MIN)"); return; } }
+    if (pendM5) { out.push("M5"); pendM5 = false; }
     let mm: RegExpMatchArray | null;
     if ((mm = cod.match(/^G50S(\d+)$/))) { lim = mm[1]; return; }
     if ((mm = cod.match(/^G99G96S(\d+)M3$/))) { out.push("G96" + mGiro + sp + mm[1]); if (lim) out.push("G92S=" + lim); lim = null; return; }
@@ -2474,9 +2525,11 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
     });
     if (!w.length) return;
     if (mov && primeiroMov) { const iG0 = w.indexOf("G0"); if (iG0 >= 0) w.splice(iG0 + 1, 0, o.g); else w.unshift(o.g); w.push(o.aprox); primeiroMov = false; }
-    if (g1 && primeiroG1) { const iG = w.findIndex((x) => /^G[123]$/.test(x)); if (iG >= 0) w.splice(iG + 1, 0, "G95"); primeiroG1 = false; }
+    if (g1 && primeiroG1 && !acion) { const iG = w.findIndex((x) => /^G[123]$/.test(x)); if (iG >= 0) w.splice(iG + 1, 0, "G95"); primeiroG1 = false; }
     out.push((pula ? "/" : "") + w.join("") + com);
   });
+  if (pendM5) out.push("M5");
+  if (acion) { out.push("M18(DESLIGA EIXO C)"); out.push("M25(DESLIGA FERRAMENTA ACIONADA)"); out.push("G95"); }
   return out;
 }
 export function tmGerarErgomatTBSY(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg): StarGerarResult {
