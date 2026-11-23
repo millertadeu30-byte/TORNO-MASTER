@@ -4852,6 +4852,29 @@ export const PainelPrograma: React.FC<{
   const [aberta, setAberta] = useState<string | null>(null);
   const [soloOp, setSoloOp] = useState<string | null>(null); // "simular só esta operação" (não mexe nos ticados)
   const [addTipo, setAddTipo] = useState<string>("");
+  // RESTO DE OPERAÇÃO segue a operação: se mudar a ORDEM (▲▼), apagar ou copiar uma operação, os nº digitados no "Resto" são renumerados sozinhos
+  const opsOrdemRef = useRef<string[]>(ops.map((o) => o.id));
+  useEffect(() => {
+    const antes = opsOrdemRef.current;
+    const agora = ops.map((o) => o.id);
+    opsOrdemRef.current = agora;
+    if (antes.join("|") === agora.join("|")) return;
+    const comuns = agora.filter((id) => antes.includes(id)).length;
+    if (!comuns || comuns < Math.max(antes.length, agora.length) - 1) return; // árvore nova (projeto/modelo/sugestão): não mexe
+    const novoNum = (n: number) => { const id = antes[n - 1]; if (!id) return 0; const k = agora.indexOf(id); return k >= 0 ? k + 1 : 0; };
+    let mudou = false;
+    const novos = ops.map((o) => {
+      const txt = o.rsTxt !== undefined && String(o.rsTxt).trim() !== "" ? String(o.rsTxt) : (o.p.rs ?? 0) > 0 ? String(o.p.rs).replace(".", ",") : "";
+      if (!txt) return o;
+      const nums = txt.split(/[,;\s+]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0);
+      if (!nums.length) return o;
+      const nn = nums.map(novoNum).filter((n) => n > 0);
+      if (nn.join(",") === nums.join(",")) return o;
+      mudou = true;
+      return { ...o, rsTxt: nn.join(","), p: { ...o.p, rs: nn[0] || 0 } };
+    });
+    if (mudou) setOps(novos);
+  }, [ops]);
   const [confSugerir, setConfSugerir] = useState<boolean>(false); // "sugerir de novo" pede Sim/Não no próprio painel
   // MODELOS DE OPERAÇÕES: salva a árvore (ferramentas, ciclos, parâmetros, lado/torre) com um nome, para usar em peças/máquinas parecidas
   type TMModelo = { tipo: "modelo-ops"; nome: string; maq: string; em: string; ops: TMOp[] };
