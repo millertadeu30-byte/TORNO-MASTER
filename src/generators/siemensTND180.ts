@@ -51,6 +51,17 @@ function subIntervalos(iv: StarTMIntervalo[], faixas: StarTMFaixa[]): StarTMInte
       if (a - b > 1e-4) r.push(a === q.zA && b === q.zB ? q : { ...q, zA: a, zB: b, xa: xz(a), xb: xz(b) });
     });
   });
+  // REGIÃO ESCOLHIDA ALÉM DO FIM DA PEÇA ("termina em Z" depois do fim): o perfil CONTINUA reto no último Ø até o Z escolhido
+  const naoVert = iv.filter((q) => q.zA - q.zB > 1e-9);
+  if (naoVert.length && uni.length) {
+    const zTras = Math.min(...naoVert.map((q) => q.zB));
+    const qT = naoVert.find((q) => Math.abs(q.zB - zTras) < 1e-9)!;
+    const zLo = Math.min(...uni.map((u) => u[0]));
+    if (zLo < zTras - 1e-3 && uni.some((u) => u[0] < zTras - 1e-3 && u[1] >= zTras - 1e-6)) {
+      for (let k = r.length - 1; k >= 0; k--) if (r[k].zA - r[k].zB < 1e-9 && Math.abs(r[k].zA - zTras) < 1e-6) r.splice(k, 1);
+      r.push({ zA: zTras, zB: zLo, xa: qT.xb, xb: qT.xb });
+    }
+  }
   return r;
 }
 
