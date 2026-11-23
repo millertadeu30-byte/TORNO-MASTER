@@ -1439,6 +1439,19 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                     pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4 && (v.x - u.x) * (q.x - v.x) + (v.z - u.z) * (q.z - v.z) > 0) pr.pop(); } pr.push(q); }); // só junta reta que continua no mesmo sentido (desce/sobe na parede fica)
                     { const [aX, bX] = pontosXZ(p, fxs, Lb); const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
 pr.splice(0, pr.length, ...anexarDesenhosPts(pr, (op as any).desenhos, lines)); // DESENHO escolhido na operação: o contorno do canal segue por ele onde encosta
+// FIM ESCOLHIDO (X do "termina em"): o contorno NÃO passa do X escolhido (ex.: não desce a face de trás até X0)
+if ((p.xF ?? 0) > 0) {
+  const zFsel = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+  for (let k = 1; k < pr.length; k++) {
+    const a0 = pr[k - 1], b0 = pr[k];
+    if (b0.x < p.xF - 1e-6 && a0.x >= p.xF - 1e-6 && Math.min(a0.z, b0.z) <= zFsel + Lb + 1e-6) {
+      const tt = (a0.x - p.xF) / (a0.x - b0.x);
+      pr.splice(k, pr.length - k, { z: a0.z + (b0.z - a0.z) * tt, x: p.xF });
+      lines.push("(TERMINA NO X" + fmt(p.xF) + " ESCOLHIDO)");
+      break;
+    }
+  }
+}
 const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     const topoA = Math.max(nivelSpan(zPA), pr[0].x) + 0.5;
                     const topoB = Math.max(nivelSpan(zPB), pr[pr.length - 1].x) + 0.5;
@@ -1447,7 +1460,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     lines.push("G0X" + fmt(topoA));
                     lines.push("G1X" + fmt(pr[0].x) + "F" + fmt(fa));
                     for (let k = 1; k < pr.length; k++) lines.push("G1X" + fmt(pr[k].x) + "Z" + fmt(zCoord(zProg(pr[k].z))));
-                    lines.push("G1X" + fmt(topoB));
+                    lines.push("G0X" + fmt(topoB)); // saiu do material: recua em G0
                   }
                   lines.push("G0X" + fmt(xSegC));
               return;
