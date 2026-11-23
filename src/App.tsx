@@ -1031,6 +1031,7 @@ export default function App() {
     "cnc_token", "cnc_clientName", "cnc_isAuthenticated", "cnc_daysLeft", "cnc_subscriptionType", "cnc_isAdmin",
     "cnc_supportPhone", "cnc_device_id", "cnc_autoSaveTexts", "cnc_autoSaveActive", "cnc_calc_history_v2",
     "cnc_mobileLayout", "cnc_mobileView", "cnc_ultimoTrabalho",
+    "cnc_modelos_ops", // MODELOS DE OPERAÇÕES ficam no tablet (não somem ao abrir outro projeto)
   ]; // login / licença / histórico deste tablet: NÃO vão para o projeto
   const baixarArquivo = (conteudo: string, nome: string, tipo = "text/plain") => {
     const blob = new Blob([conteudo], { type: tipo });
@@ -1044,7 +1045,21 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
-  const handleSaveLocal = async () => {
+  // ARQUIVO DO PROJETO escolhido no 1º salvamento (Chrome de computador): os próximos salvamentos gravam EM CIMA dele, sem perguntar
+  const arqProjRef = useRef<any>(null);
+  const [autoSalvar, setAutoSalvar] = useState<boolean>(false);
+  const [autoSalvoEm, setAutoSalvoEm] = useState<string>("");
+  const gravarNoArquivoProj = async (texto: string): Promise<boolean> => {
+    const h = arqProjRef.current;
+    if (!h) return false;
+    try { const w = await h.createWritable(); await w.write(texto); await w.close(); return true; } catch { return false; }
+  };
+  const escolherArquivoProj = async (base: string): Promise<boolean> => {
+    const w: any = window;
+    if (typeof w.showSaveFilePicker !== "function") return false;
+    try { arqProjRef.current = await w.showSaveFilePicker({ suggestedName: base + ".torno", types: [{ description: "Projeto Torno Master", accept: { "application/json": [".torno"] } }] }); return true; } catch { return false; }
+  };
+  const handleSaveLocal = async (modo?: "auto" | "primeiro") => {
     const storage: Record<string, string> = {};
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -1068,8 +1083,35 @@ export default function App() {
       stepPeca,
     };
     const base = (fileNames.find((n) => n && n.trim()) || (partProfile && partProfile.name) || "PECA").replace(/\.[^.]+$/, "");
-    baixarArquivo(JSON.stringify(proj), base + ".torno", "application/json");
+    const texto = JSON.stringify(proj);
+    const hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    if (modo === "primeiro" && !arqProjRef.current && !(await escolherArquivoProj(base))) return false;
+    if (arqProjRef.current && (await gravarNoArquivoProj(texto))) { setAutoSalvoEm("✓ " + hora + " · " + (arqProjRef.current.name || base + ".torno")); return true; }
+    if (modo === "auto") { setAutoSalvoEm("não salvou " + hora); return false; }
+    baixarArquivo(texto, base + ".torno", "application/json");
+    return true;
   };
+  // SALVAMENTO AUTOMÁTICO a cada 2 min (sempre com o programa/painel ATUAL)
+  const salvarRef = useRef(handleSaveLocal);
+  salvarRef.current = handleSaveLocal;
+  useEffect(() => {
+    if (!autoSalvar) return;
+    const id = setInterval(() => { void salvarRef.current("auto"); }, 120000);
+    return () => clearInterval(id);
+  }, [autoSalvar]);
+  const toggleAutoSalvar = async (on: boolean) => {
+    if (!on) { setAutoSalvar(false); return; }
+    if (typeof (window as any).showSaveFilePicker !== "function") { setAutoSalvoEm("este navegador não deixa salvar sozinho no arquivo - use Salvar"); setAutoSalvar(false); return; }
+    const ok = await salvarRef.current("primeiro"); // 1ª vez: pergunta o nome/pasta; depois grava em cima sem perguntar
+    setAutoSalvar(!!ok);
+  };
+  const tiqueAutoSalvar = (
+    <label className="flex items-center gap-1 text-[10px] text-zinc-400 cursor-pointer select-none" title="Salvar o projeto sozinho a cada 2 minutos, em cima do mesmo arquivo (na 1ª vez pergunta o nome)">
+      <input type="checkbox" className="w-3 h-3 accent-emerald-500" checked={autoSalvar} onChange={(e) => { void toggleAutoSalvar(e.target.checked); }} />
+      <span>auto 2 min</span>
+      {autoSalvoEm && <span className="text-emerald-400/80">{autoSalvoEm}</span>}
+    </label>
+  );
 
   // Exporta só os programas (.nc ou formato nativo da máquina), um arquivo por canal que tem texto
   const handleExportNc = () => {
@@ -1119,6 +1161,7 @@ export default function App() {
     };
     if (tem("layoutCount")) { setLayoutCount(a.layoutCount); setIsSyncWidgetMinimized(true); setSyncWidgetPos(tmPosSyncPadrao()); } // ao carregar peça: sincronismo volta minimizado no canto
     if (tem("editorTexts")) setEditorTexts(tres(a.editorTexts));
+    setPgmEditadoMao(((p.storage || {}) as any).cnc_pgmEditadoMao === "1"); // programa salvo com edições à mão continua protegido
     if (tem("fileNames")) setFileNames(tres(a.fileNames));
     if (tem("activePaneIdx")) setActivePaneIdx(a.activePaneIdx);
     if (tem("simMode")) setSimMode(a.simMode);
@@ -1181,7 +1224,31 @@ export default function App() {
     e.target.value = ""; // Reset input
   };
 
+  // PROGRAMA EDITADO À MÃO: o "Ao vivo" do painel não sobrescreve; o "Gerar" pede confirmação antes de apagar as edições
+  const [pgmEditadoMao, setPgmEditadoMao] = useState<boolean>(() => { try { return localStorage.getItem("cnc_pgmEditadoMao") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("cnc_pgmEditadoMao", pgmEditadoMao ? "1" : "0"); } catch { /* */ } }, [pgmEditadoMao]);
+  const [gerarPendente, setGerarPendente] = useState<{ r: any } | null>(null);
+  // coloca o programa GERADO pelo painel nos editores (e zera a marca de "editado à mão")
+  const aplicarGerado = (r: any, vivo?: boolean) => {
+                  if (r.doisCanais) {
+                    setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
+                    setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
+                    setLayoutCount((c) => Math.max(c, 2)); // programa de 2 canais: mostra os 2 editores (H1 e H2)
+                  } else {
+                    // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
+                    setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
+                    setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
+                    if (r.unicoCanal && !vivo) setLayoutCount(1);
+                  }
+                  setActivePaneIdx((r as any).focoH2 && r.doisCanais ? 1 : 0); // "só esta" no H2 -> mostra o CANAL 2 no gráfico
+                  if (!vivo) {
+                    setRegiaoSel(null);
+                    setShowIniciar(false);
+                  }
+    setPgmEditadoMao(false);
+  };
   const updateEditorText = (val: string, index: number) => {
+    if (val !== editorTexts[index]) setPgmEditadoMao(true);
     const updated = [...editorTexts];
     updated[index] = val;
     setEditorTexts(updated);
@@ -1806,10 +1873,11 @@ export default function App() {
             <span>▶</span>
             <span className="hidden lg:inline">Iniciar</span>
           </button>
+          {tiqueAutoSalvar}
 
                 {/* Save quick button */}
                 <button
-                  onClick={handleSaveLocal}
+                  onClick={() => { void handleSaveLocal(); }}
                   className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-semibold py-1 px-2 rounded transition flex items-center gap-1"
                   title="Salvar arquivo no disco local"
                 >
@@ -2049,7 +2117,7 @@ export default function App() {
                 <span className="w-[1px] h-6 bg-zinc-800 mx-1" />
 
                 <button
-                  onClick={handleSaveLocal}
+                  onClick={() => { void handleSaveLocal(); }}
                   className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center gap-1.5"
                   title="Salvar arquivo no disco local"
                 >
@@ -2237,6 +2305,7 @@ export default function App() {
                   <span>▶</span>
                   <span>Iniciar Programa</span>
                 </button>
+                {tiqueAutoSalvar}
               </div>
             </header>
           )}
@@ -2562,6 +2631,18 @@ export default function App() {
             )}
 
             {/* ▶ PAINEL "Programa da peça" (fica no lugar dos editores enquanto você monta) */}
+            {pgmEditadoMao && showIniciar && !gerarPendente && (
+              <div className="mb-2 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200 flex flex-wrap items-center gap-2">
+                <span>✍️ O programa tem <b>edições feitas à mão</b>: o "Ao vivo" não vai apagar. Para refazer pelo painel, clique em "Gerar e ver o programa" (vai pedir confirmação).</span>
+              </div>
+            )}
+            {gerarPendente && (
+              <div className="mb-2 rounded-lg border border-red-500/70 bg-red-500/10 px-3 py-2 text-[12px] text-red-100 flex flex-wrap items-center gap-2">
+                <span className="font-bold">⚠️ O programa foi editado à mão. Gerar de novo vai SUBSTITUIR e perder essas edições.</span>
+                <button onClick={() => { const g = gerarPendente; setGerarPendente(null); if (g) aplicarGerado(g.r, false); }} className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-bold">Substituir pelo gerado</button>
+                <button onClick={() => { setGerarPendente(null); setRegiaoSel(null); setShowIniciar(false); }} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Manter minhas edições</button>
+              </div>
+            )}
             {showIniciar && (
               <PainelPrograma
                 key={"painel" + projVer}
@@ -2582,21 +2663,12 @@ export default function App() {
               onOcultos={setOpsOcultos}
                 onFix={(zones) => setFixComando((c) => ({ seq: (c ? c.seq : 0) + 1, zones }))}
                 onGerar={(r, vivo) => {
-                  if (r.doisCanais) {
-                    setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
-                    setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
-                    setLayoutCount((c) => Math.max(c, 2)); // programa de 2 canais: mostra os 2 editores (H1 e H2)
-                  } else {
-                    // programa ÚNICO no CANAL 1 (H1/H2 marcado em cada ferramenta); o canal 2 não é mexido
-                    setEditorTexts((t) => [r.textos[0], t[1] || "", t[2] || ""]);
-                    setFileNames((f) => [r.nomes[1], f[1] || "", f[2] || ""]);
-                    if (r.unicoCanal && !vivo) setLayoutCount(1);
+                  if (pgmEditadoMao) {
+                    if (vivo) return; // AO VIVO não apaga o que foi editado à mão
+                    setGerarPendente({ r }); // GERAR: pergunta antes de substituir
+                    return;
                   }
-                  setActivePaneIdx((r as any).focoH2 && r.doisCanais ? 1 : 0); // "só esta" no H2 -> mostra o CANAL 2 no gráfico
-                  if (!vivo) {
-                    setRegiaoSel(null);
-                    setShowIniciar(false);
-                  }
+                  aplicarGerado(r, vivo);
                 }}
                 onClose={() => { setRegiaoSel(null); setShowIniciar(false); }}
               />
