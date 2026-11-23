@@ -1412,7 +1412,12 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               const xSegC = Math.max(xSeg, bD + 1); // X seguro do canal nunca abaixo da barra
               if (uteis.length) lines.push("G0X" + fmt(Math.max(xSegC, nivelSpan(uteis[0]) + 1.0)));
               uteis.forEach((zR, kU) => {
-                const d = maxEntre(zR - Lb - sz, zR + sz) + sx;
+                let d = maxEntre(zR - Lb - sz, zR + sz) + sx;
+                // PONTO DE FIM/COMEÇO escolhido: se o bedame passa do Z escolhido, não desce abaixo do X escolhido (nunca vai até o centro)
+                { const zFs = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1]))), zIs = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
+                  if ((p.xF ?? 0) > 0 && zR - Lb < zFs - 1e-6) d = Math.max(d, p.xF + sx);
+                  else if (!((p.xF ?? 0) > 0) && zR - Lb < geoK.zBack - 1e-6) { const qB = geoK.ext.filter((q) => q.zA - q.zB > 1e-9).reduce((a1, q) => (q.zB < a1.zB ? q : a1)); d = Math.max(d, qB.xb + sx); }
+                  if ((p.xI ?? 0) > 0 && zR > zIs + 1e-6) d = Math.max(d, p.xI + sx); }
                 lines.push("G0Z" + fmt(zCoord(zProg(zR))) + "(ANDA EM Z SEMPRE NO X MAIOR)");
                 let x = nivelSpan(zR) + 1.0; // G0 até 1 mm (no X) acima do material que sobrou, depois G1
                 lines.push("G0X" + fmt(x));
@@ -1426,7 +1431,9 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 }
                 // sobe só 1 mm acima do material que ainda existe na próxima posição (o resto já foi usinado); no fim volta ao X seguro
                 const zNx = uteis[kU + 1];
-                lines.push("G0X" + fmt(zNx === undefined ? xSegC : Math.max(nivelSpan(zNx), d) + 1.0));
+                // anda em Z por CIMA de todo material entre esta posição e a próxima (não só o da próxima)
+                const nivelCaminho = (z1: number, z2: number) => { let n = -Infinity; for (let zz = Math.min(z1, z2) - Lb - sz; zz <= Math.max(z1, z2) + sz + 1e-9; zz += 0.05) n = Math.max(n, nivel(zz)); return Math.max(n, maxEntre(Math.min(z1, z2) - Lb - sz, Math.max(z1, z2) + sz)); };
+                lines.push("G0X" + fmt(zNx === undefined ? xSegC : Math.max(nivelCaminho(zR, zNx), d) + 1.0));
               });
               // PASSE DE ACABAMENTO NO PERFIL (bedame com a largura real): desce na parede 1, anda no fundo seguindo o perfil e sobe na parede 2
                   if ((p.acab ?? 0) === 1) {
@@ -1517,20 +1524,33 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                     }
                     const pr: { z: number; x: number }[] = [];
                     pf.forEach((q) => { if (pr.length && Math.abs(pr[pr.length - 1].z - q.z) < 1e-4 && Math.abs(pr[pr.length - 1].x - q.x) < 1e-4) return; if (pr.length >= 2) { const u = pr[pr.length - 2], v = pr[pr.length - 1]; if (Math.abs((v.x - u.x) * (q.z - u.z) - (v.z - u.z) * (q.x - u.x)) < 1e-4 && (v.x - u.x) * (q.x - v.x) + (v.z - u.z) * (q.z - v.z) > 0) pr.pop(); } pr.push(q); }); // só junta reta que continua no mesmo sentido (desce/sobe na parede fica)
-                    { const [aX, bX] = pontosXZ(p, fxs, Lb); const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
+                    let fimNaFrente = false; // o fim escolhido é o canto da frente do bedame (fim da peça)
+                    {
+                      fimNaFrente = false;
+                      // FIM escolhido: o Z do fim pode ser o do canto de TRÁS do bedame (parede no fim -> Z + largura) ou o do canto da FRENTE (fim da peça);
+                      // usa o que cair EM CIMA do caminho (mais perto)
+                      const distPt = (P: { x: number; z: number } | undefined) => { if (!P) return Infinity; let best = Infinity; for (let i = 0; i < pr.length - 1; i++) { const A = pr[i], B = pr[i + 1]; const ar = A.x / 2, dr = B.x / 2 - ar, dzz = B.z - A.z, L2 = dr * dr + dzz * dzz; let tt = L2 > 1e-12 ? ((P.x / 2 - ar) * dr + (P.z - A.z) * dzz) / L2 : 0; tt = Math.max(0, Math.min(1, tt)); best = Math.min(best, Math.hypot(P.x / 2 - (ar + tt * dr), P.z - (A.z + tt * dzz))); } return best; };
+                      const [aX, bL] = pontosXZ(p, fxs, Lb); const [, b0] = pontosXZ(p, fxs, 0);
+                      const bX = distPt(b0) < distPt(bL) ? b0 : bL;
+                      fimNaFrente = !!b0 && bX === b0;
+                      const prX = cortarPtsXZ(pr, aX, bX); if (prX !== pr && prX.length >= 2) { lines.push(msgXZ(p)); pr.splice(0, pr.length, ...prX); } } // X de começo / fim do contorno do canal (Z do fim = canto direito do bedame)
 pr.splice(0, pr.length, ...anexarDesenhosPts(pr, (op as any).desenhos, lines)); // DESENHO escolhido na operação: o contorno do canal segue por ele onde encosta
-// FIM ESCOLHIDO (X do "termina em"): o contorno NÃO passa do X escolhido (ex.: não desce a face de trás até X0)
+// fim da peça (canto da FRENTE do bedame no Z do fim): o contorno chega EXATAMENTE no Z escolhido
+if ((p.xF ?? 0) > 0 && fimNaFrente && pr.length) {
+  const zFsel0 = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
+  const ult = pr[pr.length - 1];
+  if (ult.z > zFsel0 + 1e-6 && ult.z <= zFsel0 + Lb + 1e-6) pr.push({ z: zFsel0, x: Math.max(p.xF, fundoEm(zFsel0)) });
+}
+// FIM ESCOLHIDO (X do "termina em"): perto do fim o contorno NÃO desce abaixo do X escolhido (nunca vai até X0) e vai até o Z do fim
 if ((p.xF ?? 0) > 0) {
   const zFsel = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
-  for (let k = 1; k < pr.length; k++) {
-    const a0 = pr[k - 1], b0 = pr[k];
-    if (b0.x < p.xF - 1e-6 && a0.x >= p.xF - 1e-6 && Math.min(a0.z, b0.z) <= zFsel + Lb + 1e-6) {
-      const tt = (a0.x - p.xF) / (a0.x - b0.x);
-      pr.splice(k, pr.length - k, { z: a0.z + (b0.z - a0.z) * tt, x: p.xF });
-      lines.push("(TERMINA NO X" + fmt(p.xF) + " ESCOLHIDO)");
-      break;
-    }
-  }
+  const zona = zFsel + Lb + 1e-6;
+  let mexeu = false;
+  for (let k = 0; k < pr.length; k++) if (pr[k].z <= zona && pr[k].x < p.xF - 1e-6) { pr[k] = { ...pr[k], x: p.xF }; mexeu = true; }
+  // tira pontos repetidos/colineares criados pelo limite
+  for (let k = pr.length - 2; k >= 1; k--) { const a0 = pr[k - 1], b0 = pr[k], c0 = pr[k + 1]; if (Math.abs(a0.x - b0.x) < 1e-6 && Math.abs(b0.x - c0.x) < 1e-6) pr.splice(k, 1); }
+  for (let k = pr.length - 1; k >= 1; k--) if (Math.abs(pr[k].x - pr[k - 1].x) < 1e-6 && Math.abs(pr[k].z - pr[k - 1].z) < 1e-6) pr.splice(k, 1);
+  if (mexeu) lines.push("(TERMINA NO X" + fmt(p.xF) + " ESCOLHIDO)");
 }
 const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
                     const topoA = Math.max(nivelSpan(zPA), pr[0].x) + 0.5;
