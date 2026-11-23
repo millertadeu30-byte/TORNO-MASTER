@@ -710,7 +710,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       }
       return vv;
     };
-    return { nivel: (z: number) => { if (z > zMax + 1e-6 || z < zMin - 1e-6) return bD; const v = valEm(z); return v > -Infinity ? Math.min(bD, v + sobre) : bD; }, nome: "OP " + nRs };
+    // CANAL que chegou no FIM da peça: o bedame passou também pela largura dele além da traseira (região do corte) -> ali já está usinado no mesmo Ø
+    const naTrasRef = ref.tipo === "canal" && Math.abs(zMin - geoC.zBack) < 0.05;
+    const largRef = Math.max(0.5, po.larg ?? 3);
+    return { nivel: (z: number) => { if (naTrasRef && z < zMin - 1e-6 && z >= zMin - largRef - 1e-6) z = zMin; if (z > zMax + 1e-6 || z < zMin - 1e-6) return bD; const v = valEm(z); return v > -Infinity ? Math.min(bD, v + sobre) : bD; }, nome: "OP " + nRs };
   };
   // VÁRIAS operações: o material que sobrou é o que NENHUMA delas tirou (externo: o menor Ø que alguma deixou em cada Z)
   const perfilRestoExt = (opAtual: StarTMOp, canal: "H1" | "H2", geoC: StarTMGeo, espH2: boolean): { nivel: (z: number) => number; nome: string } | null => {
@@ -1355,10 +1358,10 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 return n;
               };
               const uteis = posU.filter((zR) => nivelSpan(zR) > maxEntre(zR - Lb - sz, zR + sz) + sx + 0.05);
-              if (!uteis.length) { lines.push("(CANAL Z" + fmt(zCoord(zIniR)) + " A Z" + fmt(zCoord(zFimR)) + ": NADA PARA CORTAR - JA USINADO)"); return; }
+              if (!uteis.length) { lines.push("(CANAL Z" + fmt(zCoord(zIniR)) + " A Z" + fmt(zCoord(zFimR)) + ": NADA PARA CORTAR - JA USINADO)"); if ((p.acab ?? 0) !== 1) return; } // já desbastado: ainda faz o PASSE DE ACABAMENTO se estiver ligado
               lines.push("(CANAL SEM CICLO - BEDAME L" + fmt(Lb) + " - REFERENCIA LADO " + (ladoEsq ? "2" : "1 - FRENTE") + " - SOBREMETAL X" + fmt(sx) + " Z" + fmt(sz) + ")");
               const apX = (p.ax ?? 0) > 0 ? Math.max(p.ax, xSeg) : bD + 1;
-              const apZ = (p.ax ?? 0) > 0 && p.az !== undefined ? p.az : zCoord(zProg(uteis[0]));
+              const apZ = (p.ax ?? 0) > 0 && p.az !== undefined ? p.az : zCoord(zProg(uteis.length ? uteis[0] : zIniOrig));
               if (primeiroMov) {
                 primeiroMov = false;
                 if (apZ > zFrontClear + 1e-4) { g0Inicial(apX, zFrontClear); lines.push("G0Z" + fmt(apZ)); } else g0Inicial(apX, apZ);
@@ -1367,7 +1370,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 lines.push("G0Z" + fmt(apZ));
               }
               const xSegC = Math.max(xSeg, bD + 1); // X seguro do canal nunca abaixo da barra
-              lines.push("G0X" + fmt(Math.max(xSegC, nivelSpan(uteis[0]) + 1.0)));
+              if (uteis.length) lines.push("G0X" + fmt(Math.max(xSegC, nivelSpan(uteis[0]) + 1.0)));
               uteis.forEach((zR, kU) => {
                 const d = maxEntre(zR - Lb - sz, zR + sz) + sx;
                 lines.push("G0Z" + fmt(zCoord(zProg(zR))) + "(ANDA EM Z SEMPRE NO X MAIOR)");
