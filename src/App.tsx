@@ -4781,6 +4781,47 @@ export const PainelPrograma: React.FC<{
   const [soloOp, setSoloOp] = useState<string | null>(null); // "simular só esta operação" (não mexe nos ticados)
   const [addTipo, setAddTipo] = useState<string>("");
   const [confSugerir, setConfSugerir] = useState<boolean>(false); // "sugerir de novo" pede Sim/Não no próprio painel
+  // MODELOS DE OPERAÇÕES: salva a árvore (ferramentas, ciclos, parâmetros, lado/torre) com um nome, para usar em peças/máquinas parecidas
+  type TMModelo = { tipo: "modelo-ops"; nome: string; maq: string; em: string; ops: TMOp[] };
+  const [modelosOpen, setModelosOpen] = useState<boolean>(false);
+  const [modeloNome, setModeloNome] = useState<string>("");
+  const [modeloAplicar, setModeloAplicar] = useState<number | null>(null);
+  const [modeloApagar, setModeloApagar] = useState<number | null>(null);
+  const [modeloMsg, setModeloMsg] = useState<string>("");
+  const [modelos, setModelos] = useState<TMModelo[]>(() => { try { const v = JSON.parse(localStorage.getItem("cnc_modelos_ops") || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } });
+  const gravarModelos = (lst: TMModelo[]) => { setModelos(lst); try { localStorage.setItem("cnc_modelos_ops", JSON.stringify(lst)); } catch { /* sem espaço */ } };
+  // tira o que é da PEÇA (regiões, cliques, desenhos, X de começo/fim) e deixa o que é do PROCESSO
+  const opSemRegiao = (o: TMOp): TMOp => { const c: any = { ...o, p: { ...o.p }, faixas: [] }; delete c.desenhos; delete c.selSeq; delete c.pontos; delete c.faces3d; delete c.sentidoLinha; delete c.p.xI; delete c.p.xF; return c as TMOp; };
+  const salvarModeloAtual = () => {
+    const nome = modeloNome.trim().toUpperCase();
+    if (!nome) { setModeloMsg("Digite um nome para o modelo"); return; }
+    if (!ops.length) { setModeloMsg("Não há operações para salvar"); return; }
+    const novo: TMModelo = { tipo: "modelo-ops", nome, maq: cfg.maq, em: new Date().toLocaleString("pt-BR"), ops: ops.map(opSemRegiao) };
+    const i = modelos.findIndex((x) => x.nome === nome);
+    gravarModelos(i >= 0 ? modelos.map((x, k) => (k === i ? novo : x)) : [...modelos, novo]);
+    setModeloNome(""); setModeloMsg(i >= 0 ? "Modelo " + nome + " atualizado" : "Modelo " + nome + " salvo");
+  };
+  const aplicarModelo = (md: TMModelo) => {
+    // regiões RECALCULADAS pela peça nova: cada operação pega a região que o app sugere para o mesmo tipo (na mesma ordem)
+    const sug = geo ? tmOpsPadrao(geo, cfg.material) : [];
+    const usados: Record<string, number> = {};
+    const novos = md.ops.map((o, i) => {
+      const n = usados[o.tipo] || 0; usados[o.tipo] = n + 1;
+      const iguais = sug.filter((s) => s.tipo === o.tipo);
+      const ref = iguais[n] || iguais[0];
+      return { ...opSemRegiao(o), id: o.tipo + "_" + Date.now().toString(36) + "_" + i, faixas: ref ? ref.faixas.map((f) => [f[0], f[1]] as TMFaixa) : [] } as TMOp;
+    });
+    setOps(novos); setAberta(null); setModeloAplicar(null); setModeloMsg("Modelo " + md.nome + " aplicado - confira as regiões das operações");
+  };
+  const baixarModelo = (md: TMModelo) => {
+    const blob = new Blob([JSON.stringify(md, null, 1)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = md.nome.replace(/[^A-Z0-9_-]+/gi, "_") + ".op"; document.body.appendChild(a); a.click(); a.remove();
+  };
+  const carregarModeloArquivo = (f: File) => {
+    const rd = new FileReader();
+    rd.onload = () => { try { const v = JSON.parse(String(rd.result)); if (v && v.tipo === "modelo-ops" && Array.isArray(v.ops)) { const i = modelos.findIndex((x) => x.nome === v.nome); gravarModelos(i >= 0 ? modelos.map((x, k) => (k === i ? v : x)) : [...modelos, v]); setModeloMsg("Modelo " + v.nome + " carregado"); } else setModeloMsg("Arquivo não é um modelo de operações (.op)"); } catch { setModeloMsg("Não consegui ler o arquivo"); } };
+    rd.readAsText(f);
+  };
   const [aoVivo, setAoVivo] = useState<boolean>(true); // programa e gráfico atualizam sozinhos a cada mudança
   const [arrastando, setArrastando] = useState<string | null>(null);
   const [podeArrastar, setPodeArrastar] = useState<string | null>(null); // só arrasta pelo cabeçalho, nunca pelas caixas de digitar
@@ -6344,7 +6385,52 @@ return (
             ) : (
               <button onClick={() => setConfSugerir(true)} className="text-[10px] text-zinc-400 hover:text-white underline">sugerir de novo</button>
             ))}
+            <button onClick={() => { setModelosOpen((v) => !v); setModeloMsg(""); }} className={"text-[10px] px-2 py-0.5 rounded border " + (modelosOpen ? "border-amber-500 text-amber-300" : "border-zinc-600 text-zinc-300 hover:text-white")} title="Salvar esta árvore de operações como modelo, ou trazer um modelo salvo">📁 modelos</button>
           </div>
+          {modelosOpen && (
+            <div className="rounded-lg border border-amber-500/40 bg-zinc-900/80 p-2 mb-2 space-y-2 text-[11px]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-amber-300 font-bold">MODELOS DE OPERAÇÕES</span>
+                <input value={modeloNome} onChange={(e) => setModeloNome(e.target.value)} placeholder="nome do modelo (ex.: OP ALOJAMENTO LATAO)" className="flex-1 min-w-[180px] bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-100" />
+                <button onClick={salvarModeloAtual} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">💾 Salvar árvore atual</button>
+                <label className="px-2 py-1 rounded border border-zinc-600 text-zinc-300 hover:text-white cursor-pointer">📂 Carregar .op<input type="file" accept=".op,application/json" className="hidden" onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) carregarModeloArquivo(f); e.target.value = ""; }} /></label>
+              </div>
+              {modeloMsg && <div className="text-amber-200">{modeloMsg}</div>}
+              {!modelos.length ? (
+                <div className="text-zinc-500">Nenhum modelo salvo ainda. Monte a árvore, dê um nome e clique em "Salvar árvore atual".</div>
+              ) : (
+                <div className="space-y-1">
+                  {modelos.map((md, k) => (
+                    <div key={md.nome + k} className="flex flex-wrap items-center gap-1.5 border border-zinc-800 rounded px-2 py-1">
+                      <span className="font-bold text-zinc-100">{md.nome}</span>
+                      <span className="text-zinc-500">{md.ops.length} op. · {md.maq} · {md.em}</span>
+                      <span className="flex-1" />
+                      {modeloAplicar === k ? (
+                        <>
+                          <span className="text-amber-300 font-bold">Trocar a árvore atual por este modelo?</span>
+                          <button onClick={() => aplicarModelo(md)} className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Sim</button>
+                          <button onClick={() => setModeloAplicar(null)} className="px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">Não</button>
+                        </>
+                      ) : modeloApagar === k ? (
+                        <>
+                          <span className="text-red-300 font-bold">Apagar o modelo?</span>
+                          <button onClick={() => { gravarModelos(modelos.filter((_, j) => j !== k)); setModeloApagar(null); }} className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-bold">Sim</button>
+                          <button onClick={() => setModeloApagar(null)} className="px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">Não</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => { setModeloAplicar(k); setModeloApagar(null); }} className="px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600 text-white font-bold">Aplicar nesta peça</button>
+                          <button onClick={() => baixarModelo(md)} className="px-2 py-0.5 rounded border border-zinc-600 text-zinc-300 hover:text-white" title="Baixar como arquivo .op (para levar a outro tablet/PC)">⬇ .op</button>
+                          <button onClick={() => { setModeloApagar(k); setModeloAplicar(null); }} className="px-2 py-0.5 rounded border border-zinc-700 text-zinc-500 hover:text-red-300" title="Apagar modelo">🗑</button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="text-zinc-500">O modelo guarda operações, ferramentas, ciclos, parâmetros e torre. Ao aplicar, as regiões (Z/X) são recalculadas pela peça nova — confira e ajuste o que o app não identificar.</div>
+            </div>
+          )}
           {regiaoSel && (
             <div className="text-[11px] font-bold bg-amber-500/20 border border-amber-500/60 text-amber-200 rounded px-2 py-1 mb-2">
               {regiaoSel.opId.startsWith("__orig") ? "Toque na peça no ponto que será o ZERO da origem " + (parseInt(regiaoSel.opId.slice(6), 10) + 1) + " (perto da face = zero na face)" : regiaoSel.modo === "cf" ? "Toque na peça no COMEÇO e depois no FIM da região" : "Toque nas LINHAS da peça (toque de novo para tirar). Clique em OK quando terminar."}
