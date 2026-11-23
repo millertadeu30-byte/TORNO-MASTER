@@ -1399,6 +1399,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               const uteis = posU.filter((zR) => nivelSpan(zR) > maxEntre(zR - Lb - sz, zR + sz) + sx + 0.05);
               if (!uteis.length) { lines.push("(CANAL Z" + fmt(zCoord(zIniR)) + " A Z" + fmt(zCoord(zFimR)) + ": NADA PARA CORTAR - JA USINADO)"); if ((p.acab ?? 0) !== 1) return; } // já desbastado: ainda faz o PASSE DE ACABAMENTO se estiver ligado
               lines.push("(CANAL SEM CICLO - BEDAME L" + fmt(Lb) + " - REFERENCIA LADO " + (ladoEsq ? "2" : "1 - FRENTE") + " - SOBREMETAL X" + fmt(sx) + " Z" + fmt(sz) + ")");
+              if (rbC > 0) lines.push("(RAIO CANTO R" + fmt(rbC) + ")"); // o simulador sabe que o ponto é o canto teórico do bedame
               const apX = (p.ax ?? 0) > 0 ? Math.max(p.ax, xSeg) : bD + 1;
               const apZ = (p.ax ?? 0) > 0 && p.az !== undefined ? p.az : zCoord(zProg(uteis.length ? uteis[0] : zIniOrig));
               if (primeiroMov) {

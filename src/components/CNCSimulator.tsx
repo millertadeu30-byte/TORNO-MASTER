@@ -1539,11 +1539,24 @@ export function simularGCodeEColisoes(
       });
     }
     const zDir = simInvertZ ? -1 : 1;
+    // FERRAMENTA COM RAIO NO CANTO (sem compensação): o ponto programado é o canto TEÓRICO (vivo) - ele pode ficar até 1 raio "dentro"
+    // do desenho da peça nas quinas sem o raio real encostar. O comentário (RAIO CANTO Rx) do programa diz o raio; troca de ferramenta zera.
+    const raioLinha: number[] = [];
+    {
+      let rC = 0;
+      gcodeText.split("\n").forEach((ln, i) => {
+        const up = ln.toUpperCase();
+        const mR = up.match(/\(RAIO CANTO R([\d.]+)\)/);
+        if (mR) rC = parseFloat(mR[1]) || 0;
+        else if (/(^|[^A-Z(])T\d/.test(up.replace(/\([^)]*\)/g, ""))) rC = 0;
+        raioLinha[i] = rC;
+      });
+    }
     plotList.forEach((it, idx) => {
       if (linhaRosca.has(Math.floor((it as any).linhaId ?? -1))) return; // rosca: não confere contra a peça
       const rapido = it.color === "#ff2a2a";
       const diagonal = rapido && Math.abs(it.x2 - it.x1) > 1e-4 && Math.abs(it.z2 - it.z1) > 1e-4;
-      const tol = rapido ? 0.05 : 0.6;
+      const tol = (rapido ? 0.05 : 0.6) + (raioLinha[Math.floor((it as any).linhaId ?? -1)] || 0);
       const pts: { z: number; r: number }[] = [];
       if (it.type === "arc" && it.radius && it.radius > 0) {
         const px1 = it.z1 * zDir;
