@@ -1259,16 +1259,27 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
               const sz = p.sz ?? 0.1;
               const inc = (p.inc ?? 0) > 0 ? p.inc : Math.max(Lb * 0.8, 0.1);
               const xiq = (q: { zA: number; zB: number; xa: number; xb: number }, zz: number) => (q.zA - q.zB < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((q.zA - zz) / (q.zA - q.zB)) * (q.xb - q.xa));
+              // RAIO DO CANTO DO BEDAME (sem compensação na máquina): perto das laterais o fundo do bedame sobe pelo raio -> o caminho já desconta
+              const rbC = Math.max(0, Math.min(Lb / 2, p.rb ?? 0.2));
+              const valRaio = (q: StarTMIntervalo, a: number, b: number, eL: number, eR: number) => {
+                let v = Math.max(xiq(q, a), xiq(q, Math.min(a, b)));
+                if (!(rbC > 0) || Math.abs(q.zA - q.zB) < 1e-6) return v;
+                v = -Infinity;
+                const zs: number[] = [a, Math.min(a, b)];
+                for (const [e0, e1] of [[eL, Math.min(eL + rbC, eR)], [Math.max(eR - rbC, eL), eR]]) for (let s = 0; s <= 12; s++) { const zz = e0 + ((e1 - e0) * s) / 12; if (zz <= a + 1e-9 && zz >= b - 1e-9) zs.push(zz); }
+                for (const zz of zs) { const u = Math.max(0, Math.min(zz - eL, eR - zz)); const h = u < rbC ? rbC - Math.sqrt(Math.max(0, rbC * rbC - (rbC - u) * (rbC - u))) : 0; v = Math.max(v, xiq(q, zz) - 2 * h); }
+                return v;
+              };
               const maxEntre = (zL: number, zR: number) => {
                 let mm = 0;
                 if (zL < geoK.zBack - largCorte - 1e-6) mm = bD;
                 for (const q of geoK.ext) {
                   const a = Math.min(zR, q.zA);
                   const b = Math.max(zL, q.zB);
-                  if (a - b < 1e-3) continue; // só encostando na lateral do bedame (sobremetal Z = 0) não é material
+                  if (a - b < 1e-5) continue; // só encostando na lateral do bedame (sobremetal Z = 0) não é material
                       // FACE (linha em pé) só encostando na lateral do bedame não é material (sobremetal Z = 0 encosta na face)
                       if (Math.abs(q.zA - q.zB) < 1e-6 && (q.zA >= zR - 1e-3 || q.zA <= zL + 1e-3)) continue;
-                  mm = Math.max(mm, xiq(q, a), xiq(q, b));
+                  mm = Math.max(mm, valRaio(q, a, b, zL, zR));
                 }
                 return mm;
               };
@@ -1434,7 +1445,36 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                       pf.push({ z: zA0, x: fundoEm(zA0 + eps) });
                     }
                     const nP = Math.max(1, Math.ceil(Math.abs(zA0 - zB0) / 0.05));
-                    for (let k = 0; k <= nP; k++) { const zR = zA0 + ((zB0 - zA0) * k) / nP; pf.push({ z: zR, x: fundoEm(zR) }); }
+                    // amostra a cada 0,05 E também EXATAMENTE nas quinas da peça (paredes, fim de chanfro/raio), com o valor de cada lado da quina:
+        // assim o bedame segue o chanfro até o fim e desce a parede no Z exato (sem "ressalto" de meio passo)
+        const zsAc: { z: number; lado: 0 | 1 | 2 }[] = [];
+        geoK.ext.forEach((q) => {
+          [q.zA, q.zB].forEach((zb) => { if (zb < zA0 - 1e-6 && zb > zB0 + 1e-6) zsAc.push({ z: zb, lado: 1 }); }); // quina no canto da FRENTE do bedame
+          [q.zA + Lb, q.zB + Lb].forEach((zb) => { if (zb < zA0 - 1e-6 && zb > zB0 + 1e-6) zsAc.push({ z: zb, lado: 2 }); }); // quina no canto de TRÁS do bedame
+        });
+        for (let k = 0; k <= nP; k++) { const zr = zA0 + ((zB0 - zA0) * k) / nP; if (!zsAc.some((q) => Math.abs(q.z - zr) < 1e-4)) zsAc.push({ z: zr, lado: 0 }); }
+        zsAc.sort((p1, p2) => p2.z - p1.z);
+        // fundo que o bedame alcança chegando na quina "por cima" (vindo do Z maior) ou "por baixo" (vindo do Z menor) - valor exato, sem estimar
+        const fundoLado = (zR: number, cima: boolean) => {
+          let mm = 0;
+          if (zR - Lb < geoK.zBack - largCorte - 1e-6) mm = bD;
+          for (const q of geoK.ext) {
+            if (q.zA - q.zB < 1e-9) continue;
+            const ok = cima ? q.zB <= zR + 1e-9 && q.zA > zR - Lb + 1e-9 : q.zA >= zR - Lb - 1e-9 && q.zB < zR - 1e-9;
+            if (!ok) continue;
+            const a = Math.min(q.zA, zR), b = Math.max(q.zB, zR - Lb);
+            mm = Math.max(mm, valRaio(q, a, b, zR - Lb, zR));
+          }
+          return mm;
+        };
+        let zUltAc = Infinity;
+        zsAc.forEach(({ z: zR, lado }) => {
+          if (Math.abs(zR - zUltAc) < 1e-6) return;
+          zUltAc = zR;
+          if (lado === 0) { pf.push({ z: zR, x: fundoEm(zR) }); return; }
+          const xCima = fundoLado(zR, true), xBaixo = fundoLado(zR, false);
+          if (Math.abs(xCima - xBaixo) > 0.01) { pf.push({ z: zR, x: xCima }); pf.push({ z: zR, x: xBaixo }); } else pf.push({ z: zR, x: fundoEm(zR) });
+        });
                     if (zFimOrig < zB0 - 0.01) {
                       pf.push({ z: zB0, x: fundoEm(zB0 - eps) });
                       for (let zR = zB0 - eps; zR > zFimOrig - 1e-9; zR -= 0.02) pf.push({ z: zR, x: fundoEm(zR) });
@@ -1456,9 +1496,17 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                               if (fz > a0.x + ((q.x - a0.x) * s) / 8 + 0.002) invade = true;
                             }
                             if (invade) {
-                              const h = Math.max(a0.x, q.x, fMax);
-                              if (h > a0.x + 1e-4) pfS.push({ z: a0.z, x: h });
-                              pfS.push({ z: q.z, x: h });
+                              // segue a CURVA de verdade (divide o trecho ao meio até encostar no perfil); só se não der, anda em degrau pelo X maior
+                              const sub = (za: number, xa: number, zb: number, xb: number, d: number): { z: number; x: number }[] => {
+                                let inv = false, fM = -Infinity;
+                                for (let s = 1; s < 8; s++) { const zz = za + ((zb - za) * s) / 8; const fz = fundoEm(zz); fM = Math.max(fM, fz); if (fz > xa + ((xb - xa) * s) / 8 + 0.002) inv = true; }
+                                if (!inv) return [];
+                                if (d >= 7) { const hh = Math.max(xa, xb, fM); return hh > xa + 1e-4 ? [{ z: za, x: hh }, { z: zb, x: hh }] : [{ z: zb, x: hh }]; }
+                                const zm = (za + zb) / 2, xm = fundoEm(zm);
+                                return [...sub(za, xa, zm, xm, d + 1), { z: zm, x: xm }, ...sub(zm, xm, zb, xb, d + 1)];
+                              };
+                              pfS.push(...sub(a0.z, a0.x, q.z, q.x, 0));
+                              void fMax;
                             }
                           }
                         }
