@@ -1835,7 +1835,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             const ap3 = Math.max(0.05, p.ap ?? 0.5);
             const R03 = bD / 2;
             const xSeg3 = bD + 2;
-            const cOff = (op as any).posto === "TS2" ? 180 : 0; // torre superior trabalha do outro lado (X negativo)
+            const cOff = 0; // TBSy TS2: na ACIONADA o X sai POSITIVO (torre superior em cima) - o C é o ângulo da própria face, sem +180
             const zG = (z: number) => (espH2 ? sFH2 - z : z);
             const rE3 = perfilRestoExt(opIn, canal, geo, espH2);
             // sem "Resto" preenchido: usa o que os torneamentos anteriores (desbaste / acabamento externo do mesmo lado) deixaram
@@ -1966,7 +1966,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
             const a0G = p.a0 ?? 0;
             const fcsG = Array.from({ length: facesG }, (_, k) => ({ th: a0G + (k * 360) / facesG, d: sG / 2, rTop: bD / 2 }));
             lines.push("(FRESAR " + facesG + " FACES - G12.1 - CHAVE " + fmt(sG) + ")");
-            g12Poligono(fcsG, zIniC, zFimC, Math.max(0.5, p.df ?? 6), Math.max(0.05, p.ap ?? 0.5), Math.max(0.1, p.pz ?? 2), Math.max(0, p.rv ?? 0), Math.round(p.cc ?? 0), fC, (op as any).posto === "TS2", bD / 2);
+            g12Poligono(fcsG, zIniC, zFimC, Math.max(0.5, p.df ?? 6), Math.max(0.05, p.ap ?? 0.5), Math.max(0.1, p.pz ?? 2), Math.max(0, p.rv ?? 0), Math.round(p.cc ?? 0), fC, false, bD / 2);
           } else {
           // FRESAR FACES: fresa radial com eixo Y; cada face no ângulo C, passes em X até a medida, varrendo em Y
           const facesOp = [1, 2, 3, 4, 6, 8][Math.max(0, Math.min(5, Math.round(p.nfc ?? 3)))];
@@ -2749,12 +2749,12 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
         const g = parseFloat(v);
         if (g === 0 || g === 1) { w.push("G" + g); mov = true; if (g === 1) g1 = true; }
         else if (g === 2 || g === 3) { w.push(troca ? (g === 2 ? "G3" : "G2") : "G" + g); mov = true; g1 = true; }
-        else { if (g === 4) pausa = true; if (Math.abs(g - 12.1) < 1e-6) polar = true; if (Math.abs(g - 13.1) < 1e-6) polar = false; w.push(polar && o.negX && (g === 41 || g === 42) ? (g === 41 ? "G42" : "G41") : p); } // G12.1 na torre superior: X espelhado -> troca G41/G42
+        else { if (g === 4) pausa = true; if (Math.abs(g - 12.1) < 1e-6) polar = true; if (Math.abs(g - 13.1) < 1e-6) polar = false; w.push(polar && o.negX && !acion && (g === 41 || g === 42) ? (g === 41 ? "G42" : "G41") : p); } // G12.1 na torre superior: X espelhado -> troca G41/G42
       } else if (v === "") w.push(p);
-      else if (L === "X") w.push((pausa ? "U" : "X") + f(!pausa && o.negX ? -parseFloat(v) : parseFloat(v)));
+      else if (L === "X") w.push((pausa ? "U" : "X") + f(!pausa && o.negX && !acion ? -parseFloat(v) : parseFloat(v))); // ACIONADA na TS2: X POSITIVO
       else if (L === "Z") w.push("Z" + f(o.flipZ ? o.zMap(parseFloat(v)) : parseFloat(v)));
       else if (L === "K" || L === "W") w.push(L + f(o.flipZ ? -parseFloat(v) : parseFloat(v)));
-      else if (L === "I" || (L === "U" && temPQ) || (L === "R" && g76 && temZ)) w.push(L + f(o.negX ? -parseFloat(v) : parseFloat(v)));
+      else if (L === "I" || (L === "U" && temPQ) || (L === "R" && g76 && temZ)) w.push(L + f(o.negX && !acion ? -parseFloat(v) : parseFloat(v)));
       else if (L === "T") { /* a TBSy chama a ferramenta na linha T própria */ }
       else w.push(p);
     });

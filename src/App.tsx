@@ -1121,8 +1121,11 @@ export default function App() {
       const code = editorTexts[i];
       if (!code || !code.trim()) continue;
       const nome = fileNames[i] || `PROG_CNC_ED${i + 1}.nc`;
-      const nomeFinal = /(\.\w+|\.P-\d+)$/i.test(nome) || /^O\d{4,}$/i.test(nome) ? nome : nome + ".nc";
-      setTimeout(() => baixarArquivo(code, nomeFinal), atraso);
+      // 2 CANAIS (TBSy / Fanuc de 2 canais): o par é "NOME.P-2" (canal 1) + "NOME" (canal 2), SEM extensão - senão a máquina não lê
+      const pareado = fileNames.some((f, k) => k !== i && !!f && (f.toUpperCase() === (nome + ".P-2").toUpperCase() || f.replace(/\.P-\d+$/i, "").toUpperCase() === nome.toUpperCase()));
+      const semExt = pareado || /\.P-\d+$/i.test(nome);
+      const nomeFinal = semExt || /(\.\w+)$/i.test(nome) || /^O\d{4,}$/i.test(nome) ? nome : nome + ".nc";
+      setTimeout(() => baixarArquivo(code, nomeFinal, semExt ? "application/octet-stream" : "text/plain"), atraso);
       atraso += 500;
     }
   };
@@ -1162,6 +1165,7 @@ export default function App() {
     if (tem("layoutCount")) { setLayoutCount(a.layoutCount); setIsSyncWidgetMinimized(true); setSyncWidgetPos(tmPosSyncPadrao()); } // ao carregar peça: sincronismo volta minimizado no canto
     if (tem("editorTexts")) setEditorTexts(tres(a.editorTexts));
     setPgmEditadoMao(((p.storage || {}) as any).cnc_pgmEditadoMao === "1"); // programa salvo com edições à mão continua protegido
+    try { const gv = JSON.parse(((p.storage || {}) as any).cnc_pgmGerado || "null"); geradoRef.current = Array.isArray(gv) ? gv : null; } catch { geradoRef.current = null; } // base para manter os SINCRONISMOS feitos à mão
     if (tem("fileNames")) setFileNames(tres(a.fileNames));
     if (tem("activePaneIdx")) setActivePaneIdx(a.activePaneIdx);
     if (tem("simMode")) setSimMode(a.simMode);
@@ -1229,7 +1233,45 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("cnc_pgmEditadoMao", pgmEditadoMao ? "1" : "0"); } catch { /* */ } }, [pgmEditadoMao]);
   const [gerarPendente, setGerarPendente] = useState<{ r: any } | null>(null);
   // coloca o programa GERADO pelo painel nos editores (e zera a marca de "editado à mão")
-  const aplicarGerado = (r: any, vivo?: boolean) => {
+  // SINCRONISMOS FEITOS À MÃO: mexer SÓ em linhas de sincronismo (M200-M999 / M2000-M2999, com ou sem P) não conta como "editado à mão";
+  // ao gerar de novo, os sincronismos que você criou/apagou/trocou voltam no mesmo lugar (depois da mesma linha do programa)
+  const ehLinhaSinc = (l: string) => /^\/?\s*(?:M(?:2\d{3}|[2-9]\d\d)(?!\d)(?:P\d+)?\s*)+(?:\(.*\))?\s*$/i.test(l.trim());
+  const semSinc = (tx: string) => tx.split("\n").map((l) => l.trim()).filter((l) => l && !ehLinhaSinc(l)).join("\n");
+  const blocosSinc = (tx: string) => {
+    // [bloco antes da 1ª linha, linha1, bloco1, linha2, bloco2...]: blocos = sincronismos e linhas em branco entre duas linhas de programa
+    const ancs: string[] = []; const blocos: string[][] = [[]];
+    tx.split("\n").forEach((l) => { if (l.trim() && !ehLinhaSinc(l)) { ancs.push(l.trim()); blocos.push([]); } else blocos[blocos.length - 1].push(l); });
+    return { ancs, blocos };
+  };
+  const patchSinc = (base: string, editado: string, novo: string): string => {
+    if (!base || !editado || semSinc(base) !== semSinc(editado)) return novo;
+    const A = blocosSinc(base), B = blocosSinc(editado), C = blocosSinc(novo);
+    const chaveB = (k: number) => { if (k === 0) return { t: "", occ: 0 }; const tt = A.ancs[k - 1]; let occ = 0; for (let q = 0; q < k; q++) if (A.ancs[q] === tt) occ++; return { t: tt, occ }; };
+    const achaC = (ch: { t: string; occ: number }) => { if (!ch.t) return 0; let occ = 0; for (let q = 0; q < C.ancs.length; q++) if (C.ancs[q] === ch.t) { occ++; if (occ === ch.occ) return q + 1; } return -1; };
+    let mudou = false;
+    for (let k = 0; k < A.blocos.length; k++) {
+      const a = A.blocos[k].map((l) => l.trim()).join("\n"), b = (B.blocos[k] || []).map((l) => l.trim()).join("\n");
+      if (a === b) continue;
+      const kc = achaC(chaveB(k));
+      if (kc < 0) continue; // a linha de referência não existe mais no programa novo
+      C.blocos[kc] = [...(B.blocos[k] || [])];
+      mudou = true;
+    }
+    if (!mudou) return novo;
+    const out: string[] = [...C.blocos[0]];
+    C.ancs.forEach((an, q) => { const orig = novo.split("\n").find((l) => l.trim() === an); out.push(orig !== undefined ? orig : an); out.push(...C.blocos[q + 1]); });
+    return out.join("\n");
+  };
+  const geradoRef = useRef<string[] | null>((() => { try { const v = JSON.parse(localStorage.getItem("cnc_pgmGerado") || "null"); return Array.isArray(v) ? v : null; } catch { return null; } })());
+  const gravarGerado = (tx: string[]) => { geradoRef.current = tx; try { localStorage.setItem("cnc_pgmGerado", JSON.stringify(tx)); } catch { /* */ } };
+  const aplicarGerado = (r0: any, vivo?: boolean, manterSinc = true) => {
+    const g = geradoRef.current, at = editorTextsRef.current || [];
+    const r = { ...r0, textos: [...r0.textos] };
+    if (manterSinc && g) {
+      r.textos[0] = patchSinc(g[0] || "", at[0] || "", r0.textos[0] || "");
+      if (r0.doisCanais) r.textos[1] = patchSinc(g[1] || "", at[1] || "", r0.textos[1] || "");
+    }
+    gravarGerado([r0.textos[0] || "", r0.doisCanais ? r0.textos[1] || "" : "", ""]);
                   if (r.doisCanais) {
                     setEditorTexts((t) => [r.textos[0], r.textos[1], t[2] || ""]);
                     setFileNames((f) => [r.nomes[0], r.nomes[1], f[2] || ""]);
@@ -1248,9 +1290,14 @@ export default function App() {
     setPgmEditadoMao(false);
   };
   const updateEditorText = (val: string, index: number) => {
-    if (val !== editorTexts[index]) setPgmEditadoMao(true);
     const updated = [...editorTexts];
     updated[index] = val;
+    if (val !== editorTexts[index]) {
+      // só SINCRONISMO mudou (comparando com o último programa gerado)? então não é "edição à mão" de movimento
+      const g = geradoRef.current;
+      const soSinc = !!g && [0, 1, 2].every((k) => !g[k] || semSinc(updated[k] || "") === semSinc(g[k]));
+      setPgmEditadoMao(!soSinc);
+    }
     setEditorTexts(updated);
     if (index === activePaneIdx) {
       setIsDriverActive(false); // Stop simulation running to reset coordinates
@@ -2639,7 +2686,7 @@ export default function App() {
             {gerarPendente && (
               <div className="fixed bottom-3 left-3 z-[60] max-w-sm rounded-lg border border-red-500/70 bg-zinc-900/95 shadow-2xl px-3 py-2 text-[11px] text-red-100 flex flex-wrap items-center gap-2">
                 <span className="font-bold w-full">⚠️ Programa editado à mão. Gerar de novo SUBSTITUI e perde as edições.</span>
-                <button onClick={() => { const g = gerarPendente; setGerarPendente(null); if (g) aplicarGerado(g.r, false); }} className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-bold">Substituir pelo gerado</button>
+                <button onClick={() => { const g = gerarPendente; setGerarPendente(null); if (g) aplicarGerado(g.r, false, false); }} className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-bold">Substituir pelo gerado</button>
                 <button onClick={() => setGerarPendente(null)} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Manter minhas edições</button>
               </div>
             )}
