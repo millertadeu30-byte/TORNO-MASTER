@@ -2632,15 +2632,15 @@ export default function App() {
 
             {/* ▶ PAINEL "Programa da peça" (fica no lugar dos editores enquanto você monta) */}
             {pgmEditadoMao && showIniciar && !gerarPendente && (
-              <div className="mb-2 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200 flex flex-wrap items-center gap-2">
-                <span>✍️ O programa tem <b>edições feitas à mão</b>: o "Ao vivo" não vai apagar. Para refazer pelo painel, clique em "Gerar e ver o programa" (vai pedir confirmação).</span>
+              <div className="fixed bottom-3 left-3 z-[60] max-w-xs rounded-lg border border-amber-500/60 bg-zinc-900/95 shadow-xl px-2.5 py-1.5 text-[10px] text-amber-200 pointer-events-none">
+                <span>✍️ Programa com <b>edições à mão</b> — o "Ao vivo" não apaga. "Gerar" pede confirmação.</span>
               </div>
             )}
             {gerarPendente && (
-              <div className="mb-2 rounded-lg border border-red-500/70 bg-red-500/10 px-3 py-2 text-[12px] text-red-100 flex flex-wrap items-center gap-2">
-                <span className="font-bold">⚠️ O programa foi editado à mão. Gerar de novo vai SUBSTITUIR e perder essas edições.</span>
+              <div className="fixed bottom-3 left-3 z-[60] max-w-sm rounded-lg border border-red-500/70 bg-zinc-900/95 shadow-2xl px-3 py-2 text-[11px] text-red-100 flex flex-wrap items-center gap-2">
+                <span className="font-bold w-full">⚠️ Programa editado à mão. Gerar de novo SUBSTITUI e perde as edições.</span>
                 <button onClick={() => { const g = gerarPendente; setGerarPendente(null); if (g) aplicarGerado(g.r, false); }} className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-bold">Substituir pelo gerado</button>
-                <button onClick={() => { setGerarPendente(null); setRegiaoSel(null); setShowIniciar(false); }} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Manter minhas edições</button>
+                <button onClick={() => setGerarPendente(null)} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Manter minhas edições</button>
               </div>
             )}
             {showIniciar && (
