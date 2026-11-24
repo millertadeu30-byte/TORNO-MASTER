@@ -170,7 +170,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       // Remove comments ( ... ) or ; ...
       let semCom = lineText.split(";")[0];
       for (let g = 0; g < 10 && /\([^()]*\)/.test(semCom); g++) semCom = semCom.replace(/\([^()]*\)/g, ""); // tira comentários, mesmo com parênteses dentro
-      const cleanLine = semCom.replace(/\(.*$/, "").trim().toUpperCase();
+      const cleanLine = semCom.replace(/\(.*$/, "").trim().toUpperCase().replace(/(?<![A-Z])X3\s*=\s*[+-]?\d*\.?\d*/g, ""); // X3= (T52 da DUPLA) nao e o X da T2
       // FRESA (acionada): o comentário (FRESA D.. L.. TOPO/LATERAL) diz o tamanho e o lado de trabalho para desenhar a ferramenta
       const mFr = lineText.toUpperCase().match(/\(FRESA D([\d.]+) L([\d.]+) (TOPO|LATERAL)\)/);
       if (mFr) curFer = { d: parseFloat(mFr[1]), l: parseFloat(mFr[2]), lat: mFr[3] === "LATERAL" };

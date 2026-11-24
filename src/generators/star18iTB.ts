@@ -1114,11 +1114,29 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
             let xp = restoE ? Math.min(bD, Math.max(...Array.from({ length: 200 }, (_, i) => restoE.nivel(pts[0].z - ((pts[0].z - pts[pts.length - 1].z) * i) / 199)))) + 2 * Math.max(0.05, (p.ap ?? 1.5) > 0 ? p.ap : 1.5) - 1e-6 : bD;
             if (restoE) xp = Math.min(bD, xp);
             let gXp = 0;
+            // OPERACAO DUPLA T2 + T52 (Star SR-38 N14, eixos X1 + X3 com M144/M145): a T52 corta o Ø maior (dupD) e a T2 o restante;
+            // a T52 fica adiantada em Z (dupZ, fixo no suporte): no fim da passada ela chega primeiro na parede, sobe sozinha (G0 X3)
+            // e a T2 completa o Z que falta (sem degrau). A T52 para onde o perfil chega no Ø dela e sobe acima do material que existe no caminho.
+            const pasDup: { x: number; zl: number }[] = [];
+            const dupla = (p.dup ?? 0) === 1 && cfg.maqId === "STAR_SR38_N14" && canal === "H1" && !restoE && (p.espX ?? 0) !== 1;
+            const dDup = Math.max(0.1, p.dupD ?? 1.5);
+            const zDup = Math.max(0, p.dupZ ?? 0.5);
+            const fDup = Math.max(0.2, p.dupF ?? 1);
+            const sgnD = zCoord(pts[0].z - 1) - zCoord(pts[0].z) >= 0 ? 1 : -1;
+            const zStartD = dupla ? (sgnD > 0 ? Math.min(zStartS, zCoord(pts[0].z) - zDup - 0.5) : Math.max(zStartS, zCoord(pts[0].z) + zDup + 0.5)) : zStartS;
+            if ((p.dup ?? 0) === 1 && !dupla) lines.push("(DUPLA T2 + T52 NAO APLICADA - SO NA N14 CANAL 1 SEM RESTO)");
+            if (dupla) {
+              lines.push("(DUPLA T2 + T52 - T52 ADIANTADA Z" + fmt(zDup) + " DIF.DIAM " + fmt(dDup) + ")");
+              if (dDup >= 2 * apDesb - 1e-6) lines.push("(ATENCAO - DIF.DIAM MAIOR QUE O PASSE - A T52 NAO CORTA)");
+              lines.push("M144(ATIVA X1 + X3)");
+              lines.push("G0X" + fmt(bD + 1) + "X3=" + fmt(bD + 1) + "Y0.0Z" + fmt(zStartD));
+            }
             while (gXp++ < 1000 && xp > xMin + 1e-6) {
               let nx = Math.max(xMin, xp - 2 * apDesb);
               const plS = platE.filter((pv) => pv < xp - 1e-6 && pv > nx + 1e-6);
               if (plS.length) nx = Math.max(...plS);
               if (nx >= xp - 1e-6) break;
+              const xAntD = xp;
               xp = nx;
               const zlComp = zOndeAlvo(compOff, xp + 0.005, false); // tolerância: o passe no diâmetro reto (+ sobremetal) vai até o fim do degrau, não para no começo dele
               const zlRaw = zOndeAlvo(rawOff, xp + 1e-6, false);
@@ -1148,10 +1166,38 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
                 if (trechos.length) lines.push("G0Z" + fmt(zStartS));
                 continue;
               }
+              if (dupla) {
+                const x3 = xp + dDup;
+                const topoEm = (zg: number) => { let v = bD; pasDup.forEach((q) => { if (q.zl <= zg + 1e-6) v = Math.min(v, q.x); }); return v; };
+                const topoMax = (zgA: number, zgB: number) => { let v = topoEm(zgA); for (let zz = zgB; zz >= zgA - 1e-9; zz -= 0.05) v = Math.max(v, topoEm(zz)); return v; };
+                const zlX3 = Math.max(zOndeAlvo(compOff, x3 + 0.005, false), zOndeAlvo(rawOff, x3 + 1e-6, false));
+                const zl3 = Math.max(zl, zlX3); // a T52 (Ø maior) para onde o perfil chega no Ø dela
+                const zT2x3 = zCoord(zl3) - sgnD * zDup; // onde a T2 está quando a T52 chega no fim dela
+                const x3Corta = x3 < xAntD - 1e-6 && zl3 < pts[0].z - 1e-4 && sgnD * (zT2x3 - zStartD) > 1e-4;
+                const x3Sobe = Math.max(x3 + 0.2, topoMax(zl - zDup, x3Corta ? zl3 : pts[0].z) + fDup);
+                if (x3Corta) {
+                  lines.push("G0X" + fmt(xp) + "X3=" + fmt(x3));
+                  lines.push("G1Z" + fmt(zT2x3) + "F" + fmt(p.f ?? 0.25));
+                  lines.push("G0X3=" + fmt(x3Sobe));
+                  lines.push("G1Z" + fmt(zEndS));
+                } else {
+                  lines.push("G0X" + fmt(xp) + "X3=" + fmt(x3Sobe));
+                  lines.push("G1Z" + fmt(zEndS) + "F" + fmt(p.f ?? 0.25));
+                }
+                lines.push("G1X" + fmt(xRet) + "Z" + fmt(zEndS - 0.5));
+                lines.push("G0Z" + fmt(zStartD));
+                pasDup.push({ x: xp, zl });
+                continue;
+              }
               lines.push("G0X" + fmt(xp));
               lines.push("G1Z" + fmt(zEndS) + "F" + fmt(p.f ?? 0.25));
               lines.push("G1X" + fmt(xRet) + "Z" + fmt(zEndS - 0.5));
               lines.push("G0Z" + fmt(zStartS));
+            }
+            if (dupla) {
+              lines.push("G0X" + fmt(bD + 1) + "X3=" + fmt(bD + 1));
+              lines.push("M51");
+              lines.push("M145(DESLIGA X1 + X3)");
             }
             fazerRebaixos();
           }

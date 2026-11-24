@@ -349,6 +349,7 @@ export function parseGCodeSim(
         .replace(/\bLIMS\s*=\s*-?\d*\.?\d*/gi, "")
         .replace(/\b(?:CHF|RND)\s*=\s*-?\d*\.?\d*/gi, "")
         .replace(/\bS[14]?\s*=\s*-?\d*\.?\d*/gi, "")
+        .replace(/(?<![A-Z])X3\s*=\s*[+-]?\d*\.?\d*/gi, "") // X3= (2a ferramenta da DUPLA T2+T52) nao e o X da T2
         .replace(/(?<![A-Z])T\d+/gi, "");
 
       const isG4Dwell = /\bG\s*0?4(?![0-9])/i.test(clean);
@@ -1391,6 +1392,39 @@ export function simularGCodeEColisoes(
   const parsedSim = parseGCodeSim(gcodeText, simInvertZ, partLayers);
   const { activeLineIndexes, error } = parsedSim;
   let plotList = parsedSim.plotList;
+  // DUPLA T2 + T52 (Star SR-38, M144 ... M145): desenha tambem a T52 (eixo X3), adiantada em Z, e ela entra na conferencia de colisao
+  if (/M144/i.test(gcodeText)) {
+    const lnsD = gcodeText.split("\n");
+    const mDz = gcodeText.toUpperCase().match(/T52 ADIANTADA Z\s*([\d.]+)/);
+    const dzD = mDz ? parseFloat(mDz[1]) || 0 : 0;
+    const porLinha = new Map<number, SimulationPlotItem[]>();
+    plotList.forEach((it) => { const k = Math.floor((it as any).linhaId ?? -1); if (!porLinha.has(k)) porLinha.set(k, []); porLinha.get(k)!.push(it); });
+    let ativo = false, x3: number | null = null, zAt: number | null = null, rapAnt = true;
+    const novos: SimulationPlotItem[] = [];
+    lnsD.forEach((ln, i) => {
+      const up = ln.toUpperCase().replace(/\([^)]*\)/g, "");
+      const its = porLinha.get(i) || [];
+      const z0 = its.length ? its[0].z1 : zAt;
+      const z1 = its.length ? its[its.length - 1].z2 : zAt;
+      if (/(?<![0-9])M144(?![0-9])/.test(up)) ativo = true;
+      const gM = up.match(/(?<![A-Z])G0*([01])(?![0-9])/);
+      const rap = its.length ? its[0].color === "#ff2a2a" : gM ? gM[1] === "0" : rapAnt;
+      rapAnt = rap;
+      const mx = up.match(/(?<![A-Z])X3\s*=\s*([+-]?(?:\d+\.?\d*|\.\d+))/);
+      const nx3 = mx ? parseFloat(mx[1]) / 2 : x3;
+      if (ativo && x3 !== null && nx3 !== null && z0 !== null && z1 !== null && (Math.abs(nx3 - x3) > 1e-6 || Math.abs(z1 - z0) > 1e-6)) {
+        novos.push({ type: "line", x1: x3, z1: z0 + dzD, x2: nx3, z2: z1 + dzD, color: rap ? "#ff2a2a" : "#f59e0b", linhaId: i } as any);
+      }
+      if (ativo) x3 = nx3;
+      if (z1 !== null) zAt = z1;
+      if (/(?<![0-9])M145(?![0-9])/.test(up)) { ativo = false; x3 = null; }
+    });
+    if (novos.length) {
+      const ord = plotList.every((it, k) => k === 0 || Math.floor((it as any).linhaId ?? 0) >= Math.floor((plotList[k - 1] as any).linhaId ?? 0));
+      plotList = plotList.concat(novos);
+      if (ord) plotList = plotList.map((it, k) => ({ it, k })).sort((a, b) => (Math.floor((a.it as any).linhaId ?? 0) - Math.floor((b.it as any).linhaId ?? 0)) || (a.k - b.k)).map((o) => o.it);
+    }
+  }
   // CANAL 2 (HEAD 2 / contrafuso): o Z do programa é contado a partir do ZERO DO HEAD 2 (face do corte), entrando na peça.
   // Para desenhar em cima da peça: Z do gráfico = Z0 H2 − Z do programa (espelhado). Só desenha a usinagem (blocos M75…M76).
   {
