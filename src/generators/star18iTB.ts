@@ -2798,7 +2798,7 @@ function traduzTbsy(ls: string[], o: { flipZ: boolean; negX: boolean; zMap: (z: 
     if (/^T\d+$/.test(cod) || cod === "M25" || /^T0M0?1$/.test(cod) || /^M0?1$/.test(cod) || cod === "G0T0" || cod === "M101" || cod === "G97") return;
     // ACIONADA (manual TBSy): o "M5 / G98 M36 S" do motor vira M17 (liga eixo C) + M23 S2= (liga a acionada) + G94 (mm/min)
     if (cod === "M5") { pendM5 = true; return; }
-    { const ma = cod.match(/^G98M36S(\d+)$/); if (ma) { pendM5 = false; acion = true; out.push("M17(LIGA EIXO C)"); out.push("M23S2=" + ma[1] + "(LIGA FERRAMENTA ACIONADA)"); out.push("G94(AVANCO MM/MIN)"); return; } }
+    { const ma = cod.match(/^G98M36S(\d+)$/); if (ma) { pendM5 = false; acion = true; out.push("M17(LIGA EIXO C)"); out.push("G28C0(REFERENCIA EIXO C)"); out.push("M23S2=" + ma[1] + "(LIGA FERRAMENTA ACIONADA)"); out.push("G94(AVANCO MM/MIN)"); return; } }
     if (pendM5) { out.push("M5"); pendM5 = false; }
     let mm: RegExpMatchArray | null;
     if ((mm = cod.match(/^G50S(\d+)$/))) { lim = mm[1]; return; }

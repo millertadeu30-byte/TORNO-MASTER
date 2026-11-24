@@ -326,7 +326,8 @@ export function parseGCodeSim(
       }
 
       const isG53 = /(?<![A-Z])G\s*53(?![0-9])/i.test(clean);
-      const isMachineRef = isG53 || /(?<![A-Z])G\s*28(?![0-9])/i.test(clean);
+      const soEixoC = /(?<![A-Z])C\s*-?[\d.]/i.test(clean) && !/(?<![A-Z])[XUZW]\s*-?[\d.]/i.test(clean); // G28C0 = so referencia o eixo C (nao mexe X/Z)
+      const isMachineRef = isG53 || (/(?<![A-Z])G\s*28(?![0-9])/i.test(clean) && !soEixoC);
       const isG92Limit = /\bG\s*92\s*S/i.test(clean) || (/\bG\s*92(?![0-9])/i.test(clean) && !/[XZ]/i.test(clean));
 
       const gMatches = clean.match(/G\s*(\d+)/gi);
