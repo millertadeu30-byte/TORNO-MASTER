@@ -5929,22 +5929,28 @@ const etapas = [
 { n: 1, nome: "Máquina", ok: !!maqAtual, dica: "Escolha a máquina na lista abaixo (as que não aceitam o Ø da barra ficam bloqueadas)." },
 { n: 2, nome: "Peça", ok: !!geo, dica: "Anexe o STEP da peça no painel PEÇA e confira Ø da barra e material." },
 { n: 3, nome: "Zero", ok: !!geo && !deslGrande, dica: maqAtual.suico ? "ORIGENS linha 1: escolha qual face fica para FORA da bucha (é a que o Head 1 usina primeiro). Deixe desloc. Z = 0." : "ORIGENS linha 1: escolha a face do zero. Deixe desloc. Z = 0 (só para ajuste fino)." },
-{ n: 4, nome: "Fixações", ok: preparoConfirmado, dica: maqAtual.suico ? "FIXAÇÕES: ligue o Lado 1 (bucha/barra atrás da peça) e o Lado 2 se o contrafuso pega a peça. No simulador, o bloco cinza tem que ficar ATRÁS da peça." : "FIXAÇÕES: ligue o Lado 1 (castanha/pinça) com a pega e o Lado 2 (contrafuso). No simulador o bloco cinza mostra onde a peça está presa." },
+{ n: 4, nome: "Fixações", ok: preparoConfirmado, dica: (maqAtual.suico ? "FIXAÇÕES: ligue o Lado 1 (bucha/barra atrás da peça) e o Lado 2 se o contrafuso pega a peça. No simulador, o bloco cinza tem que ficar ATRÁS da peça." : "FIXAÇÕES: ligue o Lado 1 (castanha/pinça) com a pega e o Lado 2 (contrafuso). No simulador o bloco cinza mostra onde a peça está presa.") + " Depois clique no botão verde ✔ Zero e fixações conferidos (aqui em cima)." },
 { n: 5, nome: "Operações", ok: preparoConfirmado && ops.some((o) => o.ativo), dica: "ÁRVORE DE OPERAÇÕES: clique em 'sugerir de novo' depois de definir zero e fixações. O app prefere ciclo; operação marcada 'sem ciclo' é recomendação." },
 { n: 6, nome: "Pendências", ok: !!geo && ops.some((o) => o.ativo) && pendenciasMaquina.length === 0, dica: "Resolva os itens piscando (ferramentas, dados da máquina). Ao preencher eles somem." },
 { n: 7, nome: "Verificar", ok: false, dica: "Clique em 'Gerar e ver o programa' e rode o simulador: só leve para a máquina com 0 colisões." },
 ];
 const atual = etapas.find((e) => !e.ok) || etapas[etapas.length - 1];
+// GUIA: cada etapa é clicável e leva até o lugar de fazer
+const irEtapa = (n: number) => {
+  if (n === 6 && pendenciasMaquina.length) { irParaPendencia(pendenciasMaquina[0]); return; }
+  const key = ({ 1: "bloco_maq", 2: "bloco_peca", 3: "bloco_origens", 4: "bloco_fix", 5: "bloco_ops", 6: "bloco_ops", 7: "btn_gerar" } as Record<number, string>)[n];
+  if (key) setFocoAlvo({ key, seq: Date.now() });
+};
 return (
 <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/20 p-2">
 <div className="flex flex-wrap items-center gap-1 mb-1">
 {etapas.map((e) => (
-<span key={e.n} className={"text-[10px] font-bold px-1.5 py-0.5 rounded border " + (e.n === atual.n ? "border-emerald-400 text-white bg-emerald-900/50" : e.ok ? "border-emerald-800 text-emerald-400" : "border-zinc-800 text-zinc-500")}>
+<button type="button" key={e.n} onClick={() => irEtapa(e.n)} title="Clique para ir até onde fazer esta etapa" className={"text-[10px] font-bold px-1.5 py-0.5 rounded border hover:border-emerald-300 cursor-pointer " + (e.n === atual.n ? "border-emerald-400 text-white bg-emerald-900/50" : e.ok ? "border-emerald-800 text-emerald-400" : "border-zinc-800 text-zinc-500")}>
 {e.ok && e.n !== atual.n ? "✓ " : e.n + " "}{e.nome}
-</span>
+</button>
 ))}
 </div>
-<div className="text-[11px] text-zinc-300"><span className="font-bold text-emerald-300">Etapa {atual.n} – {atual.nome}:</span> {atual.dica}</div>
+<div className="text-[11px] text-zinc-300"><span className="font-bold text-emerald-300">Etapa {atual.n} – {atual.nome}:</span> {atual.dica} <button type="button" onClick={() => irEtapa(atual.n)} className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white">→ ir até lá</button></div>
 {!!geo && !preparoConfirmado && (
 <div ref={(el) => { fieldRefs.current["bloco_preparo"] = el; }} tabIndex={-1} className="flex flex-wrap items-center gap-1.5 mt-1.5">
 {(cfg.l1 || cfg.l2) && !deslGrande ? (<>
@@ -6057,7 +6063,7 @@ return (
         </div>
 
         {/* ORIGENS (ZERO PEÇA): G54, G55... cada operação escolhe a sua */}
-        <div className="rounded-lg border border-cyan-900/60 p-2">
+        <div ref={(el) => { fieldRefs.current["bloco_origens"] = el; }} tabIndex={-1} className="rounded-lg border border-cyan-900/60 p-2">
           <div className="text-[11px] font-bold text-cyan-300 mb-1">ORIGENS (zero peça) <span className="font-normal text-zinc-500">— cada operação escolhe a sua no botão G54/G55</span></div>
           <div className="space-y-1">
             {(cfg.origens || []).map((og: TMOrigem, k: number) => {
@@ -6141,7 +6147,7 @@ return (
           <div className="text-[10px] text-zinc-500 mt-1">A origem 1 é o zero do desenho no simulador (o mesmo do painel da peça). Suíço na origem 1 vira o sentido do Z no gráfico também.</div>
         </div>
         {/* FIXAÇÕES */}
-        <div className="rounded-lg border border-red-900/60 p-2">
+        <div ref={(el) => { fieldRefs.current["bloco_fix"] = el; }} tabIndex={-1} className="rounded-lg border border-red-900/60 p-2">
           <div className="flex items-center justify-between mb-1"><span className="text-[11px] font-bold text-red-300">FIXAÇÕES (zona proibida)</span><button type="button" onClick={() => setCfg((c) => ({ ...c, fixOculta: !c.fixOculta }))} title="Só esconde o desenho das fixações no gráfico; a conferência de colisão continua valendo" className={"text-[10px] px-2 py-0.5 rounded border " + (cfg.fixOculta ? "border-amber-600 text-amber-300" : "border-zinc-700 text-zinc-400 hover:text-white")}>{cfg.fixOculta ? "👁 mostrar no desenho" : "🙈 ocultar do desenho"}</button></div>
           <div className="flex flex-wrap items-center gap-2 text-xs mb-1">
             {sw(cfg.l1, () => setCfg({ ...cfg, l1: !cfg.l1 }), "Lado 1")}
@@ -6483,6 +6489,7 @@ return (
         )}
 
         {/* OPERAÇÕES */}
+        <div ref={(el) => { fieldRefs.current["bloco_ops"] = el; }} tabIndex={-1} />
         {!preparoConfirmado && <div className="rounded-lg border border-zinc-800 p-2 text-[11px] text-zinc-400">🔒 ÁRVORE DE OPERAÇÕES bloqueada — primeiro defina o ZERO e as FIXAÇÕES e clique em "Zero e fixações conferidos" no guia lá em cima. Assim as operações já nascem respeitando onde a peça está presa.</div>}
         <div className={preparoConfirmado ? "" : "hidden"}>
           <div className="flex items-center justify-between mb-1">
@@ -6945,6 +6952,7 @@ return (
         })()}
         <button
           type="button"
+          ref={(el) => { fieldRefs.current["btn_gerar"] = el; }}
           disabled={!geo || !!barraBloqueio || !preparoConfirmado}
           onClick={gerar}
           title="Refaz o programa e o gráfico com as mudanças das operações (para conferir trajetórias, mergulhos e colisões)"
