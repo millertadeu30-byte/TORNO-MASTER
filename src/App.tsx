@@ -1231,6 +1231,8 @@ export default function App() {
   // PROGRAMA EDITADO À MÃO: o "Ao vivo" do painel não sobrescreve; o "Gerar" pede confirmação antes de apagar as edições
   const [pgmEditadoMao, setPgmEditadoMao] = useState<boolean>(() => { try { return localStorage.getItem("cnc_pgmEditadoMao") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("cnc_pgmEditadoMao", pgmEditadoMao ? "1" : "0"); } catch { /* */ } }, [pgmEditadoMao]);
+  // editores vazios (peça nova / sem programa): não existe "edição à mão" para proteger
+  useEffect(() => { if (pgmEditadoMao && !editorTexts.some((x) => !!(x || "").trim())) setPgmEditadoMao(false); }, [editorTexts, pgmEditadoMao]);
   const [gerarPendente, setGerarPendente] = useState<{ r: any } | null>(null);
   // coloca o programa GERADO pelo painel nos editores (e zera a marca de "editado à mão")
   // SINCRONISMOS FEITOS À MÃO: mexer SÓ em linhas de sincronismo (M200-M999 / M2000-M2999, com ou sem P) não conta como "editado à mão";
@@ -1296,7 +1298,7 @@ export default function App() {
       // só SINCRONISMO mudou (comparando com o último programa gerado)? então não é "edição à mão" de movimento
       const g = geradoRef.current;
       const soSinc = !!g && [0, 1, 2].every((k) => !g[k] || semSinc(updated[k] || "") === semSinc(g[k]));
-      setPgmEditadoMao(!soSinc);
+      setPgmEditadoMao(!soSinc && updated.some((x) => !!(x || "").trim())); // sem programa nenhum = não é edição à mão
     }
     setEditorTexts(updated);
     if (index === activePaneIdx) {
@@ -2678,8 +2680,8 @@ export default function App() {
             )}
 
             {/* ▶ PAINEL "Programa da peça" (fica no lugar dos editores enquanto você monta) */}
-            {pgmEditadoMao && showIniciar && !gerarPendente && (
-              <div className="fixed bottom-3 left-3 z-[60] max-w-xs rounded-lg border border-amber-500/60 bg-zinc-900/95 shadow-xl px-2.5 py-1.5 text-[10px] text-amber-200 pointer-events-none">
+            {pgmEditadoMao && editorTexts.some((x) => !!(x || "").trim()) && showIniciar && !gerarPendente && (
+              <div className="fixed top-12 right-3 z-[60] max-w-xs rounded-lg border border-amber-500/60 bg-zinc-900/95 shadow-xl px-2.5 py-1.5 text-[10px] text-amber-200 pointer-events-none">
                 <span>✍️ Programa com <b>edições à mão</b> — o "Ao vivo" não apaga. "Gerar" pede confirmação.</span>
               </div>
             )}
@@ -5944,7 +5946,7 @@ return (
 </div>
 <div className="text-[11px] text-zinc-300"><span className="font-bold text-emerald-300">Etapa {atual.n} – {atual.nome}:</span> {atual.dica}</div>
 {!!geo && !preparoConfirmado && (
-<div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+<div ref={(el) => { fieldRefs.current["bloco_preparo"] = el; }} tabIndex={-1} className="flex flex-wrap items-center gap-1.5 mt-1.5">
 {(cfg.l1 || cfg.l2) && !deslGrande ? (<>
 <button onClick={() => { setPreparoOk(sigPreparo); setOps(tmOpsPadrao(geo, cfg.material)); setAberta(null); }} className="text-[10px] font-bold px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white">✔ Zero e fixações conferidos → sugerir operações</button>
 {ops.length > 0 && <button onClick={() => setPreparoOk(sigPreparo)} className="text-[10px] px-2 py-1 rounded border border-zinc-600 text-zinc-300 hover:text-white">confirmar mantendo as operações atuais</button>}
@@ -6017,7 +6019,7 @@ return (
         </div>
 
         {/* PEÇA E BRUTO */}
-        <div className="rounded-lg border border-zinc-800 p-2">
+        <div ref={(el) => { fieldRefs.current["bloco_peca"] = el; }} tabIndex={-1} className="rounded-lg border border-zinc-800 p-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[11px] font-bold text-sky-300">PEÇA</span>
             <div className="flex items-center gap-1.5">
@@ -6924,7 +6926,23 @@ return (
           <input type="checkbox" checked={aoVivo} onChange={(e) => setAoVivo(e.target.checked)} />
           Ao vivo
         </label>
-        <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>
+        {(() => {
+          // GUIA: se o "Gerar" está travado, mostra O MOTIVO e leva até onde resolver (clique)
+          const opB = barraBloqueio ? ops[barraBloqueio.num - 1] : undefined;
+          const motivo: { msg: string; key: string; opId?: string } | null = !geo
+            ? { msg: "Falta a peça: carregue o STEP ou digite o bruto", key: "bloco_peca" }
+            : !preparoConfirmado
+              ? { msg: "Confirme o zero e as fixações", key: "bloco_preparo" }
+              : barraBloqueio && opB
+                ? { msg: "Op " + barraBloqueio.num + ": barra Ø" + tmFmt(barraBloqueio.bm) + " maior que o máx. Ø" + tmFmt(barraBloqueio.dMax), key: "op_" + opB.id + "_bm", opId: opB.id }
+                : null;
+          if (!motivo) return <span className="text-[10px] text-amber-400">⚠ Conferir antes de rodar</span>;
+          return (
+            <button type="button" onClick={() => { if (motivo.opId) setAberta(motivo.opId); setFocoAlvo({ key: motivo.key, seq: Date.now() }); }} className="text-[10px] font-bold text-amber-300 underline hover:text-white text-left" title="Clique para ir até onde resolver">
+              ⚠ {motivo.msg} → ir
+            </button>
+          );
+        })()}
         <button
           type="button"
           disabled={!geo || !!barraBloqueio || !preparoConfirmado}
