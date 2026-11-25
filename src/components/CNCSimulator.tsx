@@ -1587,11 +1587,15 @@ export function simularGCodeEColisoes(
         raioLinha[i] = rC;
       });
     }
+    const linhasTxtCol = gcodeText.split("\n").map((l) => l.toUpperCase().replace(/\([^)]*\)/g, ""));
     plotList.forEach((it, idx) => {
       if (linhaRosca.has(Math.floor((it as any).linhaId ?? -1))) return; // rosca: não confere contra a peça
       const rapido = it.color === "#ff2a2a";
       const diagonal = rapido && Math.abs(it.x2 - it.x1) > 1e-4 && Math.abs(it.z2 - it.z1) > 1e-4;
-      const tol = (rapido ? 0.05 : 0.6) + (raioLinha[Math.floor((it as any).linhaId ?? -1)] || 0);
+      // recuo 45° (R) DENTRO do ciclo G71/G72/G73: quem faz é o comando, saindo do fim do passe (que já foi conferido em G1);
+      // o ponto do passe é o ponto teórico da ferramenta (raio da ponta), então confere com a mesma folga do G1
+      const recuoCiclo = diagonal && /(?<![0-9])G7[123](?![0-9])/.test(linhasTxtCol[Math.floor((it as any).linhaId ?? -1)] || "");
+      const tol = (rapido && !recuoCiclo ? 0.05 : 0.6) + (raioLinha[Math.floor((it as any).linhaId ?? -1)] || 0);
       const pts: { z: number; r: number }[] = [];
       if (it.type === "arc" && it.radius && it.radius > 0) {
         const px1 = it.z1 * zDir;

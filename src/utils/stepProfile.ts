@@ -380,8 +380,32 @@ export interface PartZeroConfig {
  * Converte o perfil do CAD para coordenadas do torno: X em DIÂMETRO e Z com o zero escolhido
  * (peça para o lado Z-, como no programa).
  */
+// FECHA FOLGAS DO STEP: às vezes uma face pequena do STEP não é lida (ex.: chanfro do furo na face) e o perfil fica
+// com uma "abertura". Liga as pontas soltas mais próximas (até 0,6 mm) com um segmento reto - assim o simulador não
+// vê material onde não tem (falsa colisão) e as operações começam no lugar certo.
+function fecharFolgasPerfil(curves: { a: number; r: number }[][]): { a: number; r: number }[][] {
+  const pts: { a: number; r: number }[] = [];
+  curves.forEach((c) => { if (c.length) { pts.push(c[0]); pts.push(c[c.length - 1]); } });
+  const d = (p: { a: number; r: number }, q: { a: number; r: number }) => Math.hypot(p.a - q.a, p.r - q.r);
+  const soltos = pts.filter((p, i) => !pts.some((q, j) => j !== i && d(p, q) < 1e-3));
+  const usados = new Set<number>();
+  const pares: { i: number; j: number; dd: number }[] = [];
+  for (let i = 0; i < soltos.length; i++) for (let j = i + 1; j < soltos.length; j++) {
+    const dd = d(soltos[i], soltos[j]);
+    if (dd > 1e-3 && dd <= 0.6) pares.push({ i, j, dd });
+  }
+  pares.sort((x, y) => x.dd - y.dd);
+  const novas: { a: number; r: number }[][] = [];
+  pares.forEach(({ i, j }) => {
+    if (usados.has(i) || usados.has(j)) return;
+    usados.add(i); usados.add(j);
+    novas.push([{ a: soltos[i].a, r: soltos[i].r }, { a: soltos[j].a, r: soltos[j].r }]);
+  });
+  return novas.length ? [...curves, ...novas] : curves;
+}
+
 export function profileToLathe(p: PartProfile, zero: PartZeroConfig): { x: number; z: number }[][] {
-  return p.curves.map((c) =>
+  return fecharFolgasPerfil(p.curves).map((c) =>
     c.map((pt) => {
       const z = zero.face === "direita" ? pt.a - p.aMax : p.aMin - pt.a;
       return { x: pt.r * 2, z: z + zero.offsetZ };
