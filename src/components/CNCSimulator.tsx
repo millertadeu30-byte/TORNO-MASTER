@@ -1521,13 +1521,19 @@ export function simularGCodeEColisoes(
         }
       });
     } else {
-      const a = Math.min(zone.za, zone.zb) - fixFolga;
-      const b = Math.max(zone.za, zone.zb) + fixFolga;
+      const zA = Math.min(zone.za, zone.zb), zB = Math.max(zone.za, zone.zb);
+      const a = zA - fixFolga;
+      const b = zB + fixFolga;
       plotList.forEach((it, idx) => {
         if (ladoDoItem(it) !== zone.lado) return;
         const lo = Math.min(it.z1, it.z2);
         const hi = Math.max(it.z1, it.z2);
-        if (hi >= a && lo <= b) {
+        // FOLGA só vale quando a ferramenta está na altura da pinça/castanha (Ø da pega - 0,5 ou maior).
+        // Ferramenta DENTRO do Ø da peça (furo no centro, faceamento perto do eixo) só bate se entrar no comprimento preso.
+        const xMaxD = 2 * Math.max(Math.abs(it.x1), Math.abs(it.x2));
+        const perto = !(zone.d > 0) || xMaxD > zone.d - 0.5;
+        const ca = perto ? a : zA, cb = perto ? b : zB;
+        if (hi > ca + 1e-6 && lo < cb - 1e-6) {
           fixHits.push({
             idx,
             linha: it.linhaId,
