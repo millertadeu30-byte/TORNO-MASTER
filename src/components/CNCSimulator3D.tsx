@@ -1,4 +1,5 @@
 import React, { Component, useRef, useEffect, useState, useMemo, useCallback } from "react";
+import { desfazAcionadaY } from "../generators/star18iTB";
 import * as THREE from "three";
 import {
   Play,
@@ -107,6 +108,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     try { localStorage.setItem("cnc3d_showToolpath2", showToolpath3D ? "1" : "0"); } catch {}
     if (pathLinesGroupRef.current) pathLinesGroupRef.current.visible = showToolpath3D;
   });
+  // Desenho da FERRAMENTA (fresa/broca) no 3D: liga/desliga no botãozinho do canto de baixo (fica gravado no aparelho)
+  const [showFer3D, setShowFer3D] = useState<boolean>(() => {
+    try { return localStorage.getItem("cnc3d_showFer") !== "0"; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem("cnc3d_showFer", showFer3D ? "1" : "0"); } catch {} }, [showFer3D]);
   // Se uma cor de fundo foi escolhida em "Aparência", ajusta o tema (linhas/grade) para manter contraste
   useEffect(() => {
     if (!bgColor) return;
@@ -141,6 +147,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const previousMousePositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const cameraTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, -25));
   const cameraDistanceRef = useRef<number>(180);
+  // PEÇA GIRA COM O EIXO C (como na máquina): a ferramenta fica parada na tela e a peça gira
+  const [giraComC, setGiraComC] = useState<boolean>(() => { try { return localStorage.getItem("cnc3d_giraComC") !== "0"; } catch { return true; } });
+  const giraComCRef = useRef<boolean>(true);
+  giraComCRef.current = giraComC;
+  const cAtualRef = useRef<number>(0);
   const cameraAnglesRef = useRef<{ theta: number; phi: number }>({
     theta: Math.PI / 4,
     phi: Math.PI / 3,
@@ -152,7 +163,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const trajectoryPoints = useMemo<Point3D[]>(() => {
     if (!effectiveGcode) return [];
 
-    const lines = effectiveGcode.split("\n");
+    const lines = desfazAcionadaY(effectiveGcode).split("\n"); // acionada radial "profundidade em Y" (Star) volta ao padrão para desenhar
     const points: Point3D[] = [];
 
     let curX = 40; // Default X (diameter)
@@ -174,7 +185,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       // FRESA (acionada): o comentário (FRESA D.. L.. TOPO/LATERAL) diz o tamanho e o lado de trabalho para desenhar a ferramenta
       const mFr = lineText.toUpperCase().match(/\(FRESA D([\d.]+) L([\d.]+) (TOPO|LATERAL)\)/);
       if (mFr) curFer = { d: parseFloat(mFr[1]), l: parseFloat(mFr[2]), lat: mFr[3] === "LATERAL" };
-      else if (/(^|[^A-Z])T\d/.test(cleanLine)) curFer = null;
+      else if (/^T\d|(^|[^A-Z])T0(?![0-9])/.test(cleanLine)) curFer = null; // só na TROCA de ferramenta (T900(...) / G0T0) - o T9 do G0 de chegada é só o corretor
       if (!cleanLine) return;
 
       // Check for G04 / G4 dwell command (e.g., G4 X.3, G04 X0.5, G4 U0.5, G4 P1000)
@@ -254,6 +265,10 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         rawText: cleanLine,
       } as any);
     });
+
+    // INÍCIO: não desenha a linha saindo de um ponto inventado (X40 Z5) - o começo é a primeira posição do programa
+    const k0 = points.findIndex((p, i) => i > 0 && Math.abs(p.x - 40) > 1e-6); // 1º ponto com X de verdade (antes disso são só referências do cabeçote)
+    if (k0 > 0) for (let i = 0; i < k0; i++) points[i] = { ...points[i], x: points[k0].x, y: points[k0].y, z: points[k0].z, c: points[k0].c };
 
     return points;
   }, [effectiveGcode]);
@@ -571,7 +586,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
   const [solid, setSolid] = useState<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry } | null>(null);
   const [solidMsg, setSolidMsg] = useState<string>("");
   const solidKey = partSolid
-    ? [partSolid.key, partSolid.name, partSolid.face, partSolid.offsetZ, partSolid.aMin, partSolid.aMax, partSolid.axis ? partSolid.axis.o.join(",") + "/" + partSolid.axis.z.join(",") : "sem-eixo"].join("|")
+    ? [partSolid.key, partSolid.name, partSolid.face, partSolid.offsetZ, (partSolid as any).flipZ ?? "", partSolid.aMin, partSolid.aMax, partSolid.axis ? partSolid.axis.o.join(",") + "/" + partSolid.axis.z.join(",") : "sem-eixo"].join("|")
     : "";
   useEffect(() => {
     if (!partSolid || partMode3D !== "real") {
@@ -800,9 +815,8 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       const camera = perspectiveCameraRef.current;
       cameraRef.current = camera;
       camera.aspect = aspect;
-      camera.up.set(0, 1, 0);
-
       const { theta, phi } = cameraAnglesRef.current;
+      camera.up.set(0, Math.sin(phi) >= 0 ? 1 : -1, 0); // giro livre 360°: passando por cima/por baixo a tela não "vira"
       camera.position.x = target.x + dist * Math.sin(phi) * Math.sin(theta);
       camera.position.y = target.y + dist * Math.cos(phi);
       camera.position.z = target.z + dist * Math.sin(phi) * Math.cos(theta);
@@ -846,7 +860,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
           const sg = dy > 0 ? -1 : 1;
           camera.up.set(sg * Math.sin(theta), 0, sg * Math.cos(theta));
         }
-        else camera.up.set(0, 1, 0);
+        else camera.up.set(0, Math.sin(phi) >= 0 ? 1 : -1, 0);
         camera.position.set(target.x + dx * 500, target.y + dy * 500, target.z + dz * 500);
         camera.lookAt(target.x, target.y, target.z);
       }
@@ -854,6 +868,18 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       camera.updateProjectionMatrix();
     }
 
+    // PEÇA GIRA COM O C: gira a vista em volta do eixo da peça junto com o C - na tela a ferramenta fica parada e a peça gira
+    {
+      const camG = cameraRef.current;
+      const cG = giraComCRef.current ? (cAtualRef.current * Math.PI) / 180 : 0;
+      if (camG && Math.abs(cG) > 1e-9) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), cG);
+        camG.position.applyQuaternion(q);
+        camG.up.applyQuaternion(q);
+        camG.lookAt(cameraTargetRef.current.clone().applyQuaternion(q));
+        (camG as any).updateProjectionMatrix?.();
+      }
+    }
     updateMirinhaScreenPos();
   }, [cameraView]);
 
@@ -911,10 +937,12 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       // Rotação proporcional e ultra suave ao arrastar com o botão esquerdo
       const rotateSpeed = 0.008; // giro mais solto, parecido com o SolidWorks
       cameraAnglesRef.current.theta -= deltaX * rotateSpeed;
-      cameraAnglesRef.current.phi = Math.max(
-        0.05,
-        Math.min(Math.PI - 0.05, cameraAnglesRef.current.phi - deltaY * rotateSpeed)
-      );
+      // GIRO LIVRE 360° (sem trava em cima/embaixo): passa por cima da peça e continua girando
+      let ph = cameraAnglesRef.current.phi - deltaY * rotateSpeed;
+      while (ph > Math.PI) ph -= 2 * Math.PI;
+      while (ph <= -Math.PI) ph += 2 * Math.PI;
+      if (Math.abs(Math.sin(ph)) < 1e-3) ph += ph >= 0 ? 2e-3 : -2e-3; // exatamente no polo a câmera não sabe para onde é "cima"
+      cameraAnglesRef.current.phi = ph;
     }
 
     updateCameraPosition();
@@ -1205,6 +1233,11 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
     toolGroupRef.current.position.copy(p3D({ x, y, z, c }));
     toolGroupRef.current.rotation.z = (((c || 0) + (partMode3D === "real" ? partRotDeg : 0)) * Math.PI) / 180; // a ferramenta gira junto com o C (fica de frente para a face)
 
+    // peça gira com o C: guarda o C atual e refaz a vista
+    cAtualRef.current = (c || 0) + (partMode3D === "real" ? partRotDeg : 0);
+    try { localStorage.setItem("cnc3d_giraComC", giraComC ? "1" : "0"); } catch { /* */ }
+    updateCameraPosition();
+
     // C-axis Rotation: Rotate C-Axis Reference Ring around Z axis (radians)
     if (cAxisGroupRef.current) {
       const cRad = (c * Math.PI) / 180;
@@ -1216,7 +1249,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
       const oldF = sceneF.getObjectByName("fresa3D") as THREE.Mesh | undefined;
       if (oldF) { sceneF.remove(oldF); oldF.geometry.dispose(); (oldF.material as THREE.Material).dispose(); }
       const fer = (currentPoint as any).fer as { d: number; l: number; lat: boolean } | null | undefined;
-      if (fer && fer.d > 0 && fer.l > 0) {
+      if (showFer3D && fer && fer.d > 0 && fer.l > 0) {
         const meshF = new THREE.Mesh(new THREE.CylinderGeometry(fer.d / 2, fer.d / 2, fer.l, 28), new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.3, transparent: true, opacity: 0.85 }));
         meshF.name = "fresa3D";
         const tip = p3D({ x, y, z, c });
@@ -1233,7 +1266,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         sceneF.add(meshF);
       }
     }
-  }, [currentPoint, partRotDeg, partMode3D]);
+  }, [currentPoint, partRotDeg, partMode3D, giraComC, showFer3D]);
 
   // Automatic Playback Timer
   useEffect(() => {
@@ -1364,6 +1397,14 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* PEÇA GIRA COM O C: liga/desliga */}
+          <button
+            onClick={() => setGiraComC((v) => !v)}
+            className={"p-1 px-2 rounded-lg border text-[10px] font-sans font-bold transition " + (giraComC ? "bg-cyan-500 text-black border-cyan-400" : "bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white")}
+            title="Peça gira com o eixo C (a ferramenta fica parada, como na máquina)"
+          >
+            ⟳ C
+          </button>
           {/* Seletor de vista igual ao SolidWorks (também abre com a tecla Espaço) */}
           <button
             onClick={() => setShowViewSel((v) => !v)}
@@ -1912,7 +1953,7 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
 
         {/* Liga / desliga os traços de movimento de usinagem (igual ao botãozinho do 2D) */}
         <div
-          className="absolute left-3 bottom-3 z-30 p-1 rounded-lg bg-black/70 border border-zinc-700 backdrop-blur-sm"
+          className="absolute left-3 bottom-3 z-30 p-1 flex gap-1 rounded-lg bg-black/70 border border-zinc-700 backdrop-blur-sm"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerMove={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
@@ -1931,6 +1972,23 @@ const CNCSimulator3DContent: React.FC<CNCSimulator3DProps> = ({
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 18h5l3-6h4l3-6h3" strokeDasharray={showToolpath3D ? undefined : "3 3"} />
               {!showToolpath3D && <path d="M4 4l16 16" />}
+            </svg>
+          </button>
+          <button
+            onClick={() => setShowFer3D((v) => !v)}
+            title={showFer3D ? "Desenho da ferramenta LIGADO (toque para esconder)" : "Desenho da ferramenta DESLIGADO (toque para mostrar)"}
+            className={
+              "w-9 h-9 rounded-md flex items-center justify-center border transition " +
+              (showFer3D
+                ? "bg-emerald-900/60 text-emerald-300 border-emerald-500/70 shadow-[0_0_8px_rgba(16,185,129,0.35)]"
+                : "bg-[#1e1e24]/90 text-zinc-500 border-zinc-700 hover:bg-zinc-800 hover:text-zinc-300")
+            }
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="2" width="6" height="9" rx="1" />
+              <path d="M9 11v9l3 2 3-2v-9" />
+              <path d="M9 14l6-2M9 18l6-2" />
+              {!showFer3D && <path d="M4 4l16 16" />}
             </svg>
           </button>
         </div>
@@ -2205,6 +2263,7 @@ export interface PartSolidInfo {
   aMax: number;
   face: "direita" | "esquerda"; // qual face fica no Z0
   offsetZ: number; // deslocamento extra em Z
+  flipZ?: number; // suíço: Z do 3D = flipZ - Z da peça (igual ao perfil e ao programa)
 }
 
 /** Monta a peça real já no sistema do torno do 3D: Z = eixo (mesmo zero da peça), X/Y = em volta do eixo */
@@ -2222,6 +2281,7 @@ export interface Face3DInfo {
   ymin: number; ymax: number; // largura da face no sentido Y (perpendicular à normal)
   zmin: number; zmax: number; // comprimento da face em Z
   rmin?: number; rmax?: number; // face frontal: raio interno / externo
+  borda?: number[]; // contorno da face (x,y,z em sequência, já em ordem) - para fresar o perfil clicado
 }
 function analisarFace3D(g: THREE.BufferGeometry, faceId: number, triClicado: number): Face3DInfo | null {
   const pos = g.getAttribute("position") as THREE.BufferAttribute;
@@ -2245,25 +2305,66 @@ function analisarFace3D(g: THREE.BufferGeometry, faceId: number, triClicado: num
     pts.push(A.clone(), B.clone(), C.clone());
   });
   if (!pts.length || nS.length() < 1e-12) return null;
+  // BORDA DA FACE (contorno em ordem): arestas usadas por um triângulo só = borda; liga pelas pontas e fica com o maior laço
+  const borda: number[] = (() => {
+    const key = (i: number) => Math.round(pos.getX(i) * 1000) + "," + Math.round(pos.getY(i) * 1000) + "," + Math.round(pos.getZ(i) * 1000);
+    const ed = new Map<string, { a: string; b: string; n: number }>();
+    const P = new Map<string, number[]>();
+    tris.forEach((t) => {
+      const v = [ix.getX(t * 3), ix.getX(t * 3 + 1), ix.getX(t * 3 + 2)];
+      const k = v.map(key);
+      v.forEach((vi, j) => { if (!P.has(k[j])) P.set(k[j], [pos.getX(vi), pos.getY(vi), pos.getZ(vi)]); });
+      for (let j = 0; j < 3; j++) {
+        const a = k[j], b = k[(j + 1) % 3];
+        if (a === b) continue;
+        const e = a < b ? a + "|" + b : b + "|" + a;
+        const o = ed.get(e);
+        if (o) o.n++; else ed.set(e, { a, b, n: 1 });
+      }
+    });
+    const adj = new Map<string, string[]>();
+    const liga = (a: string, b: string) => { if (!adj.has(a)) adj.set(a, []); adj.get(a)!.push(b); };
+    ed.forEach((e) => { if (e.n === 1) { liga(e.a, e.b); liga(e.b, e.a); } });
+    const vis = new Set<string>();
+    let melhor: string[] = [];
+    adj.forEach((_v, s) => {
+      if (vis.has(s)) return;
+      const laco = [s];
+      vis.add(s);
+      let cur = s;
+      for (let g = 0; g < 50000; g++) {
+        const nx = (adj.get(cur) || []).find((q) => !vis.has(q));
+        if (!nx) break;
+        laco.push(nx); vis.add(nx); cur = nx;
+      }
+      if (laco.length > melhor.length) melhor = laco;
+    });
+    const out: number[] = [];
+    const passo = Math.max(1, Math.ceil(melhor.length / 400));
+    for (let i = 0; i < melhor.length; i += passo) { const p = P.get(melhor[i])!; out.push(Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000, Math.round(p[2] * 1000) / 1000); }
+    return out;
+  })();
   const n = nS.clone().normalize();
   const plana = nrm.every((q) => Math.abs(q.dot(n)) > 0.995);
   const zs = pts.map((p) => p.z);
   const zmin = Math.min(...zs), zmax = Math.max(...zs);
   if (plana && Math.abs(n.z) > 0.95) {
     const rs = pts.map((p) => Math.hypot(p.x, p.y));
-    return { id: faceId, tipo: "frontal", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax, rmin: Math.min(...rs), rmax: Math.max(...rs) };
+    return { id: faceId, tipo: "frontal", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax, rmin: Math.min(...rs), rmax: Math.max(...rs), borda };
   }
   if (plana && Math.abs(n.z) < 0.2) {
-    const th = Math.atan2(n.y, n.x);
-    const ct = Math.cos(th), st = Math.sin(th);
-    const ds = pts.map((p) => p.x * ct + p.y * st);
-    const d = ds.reduce((s, v) => s + v, 0) / ds.length;
+    let th = Math.atan2(n.y, n.x);
+    let ct = Math.cos(th), st = Math.sin(th);
+    let ds = pts.map((p) => p.x * ct + p.y * st);
+    let d = ds.reduce((s, v) => s + v, 0) / ds.length;
+    // normal virada para DENTRO (STEP espelhado): vira para fora - a face fica no ângulo C dela e com distância positiva
+    if (d < 0) { th += Math.PI; ct = -ct; st = -st; ds = ds.map((v) => -v); d = -d; }
     const ys = pts.map((p) => -p.x * st + p.y * ct);
     let cDeg = (th * 180) / Math.PI;
     cDeg = ((cDeg % 360) + 360) % 360;
-    return { id: faceId, tipo: "plana", c: Math.round(cDeg * 1000) / 1000, d: Math.round(d * 1000) / 1000, ymin: Math.min(...ys), ymax: Math.max(...ys), zmin, zmax };
+    return { id: faceId, tipo: "plana", c: Math.round(cDeg * 1000) / 1000, d: Math.round(d * 1000) / 1000, ymin: Math.min(...ys), ymax: Math.max(...ys), zmin, zmax, borda };
   }
-  return { id: faceId, tipo: "outra", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax };
+  return { id: faceId, tipo: "outra", c: 0, d: 0, ymin: 0, ymax: 0, zmin, zmax, borda };
 }
 
 async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ mesh: THREE.BufferGeometry; edges: THREE.BufferGeometry }> {
@@ -2299,9 +2400,10 @@ async function buildSolidFromStep(text: string, pl: PartSolidInfo): Promise<{ me
     for (let i = 0; i < p.length; i += 3) {
       const dx = p[i] - o[0], dy = p[i + 1] - o[1], dz = p[i + 2] - o[2];
       const a = dx * Z[0] + dy * Z[1] + dz * Z[2];
-      const zz = (dir === 1 ? a - pl.aMax : pl.aMin - a) + pl.offsetZ; // mesmo zero do perfil (face escolhida)
+      const zz0 = (dir === 1 ? a - pl.aMax : pl.aMin - a) + pl.offsetZ; // mesmo zero do perfil (face escolhida)
+      const zz = pl.flipZ !== undefined ? pl.flipZ - zz0 : zz0; // suíço: vira igual ao perfil laranja / programa
       const xx = dx * U[0] + dy * U[1] + dz * U[2];
-      const yy = (dx * W[0] + dy * W[1] + dz * W[2]) * dir; // peça virada: não fica "ao avesso"
+      const yy = (dx * W[0] + dy * W[1] + dz * W[2]) * dir * (pl.flipZ !== undefined ? -1 : 1); // peça virada: não fica "ao avesso" (no suíço o giro em Z também vira o Y)
       pos.push(xx, yy, zz);
     }
     for (let i = 0; i < ix.length; i++) idx.push(base + ix[i]);

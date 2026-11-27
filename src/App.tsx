@@ -114,7 +114,7 @@ import { ToleranceCalculator } from "./components/ToleranceCalculator";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { CNC_TEMPLATES } from "./data/templates";
 import { MAQUINAS_DNA } from "./data/maquinasDNA";
-import { tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY, anexarDesenhosIv } from "./generators/star18iTB";
+import { infoPerfilClicado, tmGerarStar18iTB, StarTMOp, StarTMGeo, StarGerarCfg, blocosOpsGerados, criarEmissorOpsStar, tmGerarErgomatTBSY, anexarDesenhosIv } from "./generators/star18iTB";
 import { calculateCycleTimeDetailed, loadMachineParams } from "./utils/cycleTimeCalculator";
 import { tmGerarStarG266 } from "./generators/starG266";
 import { tmGerarSiemensTND180 } from "./generators/siemensTND180";
@@ -329,8 +329,15 @@ export default function App() {
   // Peça REAL no 3D (com rasgos): eixo achado no STEP + zero da peça, para montar o sólido no simulador 3D
   const partSolid = useMemo(() => {
     if (!partProfile || !showPart) return null;
-    return { key: "peca", name: partProfile.name, axis: partProfile.axis, aMin: partProfile.aMin, aMax: partProfile.aMax, face: partZero.face, offsetZ: partZero.offsetZ };
-  }, [partProfile, showPart, partZero]);
+    // SUÍÇO (Z+ entrando na peça): o sólido do STEP vira em Z igual ao perfil laranja e ao programa (senão fica um na frente do outro)
+    let flipZ: number | undefined;
+    if (zSinal === -1) {
+      let maxZ = -Infinity;
+      profileToLathe(partProfile, partZero).forEach((c) => c.forEach((p) => { if (p.z > maxZ) maxZ = p.z; }));
+      if (isFinite(maxZ)) flipZ = maxZ + partZero.offsetZ;
+    }
+    return { key: "peca", name: partProfile.name, axis: partProfile.axis, aMin: partProfile.aMin, aMax: partProfile.aMax, face: partZero.face, offsetZ: partZero.offsetZ, flipZ };
+  }, [partProfile, showPart, partZero, zSinal]);
   // Lê o arquivo STEP escolhido e monta o perfil (vai para a PEÇA ou para o BRUTO, conforme a caixinha marcada)
   const handleStepFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
@@ -3285,7 +3292,7 @@ export default function App() {
 type TMPt = { x: number; z: number };
 type TMIntervalo = { zA: number; zB: number; xa: number; xb: number };
 type TMFaixa = [number, number];
-type TMOpTipo = "face" | "desbExt" | "acabExt" | "canal" | "canalInt" | "roscaExt" | "centro" | "furo" | "desbInt" | "acabInt" | "roscaInt" | "macho" | "corte" | "alargador" | "recartilhado" | "canalFrontal" | "furoRadial" | "furoAxial" | "fresaFaces";
+type TMOpTipo = "face" | "desbExt" | "acabExt" | "canal" | "canalInt" | "roscaExt" | "centro" | "furo" | "desbInt" | "acabInt" | "roscaInt" | "macho" | "corte" | "alargador" | "recartilhado" | "canalFrontal" | "furoRadial" | "furoAxial" | "fresaFaces" | "fresaPerfil";
 interface TMOp {
   id: string;
   tipo: TMOpTipo;
@@ -3297,7 +3304,7 @@ interface TMOp {
   desenhos?: { z: number; x: number }[][];
   selSeq?: number[]; // "Linha por linha": Z do meio de cada coisa clicada (linha do perfil OU desenho), na ordem do clique
   pontos?: { z: number; x: number }[];
-  faces3d?: { id: number; tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number; rmin?: number; rmax?: number }[]; // ACIONADA: faces clicadas no 3D // PONTO A PONTO: caminho rígido da ferramenta, na ordem dos cliques (Z da peça, X em Ø)
+  faces3d?: { id: number; tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number; rmin?: number; rmax?: number; borda?: number[] }[]; // ACIONADA: faces clicadas no 3D // PONTO A PONTO: caminho rígido da ferramenta, na ordem dos cliques (Z da peça, X em Ø)
   sentidoLinha?: 1 | -1; // "Linha por linha": 1 = de frente para trás | -1 = de trás para a frente (ordem/sentido dos cliques) // linhas DESENHADAS no simulador escolhidas no "Linha por linha" (Z da peça, X em Ø)
   p: Record<string, number>;
   nomeFerr?: string; // nome da ferramenta
@@ -3424,6 +3431,25 @@ const TM_TIPOS: Record<TMOpTipo, { nome: string; grupo: string; regiao: boolean;
     { k: "rpm", rot: "Rotação da ferramenta rpm", def: 2000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 60, step: 5 }, { k: "d", rot: "Ø broca mm", def: 3, step: 0.1 }, { k: "xf", rot: "Ø final do furo (0 = até o centro)", def: 0, step: 0.1 }, { k: "nf", rot: "Nº de furos na volta", def: 1, step: 1 }, { k: "a0", rot: "Ângulo C do 1º furo °", def: 0, step: 1 }, { k: "q", rot: "Pica-pau mm (0 = direto)", def: 1, step: 0.1 } ] },
   furoAxial: { nome: "Furo axial fora de centro (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T1818", params: [
     { k: "rpm", rot: "Rotação da ferramenta rpm", def: 2000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 60, step: 5 }, { k: "d", rot: "Ø broca mm", def: 3, step: 0.1 }, { k: "pcd", rot: "Ø do círculo dos furos mm", def: 10, step: 0.1 }, { k: "nf", rot: "Nº de furos", def: 4, step: 1 }, { k: "a0", rot: "Ângulo C do 1º furo °", def: 0, step: 1 }, { k: "q", rot: "Pica-pau mm (0 = direto)", def: 1, step: 0.1 }, { k: "apz", rot: "Folga Z no início do ciclo (mm)", def: 2, step: 0.5 } ] },
+  fresaPerfil: { nome: "Fresar perfil clicado (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T0909", params: [
+    { k: "pos", rot: "Posição da ferramenta", def: 0, step: 1, opcoes: ["Radial — aponta para o centro", "Axial — aponta na face (em breve)"] },
+    { k: "est", rot: "Estratégia", def: 0, step: 1, opcoes: ["Contorno por dentro (bolsão / rasgo)", "Contorno por fora (ressalto)", "Bolsão / piso (limpa todo o fundo)"] },
+    { k: "tf", rot: "Tipo da ferramenta", def: 0, step: 1, opcoes: ["Fresa de topo", "Fresa esférica", "Broca"] },
+    { k: "df", rot: "Ø da fresa mm", def: 4, step: 0.1 },
+    { k: "rf", rot: "Raio da ponta da fresa mm", def: 0, step: 0.1 },
+    { k: "lf", rot: "Comprimento útil da fresa mm", def: 12, step: 0.5 },
+    { k: "rpm", rot: "Rotação rpm", def: 3000, step: 50 },
+    { k: "f", rot: "Avanço mm/min", def: 120, step: 5 },
+    { k: "fz", rot: "Avanço de entrada (descer) mm/min", def: 60, step: 5 },
+    { k: "ap", rot: "Prof. por passe mm (no raio)", def: 0.5, step: 0.1 },
+    { k: "ae", rot: "Passo lateral mm (bolsão)", def: 1.5, step: 0.1, quando: ["est", [2]] },
+    { k: "sw", rot: "Sobremetal na parede mm", def: 0, step: 0.05 },
+    { k: "sf", rot: "Sobremetal no fundo mm", def: 0, step: 0.05 },
+    { k: "cc", rot: "Sentido do corte", def: 0, step: 1, opcoes: ["Concordante", "Discordante", "Ida e volta"] },
+    { k: "cAj", rot: "Ajuste no ângulo C ° (0 = o da face clicada)", def: 0, step: 1 },
+    { k: "xi", rot: "X Ø inicial (topo) — vem do 3D, pode editar", def: 0, step: 0.05 },
+    { k: "xf", rot: "X Ø final (fundo) — vem do 3D, pode editar", def: 0, step: 0.05 },
+  ] },
   fresaFaces: { nome: "Fresar faces / sextavado / quadrado (acionada)", grupo: "ACIONADA", regiao: true, ciclo: "", ferr: "T0808", params: [
     { k: "rpm", rot: "Rotação da fresa rpm", def: 3000, step: 50 }, { k: "f", rot: "Avanço mm/min", def: 120, step: 5 }, { k: "df", rot: "Ø da fresa mm", def: 6, step: 0.5 }, { k: "nfc", rot: "Faces", def: 4, step: 1, opcoes: ["1 face", "2 faces", "3 faces", "4 faces (quadrado)", "6 faces (sextavado)", "8 faces"] }, { k: "s", rot: "Medida entre faces (chave) mm — 1 face: 2x a distância do centro", def: 10, step: 0.1 }, { k: "a0", rot: "Ângulo C da 1ª face °", def: 0, step: 1 }, { k: "ap", rot: "Prof. por passe mm (no raio)", def: 0.5, step: 0.1 }, { k: "me", rot: "Modo dos eixos", def: 0, step: 1, opcoes: ["Eixo Y — fresa radial, C parado em cada face", "G12.1 — interpolação polar, fresa axial (X + C)"] }, { k: "pz", rot: "Prof. por passe em Z mm (fresa axial)", def: 2, step: 0.5, quando: ["me", [1]] }, { k: "tr", rot: "Trabalho da fresa (faces clicadas no 3D)", def: 0, step: 1, opcoes: ["Topo — ponta da fresa radial encosta na face", "Lateral — flanco da fresa axial (paralela ao Z)"], quando: ["me", [0]] }, { k: "lf", rot: "Comprimento útil da fresa mm", def: 20, step: 1 }, { k: "cc", rot: "Sentido do corte", def: 0, step: 1, opcoes: ["Concordante", "Discordante", "Ida e volta (corta nos dois sentidos)"] }, { k: "rv", rot: "Raio nos vértices ,R mm (0 = canto vivo)", def: 0, step: 0.5, quando: ["me", [1]] } ] },
   corte: { nome: "Corte", grupo: "FINAL", regiao: true, ciclo: "", ferr: "T0404", params: [
@@ -5164,7 +5190,8 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
     if (sel.modo === "f3d") {
       const f3 = (pick.r as any).face3d;
       if (!f3) return;
-      const fz = sZ === 1 ? f3 : { ...f3, zmin: Math.min(zFromDisp(f3.zmin), zFromDisp(f3.zmax)), zmax: Math.max(zFromDisp(f3.zmin), zFromDisp(f3.zmax)) };
+      const dentroGeo = (z: number) => !geo || (z <= geo.zFront + 1e-3 && z >= geo.zBack - 1e-3); // o 3D já entrega o Z da peça: só converte se vier fora dela
+      const fz = sZ === 1 || (dentroGeo(f3.zmin) && dentroGeo(f3.zmax)) ? f3 : { ...f3, zmin: Math.min(zFromDisp(f3.zmin), zFromDisp(f3.zmax)), zmax: Math.max(zFromDisp(f3.zmin), zFromDisp(f3.zmax)), ...(Array.isArray(f3.borda) ? { borda: (f3.borda as number[]).map((v: number, i: number) => (i % 3 === 2 ? zFromDisp(v) : v)) } : {}) };
       setOps((arr) => arr.map((o) => {
         if (o.id !== sel.opId) return o;
         const lst = o.faces3d || [];
@@ -5172,6 +5199,13 @@ onFix((sZ === 1 ? z : z.map((q) => ({ ...q, za: zDisp(q.zb), zb: zDisp(q.za) }))
         const novo = ja ? lst.filter((q) => q.id !== fz.id) : [...lst, fz];
         // a REGIÃO da operação passa a ser exatamente de onde as faces clicadas começam até onde terminam em Z
         const fx: TMFaixa[] = novo.length ? [[Math.min(...novo.map((q) => q.zmin)), Math.max(...novo.map((q) => q.zmax))] as TMFaixa] : o.faixas;
+        // FRESAR PERFIL: X inicial (topo) e final (fundo) vêm do 3D já preenchidos (pode editar depois)
+        if (o.tipo === "fresaPerfil") {
+          const inf = infoPerfilClicado(novo as any, (o.p as any).cAj ?? 0);
+          const pN = { ...o.p } as any;
+          if (inf) { pN.xi = Math.round(2 * (inf.rTopo > inf.rFundo + 0.01 ? inf.rTopo : (geo ? geo.dMax / 2 : inf.rTopo)) * 1000) / 1000; pN.xf = Math.round(2 * inf.rFundo * 1000) / 1000; }
+          return { ...o, p: pN, faces3d: novo.length ? novo : undefined, faixas: fx };
+        }
         return { ...o, faces3d: novo.length ? novo : undefined, faixas: fx };
       }));
       return;

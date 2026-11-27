@@ -22,7 +22,8 @@ export type StarTMOpTipo =
   | "canalFrontal"
   | "furoRadial"
   | "furoAxial"
-  | "fresaFaces";
+  | "fresaFaces"
+  | "fresaPerfil";
 
 export interface StarTMOp {
   id: string;
@@ -600,6 +601,7 @@ const DESC_TIPO: Record<StarTMOpTipo, string> = {
   furoRadial: "FURO RADIAL ACIONADA",
   furoAxial: "FURO AXIAL ACIONADA",
   fresaFaces: "FRESA FACES ACIONADA",
+  fresaPerfil: "FRESA PERFIL ACIONADA",
 };
 
 export const DESC_TIPO_STAR = DESC_TIPO;
@@ -644,6 +646,121 @@ export function validarSincronismoStar(h1Lines: string[], h2Lines: string[]): st
     }
   }
   return null;
+}
+
+// ===== ACIONADA RADIAL NAS STAR: cada máquina tem um LAYOUT (fotos internas + programas reais) =====
+// "Y" = a acionada aponta pelo eixo Y: profundidade em Y e lateral em X (os dois em diâmetro) - Star 16 (N06/N07), SR-20J (N08), 32J (N10/N17)
+// "X" = aponta pelo eixo X: profundidade em X (diâmetro) e lateral em Y - SB-20R (N11/N13/N19) - é o jeito que o motor calcula
+export const STAR_ACIONADA_EIXO: Record<string, "X" | "Y"> = {
+  STAR_SR16_N06: "Y", STAR_SR16_N07: "Y", STAR_SR20J_N08: "Y", STAR_N17: "Y", STAR_32R_N10: "Y",
+  STAR_SB20R_N11: "X", STAR_SB20R_N13: "X", STAR_N19: "X",
+};
+// trava do eixo C nas acionadas: M6 trava depois de posicionar o C / M7 solta antes de girar (a Star 16 não usa)
+export const STAR_TRAVA_C: Record<string, boolean> = { STAR_SR16_N06: false, STAR_SR16_N07: false };
+export const MARCA_ACIONADA_Y = "(ACIONADA RADIAL - PROFUNDIDADE EM Y)";
+export const MARCA_FIM_ACIONADA_Y = "(FIM ACIONADA RADIAL)";
+const trocaXY = (cod: string, paraMaquina: boolean) =>
+  cod.replace(/(?<![A-Z])([XY])(-?\d*\.?\d+)/g, (_s, ax: string, v: string) =>
+    paraMaquina ? (ax === "X" ? "Y" + v : "X" + fmtStar(2 * parseFloat(v))) : ax === "Y" ? "X" + v : "Y" + fmtStar(parseFloat(v) / 2)
+  );
+// escreve as linhas de uma acionada RADIAL (motor: profundidade em X) no jeito da máquina Star
+// PERFIL CLICADO NO 3D: piso (maior face plana) = fundo + ângulo C; borda do piso no plano da fresa (lateral Y x Z) = contorno
+export function infoPerfilClicado(
+  faces: { tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number; borda?: number[] }[],
+  cAjuste = 0
+): { c: number; rFundo: number; rTopo: number; poly: { y: number; z: number }[]; modo?: "piso" | "rasgo"; pts?: { y: number; z: number; r: number }[] } | null {
+  // piso de verdade = face plana VIRADA PARA FORA (a normal aponta para o lado onde a face está). Parede lateral de rasgo não conta.
+  const alinhada = (f: { c: number; borda?: number[] }) => {
+    const b = f.borda || [];
+    let sx = 0, sy = 0;
+    for (let i = 0; i + 2 < b.length; i += 3) { sx += b[i]; sy += b[i + 1]; }
+    const L = Math.hypot(sx, sy);
+    if (L < 1e-9) return true;
+    const cr0 = (f.c * Math.PI) / 180;
+    return (sx * Math.cos(cr0) + sy * Math.sin(cr0)) / L > 0.85;
+  };
+  const planas = (faces || []).filter((f) => f.tipo === "plana" && Array.isArray(f.borda) && f.borda.length >= 9 && alinhada(f));
+  if (!planas.length) {
+    // RASGO / JANELA (sem piso plano virado para fora): usa o contorno de TODAS as faces clicadas, visto de fora no ângulo C
+    const todos: number[] = [];
+    (faces || []).forEach((f) => {
+      const b = Array.isArray(f.borda) ? f.borda : [];
+      const nb = Math.floor(b.length / 3);
+      for (let i = 0; i < nb; i++) {
+        const j = (i + 1) % nb;
+        const ax = b[3 * i], ay = b[3 * i + 1], az = b[3 * i + 2], bx = b[3 * j], by = b[3 * j + 1], bz = b[3 * j + 2];
+        const k = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay, bz - az) / 0.05));
+        for (let s = 0; s < k; s++) { const u = s / k; todos.push(ax + (bx - ax) * u, ay + (by - ay) * u, az + (bz - az) * u); }
+      }
+    });
+    if (todos.length < 9) return null;
+    let sx = 0, sy = 0;
+    for (let i = 0; i + 2 < todos.length; i += 3) { sx += todos[i]; sy += todos[i + 1]; }
+    if (Math.hypot(sx, sy) < 1e-6) return null; // centrado no eixo: não é usinagem radial
+    const cR = Math.round(((((Math.atan2(sy, sx) * 180) / Math.PI + cAjuste) % 360) + 360) % 360 * 100) / 100 % 360;
+    const crR = (cR * Math.PI) / 180, ccR = Math.cos(crR), scR = Math.sin(crR);
+    const pts: { y: number; z: number; r: number }[] = [];
+    for (let i = 0; i + 2 < todos.length; i += 3) pts.push({ y: -todos[i] * scR + todos[i + 1] * ccR, z: todos[i + 2], r: todos[i] * ccR + todos[i + 1] * scR });
+    const rMaxR = Math.max(...pts.map((q) => q.r)), rMinR = Math.min(...pts.map((q) => q.r));
+    // passante: o X final passa 0.3 (no raio) além da parede de dentro
+    return { c: Math.round(cR * 1000) / 1000, rFundo: Math.round(Math.max(0, rMinR - 0.3) * 1000) / 1000, rTopo: Math.round(rMaxR * 1000) / 1000, poly: [], modo: "rasgo", pts };
+  }
+  const piso = planas.slice().sort((a, b) => (b.ymax - b.ymin) * (b.zmax - b.zmin) - (a.ymax - a.ymin) * (a.zmax - a.zmin))[0];
+  const c = (((piso.c + cAjuste) % 360) + 360) % 360;
+  const cr = (c * Math.PI) / 180, cc = Math.cos(cr), sc = Math.sin(cr);
+  const proj = (v: number[]) => { const a: { y: number; z: number; r: number }[] = []; for (let i = 0; i + 2 < v.length; i += 3) a.push({ y: -v[i] * sc + v[i + 1] * cc, z: v[i + 2], r: v[i] * cc + v[i + 1] * sc }); return a; };
+  const bp = proj(piso.borda!);
+  let poly = bp.map((q) => ({ y: q.y, z: q.z }));
+  // tira pontos repetidos / colados
+  poly = poly.filter((q, i) => i === 0 || Math.hypot(q.y - poly[i - 1].y, q.z - poly[i - 1].z) > 1e-3);
+  if (poly.length > 2 && Math.hypot(poly[0].y - poly[poly.length - 1].y, poly[0].z - poly[poly.length - 1].z) < 1e-3) poly.pop();
+  if (poly.length < 3) return null;
+  let area = 0;
+  for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; area += a.y * b.z - b.y * a.z; }
+  if (area < 0) poly.reverse(); // anti-horário: a esquerda é o lado de dentro
+  const rFundo = bp.reduce((s, q) => s + q.r, 0) / bp.length;
+  let rTopo = rFundo;
+  faces.forEach((f) => { if (f !== piso && Array.isArray(f.borda)) proj(f.borda).forEach((q) => { if (q.r > rTopo) rTopo = q.r; }); });
+  return { c: Math.round(c * 1000) / 1000, rFundo: Math.round(rFundo * 1000) / 1000, rTopo: Math.round(rTopo * 1000) / 1000, poly };
+}
+
+export function traduzAcionadaStar(lines: string[], maqId: string): string[] {
+  const eixo = STAR_ACIONADA_EIXO[maqId];
+  if (!eixo) return lines;
+  const trava = STAR_TRAVA_C[maqId] !== false;
+  const out: string[] = [];
+  let travado = false;
+  if (eixo === "Y") out.push(MARCA_ACIONADA_Y);
+  for (const l of lines) {
+    const ip = l.indexOf("(");
+    const cod = ip >= 0 ? l.slice(0, ip) : l;
+    const com = ip >= 0 ? l.slice(ip) : "";
+    const up = cod.toUpperCase();
+    const temC = /(?<![A-Z])C-?\d*\.?\d/.test(up);
+    const desliga = /(?<![0-9])M0?9(?![0-9])|(?<![0-9])M38(?![0-9])/.test(up);
+    if (trava && travado && (temC || desliga)) { out.push("M7"); travado = false; }
+    out.push((eixo === "Y" ? trocaXY(cod, true) : cod) + com);
+    if (trava && temC && /(?<![0-9])G0*0(?![0-9.])/.test(up)) { out.push("M6"); travado = true; }
+  }
+  if (travado) out.push("M7");
+  if (eixo === "Y") out.push(MARCA_FIM_ACIONADA_Y);
+  return out;
+}
+// SIMULADORES: volta as linhas de uma acionada "profundidade em Y" para o padrão (X = profundidade) - mesma quantidade de linhas
+export function desfazAcionadaY(gcode: string): string {
+  if (!gcode || gcode.indexOf(MARCA_ACIONADA_Y) < 0) return gcode;
+  let on = false;
+  return gcode
+    .split("\n")
+    .map((l) => {
+      if (l.indexOf(MARCA_ACIONADA_Y) >= 0) { on = true; return l; }
+      if (l.indexOf(MARCA_FIM_ACIONADA_Y) >= 0) { on = false; return l; }
+      if (!on) return l;
+      const ip = l.indexOf("(");
+      const cod = ip >= 0 ? l.slice(0, ip) : l;
+      return trocaXY(cod, false) + (ip >= 0 ? l.slice(ip) : "");
+    })
+    .join("\n");
 }
 
 export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGerarCfg) {
@@ -694,7 +811,29 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
   const acabExtOp = ativos.find((o) => o.tipo === "acabExt" && (o.cab || "H1") === "H1");
   const ferramentasUsadas: { tNum: number; desc: string; vu: number }[] = [];
 
-  const gerarOpLinhas = (op: StarTMOp, canal: "H1" | "H2"): string[] => { const rOp = espelharXLinhas(gerarOpLinhasBase(op, canal), (op.p.espX ?? 0) === 1); blocosOpsGerados[op.id] = rOp; return rOp; };
+  const gerarOpLinhas = (op: StarTMOp, canal: "H1" | "H2"): string[] => {
+    const opN = canal === "H1" ? normFaces3dSuico(op) : op;
+    let base = gerarOpLinhasBase(opN, canal);
+    // ACIONADA RADIAL nas Star: escreve no layout da máquina (Y ou X) + trava do C (G12.1 / face axial fica como está)
+    const radial = op.tipo === "furoRadial" || (op.tipo === "fresaFaces" && (op.p.me ?? 0) !== 1) || (op.tipo === "fresaPerfil" && (op.p.pos ?? 0) !== 1);
+    if (radial && canal === "H1" && cfg.maqId && STAR_ACIONADA_EIXO[cfg.maqId]) base = traduzAcionadaStar(base, cfg.maqId);
+    const rOp = espelharXLinhas(base, (op.p.espX ?? 0) === 1); blocosOpsGerados[op.id] = rOp; return rOp;
+  };
+  // FACES DO 3D no suíço: se vieram com o Z do lado errado (fora da peça, mas dentro dela se virar), corrige Z das faces e da região
+  const normFaces3dSuico = (o: StarTMOp): StarTMOp => {
+    const f3o = (o as any).faces3d as { tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number }[] | undefined;
+    if (!f3o || !f3o.length) return o;
+    // face PLANA com distância negativa = normal virada para dentro (STEP espelhado): a face está no ângulo oposto
+    const f3 = f3o.map((f) => (f.tipo === "plana" && f.d < 0 ? { ...f, d: -f.d, c: (f.c + 180) % 360, ymin: -f.ymax, ymax: -f.ymin } : f));
+    if (f3.some((f, i) => f !== f3o[i])) o = { ...o, faces3d: f3 } as any;
+    const zF = geoBaseStar.zFront, zB = geoBaseStar.zBack;
+    const fora = (z: number) => z > zF + 1e-3 || z < zB - 1e-3;
+    if (!f3.some((f) => fora(f.zmin) || fora(f.zmax))) return o;
+    const conv = (z: number) => zF + deslH1 - z;
+    const novas = f3.map((f) => ({ ...f, zmin: Math.min(conv(f.zmin), conv(f.zmax)), zmax: Math.max(conv(f.zmin), conv(f.zmax)), ...(Array.isArray((f as any).borda) ? { borda: ((f as any).borda as number[]).map((v, i) => (i % 3 === 2 ? conv(v) : v)) } : {}) }));
+    if (novas.some((f) => fora(f.zmin) && fora(f.zmax))) return o;
+    return { ...o, faces3d: novas, faixas: [[Math.min(...novas.map((f) => f.zmin)), Math.max(...novas.map((f) => f.zmax))]] } as any;
+  };
   // HEAD 2 ESPELHADO: a peça é virada (a face do CORTE vira a "frente"), assim TODA a lógica do H1
   // (furação, encabeçar, desbaste, acabamento, canal, aproximações, recuos) vale igual no H2, com Z0 = zero do Head 2.
   const geoBaseStar = geo;
@@ -865,7 +1004,7 @@ export function criarEmissorOpsStar(ops: StarTMOp[], geo: StarTMGeo, cfg: StarGe
       if (zTarget > zSafe + 1e-4) lines.push("G0Z" + fmt(zTarget));
     };
 
-    const acionada = (p.acionada ?? 0) === 1 || op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces"; // ferramenta acionada (M36 / G98 mm/min)
+    const acionada = (p.acionada ?? 0) === 1 || op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces" || op.tipo === "fresaPerfil"; // ferramenta acionada (M36 / G98 mm/min)
     ferramentasUsadas.push({ tNum, desc, vu: Math.round(p.vu ?? 500) });
     lines.push("T" + tNum + "00(" + desc + ")");
     lines.push("/M25");
@@ -1805,7 +1944,7 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         g0FrontalSeguro(dE, zEF);
         lines.push("G74R0.5");
         lines.push("G74X" + fmt(xFimF) + "Z" + fmt(zCoord(zFimF)) + "P" + Math.round(largF * 0.8 * 1000) + "Q" + Math.round(Math.max(0.1, p.pk ?? 0.5) * 1000) + "F" + fmt(p.f ?? 0.03));
-      } else if (op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces") {
+      } else if (op.tipo === "furoRadial" || op.tipo === "furoAxial" || op.tipo === "fresaFaces" || op.tipo === "fresaPerfil") {
         // FERRAMENTA ACIONADA (eixo C indexado). Avanço em mm/min (G98). CONFERIR na máquina os códigos de C e do eixo Y.
         const zIniC = Math.max(...fxs.map((fx) => Math.max(fx[0], fx[1])));
         const zFimC = Math.min(...fxs.map((fx) => Math.min(fx[0], fx[1])));
@@ -1814,24 +1953,195 @@ const zPA = pr[0].z, zPB = pr[pr.length - 1].z;
         const rPecaC = (zg: number) => { let m = 0; for (const q of geo.ext) { const lo = Math.min(q.zA, q.zB), hi = Math.max(q.zA, q.zB); if (zg < lo - 1e-9 || zg > hi + 1e-9) continue; m = Math.max(m, (hi - lo < 1e-9 ? Math.max(q.xa, q.xb) : q.xa + ((zg - q.zA) / (q.zB - q.zA)) * (q.xb - q.xa)) / 2); } return m; };
         if (op.tipo === "furoRadial") {
           const nF = Math.max(1, Math.round(p.nf ?? 1));
-          const zC = (zIniC + zFimC) / 2;
-          const dEm = 2 * rPecaC(zC);
+          // POSIÇÃO RADIAL = ONDE CLICOU: com faces escolhidas no 3D, o furo vai na face (ângulo C, altura em Z e a superfície dela)
+          const f3R = (((op as any).faces3d || []) as { tipo: string; c: number; d: number; zmin: number; zmax: number }[]);
+          const fRad = f3R.find((f) => f.tipo === "plana") || f3R.find((f) => f.tipo !== "frontal") || null;
+          const zC = fRad ? (fRad.zmin + fRad.zmax) / 2 : (zIniC + zFimC) / 2;
+          const rEm = rPecaC(zC);
+          const rSup = fRad && fRad.tipo === "plana" && Math.abs(fRad.d) > 1e-3 ? Math.abs(fRad.d) : rEm > 0 ? rEm : bD / 2;
+          const c0 = fRad ? fRad.c : (p.a0 ?? 0);
+          const xSup = 2 * rSup + 1; // G0 só até 0,5 mm da superfície (no raio); daí em diante G1
           const xF = (p.xf ?? 0) > 0 ? p.xf : 0;
           const qR = (p.q ?? 1) > 0 ? 2 * p.q : 1e9;
-          lines.push("(FURO RADIAL D" + fmt(p.d ?? 3) + " EM Z" + fmt(zCoord(zC)) + " - " + nF + " FUROS - ATE D" + fmt(xF) + " - CONFERIR C/ACIONADA)");
+          lines.push("(FURO RADIAL D" + fmt(p.d ?? 3) + " EM Z" + fmt(zCoord(zC)) + " C" + fmt(((c0 % 360) + 360) % 360) + " - " + nF + " FUROS - SUPERFICIE D" + fmt(2 * rSup) + " - ATE D" + fmt(xF) + ")");
+          lines.push("(FRESA D" + fmt(p.d ?? 3) + " L" + fmt(Math.max(10, 2 * rSup)) + " TOPO)");
           g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(zC)));
           if (zCoord(zC) > zFrontClear + 1e-4) lines.push("G0Z" + fmt(zCoord(zC)));
           for (let k = 0; k < nF; k++) {
-            lines.push("G0C" + fmt(((p.a0 ?? 0) + (k * 360) / nF) % 360));
-            lines.push("G0X" + fmt(dEm + 1));
-            let x = dEm + 1, gR = 0;
+            lines.push("G0C" + fmt((((c0 + (k * 360) / nF) % 360) + 360) % 360));
+            lines.push("G0X" + fmt(xSup));
+            let x = xSup, gR = 0;
             while (gR++ < 500 && x > xF + 1e-6) {
               const nx = Math.max(xF, x - qR);
               lines.push("G1X" + fmt(nx) + "F" + fmt(fC));
               x = nx;
-              if (x > xF + 1e-6) { lines.push("G0X" + fmt(dEm + 1)); lines.push("G0X" + fmt(x + 0.3)); }
+              if (x > xF + 1e-6) { lines.push("G0X" + fmt(xSup)); lines.push("G0X" + fmt(x + 0.3)); }
             }
             lines.push("G0X" + fmt(bD + 2));
+          }
+        } else if (op.tipo === "fresaPerfil") {
+          // FRESAR PERFIL CLICADO (só as faces escolhidas no 3D): o PISO (maior face plana) dá o fundo e o ângulo C;
+          // a BORDA do piso é o contorno. Caminho pelo CENTRO da fresa (compensa o Ø, sem G41/G42).
+          const fsP = (((op as any).faces3d || []) as { tipo: string; c: number; d: number; ymin: number; ymax: number; zmin: number; zmax: number; borda?: number[] }[]);
+          const infoP = infoPerfilClicado(fsP as any, (p.cAj ?? 0));
+          const Rf = Math.max(0.05, (p.df ?? 4) / 2);
+          const lfP = Math.max(1, p.lf ?? 12);
+          const est = Math.round(p.est ?? 0);
+          if ((p.pos ?? 0) === 1) {
+            lines.push("(FRESAR PERFIL - POSICAO AXIAL AINDA NAO DISPONIVEL - USE RADIAL)");
+          } else if (!infoP) {
+            lines.push("(FRESAR PERFIL - CLIQUE NO 3D A FACE DO FUNDO E AS PAREDES DE NOVO - PRECISA DA BORDA DA FACE)");
+          } else if (infoP.modo === "rasgo") {
+            // RASGO / JANELA ABERTA NA FRENTE (sem piso plano): visto de fora no ângulo C, as faces clicadas formam um "U".
+            // A fresa (círculo de raio R neste plano) desce encostando nas paredes e no fundo, e atravessa a parede até o X final.
+            const ptsR = infoP.pts || [];
+            const swR = Math.max(0, p.sw ?? 0);
+            const rTopoR = (p.xi ?? 0) > 0 ? p.xi / 2 : infoP.rTopo;
+            const rFimR = ((p.xf ?? 0) > 0 ? p.xf / 2 : infoP.rFundo) + Math.max(0, p.sf ?? 0);
+            const yL = Math.min(...ptsR.map((q) => q.y)), yR = Math.max(...ptsR.map((q) => q.y));
+            const zTopR = Math.max(...ptsR.map((q) => q.z)), zBotR = Math.min(...ptsR.map((q) => q.z));
+            const largR = yR - yL;
+            // aberto na frente? no meio do rasgo só pode existir o fundo (se tiver borda alta no meio, é janela fechada)
+            const aberto = !ptsR.some((q) => q.y > yL + largR * 0.3 && q.y < yR - largR * 0.3 && q.z > zBotR + (zTopR - zBotR) * 0.5);
+            const Rr = Rf + swR;
+            const zcR = (yc: number) => {
+              let mz = -Infinity;
+              for (const q of ptsR) { const dq = Math.abs(q.y - yc); if (dq < Rr) { const v = q.z + Math.sqrt(Rr * Rr - dq * dq); if (v > mz) mz = v; } }
+              return Number.isFinite(mz) ? mz : zBotR + Rr;
+            };
+            const zClearR = zTopR + Rr + 1; // na frente da peça, fora do material
+            lines.push("(FRESAR RASGO CLICADO - C" + fmt(infoP.c) + " - TOPO X" + fmt(2 * rTopoR) + " - FINAL X" + fmt(2 * rFimR) + " - LARGURA " + fmt(largR) + " - FUNDO Z" + fmt(zCoord(zBotR)) + " - FRESA D" + fmt(2 * Rf) + " L" + fmt(lfP) + ")");
+            lines.push("(FRESA D" + fmt(2 * Rf) + " L" + fmt(lfP) + " TOPO)");
+            if (!aberto) {
+              lines.push("(ATENCAO - JANELA FECHADA (SEM SAIDA NA FRENTE) AINDA NAO DISPONIVEL - CLIQUE O PISO PLANO OU USE OUTRA OPERACAO)");
+            } else if (2 * Rr > largR - 0.01) {
+              lines.push("(ATENCAO - A FRESA D" + fmt(2 * Rf) + " NAO ENTRA NESTE RASGO - LARGURA " + fmt(largR) + " - USE FRESA MENOR)");
+            } else if (rTopoR - rFimR <= 1e-4) {
+              lines.push("(ATENCAO - TOPO E FINAL IGUAIS - CONFIRA X INICIAL E FINAL NA OPERACAO)");
+            } else {
+              if (lfP < rTopoR - rFimR - 1e-6) lines.push("(ATENCAO - COMPRIMENTO UTIL L" + fmt(lfP) + " MENOR QUE A PROFUNDIDADE " + fmt(rTopoR - rFimR) + " - O SUPORTE BATE)");
+              const y0 = yL + Rr + 0.005, y1 = yR - Rr - 0.005;
+              const aeR = Math.max(0.05, Math.min(p.ae ?? 1.5, 2 * Rf * 0.9));
+              const nY = Math.max(1, Math.ceil((y1 - y0) / aeR - 1e-9));
+              const ys: number[] = [];
+              for (let k = 0; k <= nY; k++) ys.push(y0 + ((y1 - y0) * k) / nY);
+              // caminho do fundo (centro da fresa), passo 0.1, sem pontos alinhados repetidos
+              const nB = Math.max(2, Math.ceil((y1 - y0) / 0.1));
+              const fundoR: { y: number; z: number }[] = [];
+              for (let k = 0; k <= nB; k++) { const yy = y0 + ((y1 - y0) * k) / nB; fundoR.push({ y: yy, z: Math.min(zClearR, zcR(yy)) }); }
+              const fundoS = fundoR.filter((q, k) => {
+                if (k === 0 || k === fundoR.length - 1) return true;
+                const a = fundoR[k - 1], b = fundoR[k + 1];
+                return Math.abs((b.y - a.y) * (q.z - a.z) - (b.z - a.z) * (q.y - a.y)) / (Math.hypot(b.y - a.y, b.z - a.z) || 1) > 0.002;
+              });
+              // sobra de material nos cantos (desenho com raio menor que o da fresa)
+              let sobra = 0;
+              const varrido = [{ y: y0, z: zClearR }, ...fundoR, { y: y1, z: zClearR }]; // centro da fresa: desce na parede, corre o fundo, sobe
+              const dSegR = (q: { y: number; z: number }, a0: { y: number; z: number }, b0: { y: number; z: number }) => {
+                const vy = b0.y - a0.y, vz = b0.z - a0.z, L2 = vy * vy + vz * vz;
+                const u = L2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((q.y - a0.y) * vy + (q.z - a0.z) * vz) / L2));
+                return Math.hypot(q.y - (a0.y + u * vy), q.z - (a0.z + u * vz));
+              };
+              ptsR.forEach((q) => {
+                if (q.z > zTopR - 0.05) return;
+                let dm = Infinity;
+                for (let k = 0; k + 1 < varrido.length; k++) dm = Math.min(dm, dSegR(q, varrido[k], varrido[k + 1]) - Rr);
+                if (dm > sobra) sobra = dm;
+              });
+              if (sobra > 0.02) lines.push("(ATENCAO - SOBRA ATE " + fmt(sobra) + " NOS CANTOS - O RAIO DO DESENHO E MENOR QUE O DA FRESA D" + fmt(2 * Rf) + " - USE FRESA MENOR SE PRECISAR)");
+              const apR = Math.max(0.02, p.ap ?? 0.5);
+              const niveisR: number[] = [];
+              for (let r = rTopoR - apR; r > rFimR + 1e-6; r -= apR) niveisR.push(r);
+              niveisR.push(rFimR);
+              const fPR = Math.max(1, p.f ?? 120), fzR = Math.max(1, p.fz ?? 60);
+              const zC = zCoord(zClearR);
+              g0Inicial(bD + 2, Math.min(zFrontClear, zC));
+              lines.push("G0C" + fmt(infoP.c));
+              lines.push("G0Y" + fmt(ys[0]) + "Z" + fmt(zC));
+              lines.push("G0X" + fmt(2 * rTopoR + 1));
+              niveisR.forEach((rN) => {
+                lines.push("G1X" + fmt(2 * rN) + "F" + fmt(fzR) + "(NA FRENTE DA PECA)");
+                for (let k = 1; k < ys.length - 1; k++) {
+                  lines.push("G0Y" + fmt(ys[k]));
+                  lines.push("G1Z" + fmt(zCoord(Math.min(zClearR, zcR(ys[k])))) + "F" + fmt(fPR));
+                  lines.push("G0Z" + fmt(zC));
+                }
+                // contorno: desce na parede, corre o fundo e sobe na outra parede
+                lines.push("G0Y" + fmt(ys[0]));
+                fundoS.forEach((q, k) => lines.push("G1Y" + fmt(q.y) + "Z" + fmt(zCoord(q.z)) + (k === 0 ? "F" + fmt(fPR) : "")));
+                lines.push("G1Z" + fmt(zC));
+                lines.push("G0Y" + fmt(ys[0]));
+              });
+              lines.push("G0X" + fmt(bD + 2));
+              lines.push("G0Y0");
+            }
+          } else {
+            const rTopo = (p.xi ?? 0) > 0 ? p.xi / 2 : infoP.rTopo > infoP.rFundo + 0.01 ? infoP.rTopo : bD / 2; // só o piso clicado: começa na barra
+            const rFundo = ((p.xf ?? 0) > 0 ? p.xf / 2 : infoP.rFundo) + Math.max(0, p.sf ?? 0);
+            const sw = Math.max(0, p.sw ?? 0);
+            const poly = infoP.poly; // {y,z} fechado (sentido anti-horário)
+            const dSeg = (q: { y: number; z: number }, a: { y: number; z: number }, b: { y: number; z: number }) => {
+              const vy = b.y - a.y, vz = b.z - a.z; const L2 = vy * vy + vz * vz;
+              const u = L2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((q.y - a.y) * vy + (q.z - a.z) * vz) / L2));
+              return Math.hypot(q.y - (a.y + u * vy), q.z - (a.z + u * vz));
+            };
+            const dPoly = (q: { y: number; z: number }) => { let m = Infinity; for (let i = 0; i < poly.length; i++) m = Math.min(m, dSeg(q, poly[i], poly[(i + 1) % poly.length])); return m; };
+            // contorno deslocado (dist > 0 = para DENTRO): tira os pontos que ficariam mais perto da parede do que a distância (canto que a fresa não alcança)
+            const desloca = (dist: number) => {
+              const n = poly.length, out: { y: number; z: number }[] = [];
+              for (let i = 0; i < n; i++) {
+                const a = poly[(i - 1 + n) % n], b = poly[i], c = poly[(i + 1) % n];
+                const t1y = b.y - a.y, t1z = b.z - a.z, l1 = Math.hypot(t1y, t1z) || 1;
+                const t2y = c.y - b.y, t2z = c.z - b.z, l2 = Math.hypot(t2y, t2z) || 1;
+                const n1y = -t1z / l1, n1z = t1y / l1, n2y = -t2z / l2, n2z = t2y / l2; // esquerda = dentro (anti-horário)
+                let by = n1y + n2y, bz = n1z + n2z; const bl = Math.hypot(by, bz);
+                if (bl < 1e-6) { by = n2y; bz = n2z; } else { by /= bl; bz /= bl; }
+                const cosM = Math.max(0.35, by * n2y + bz * n2z);
+                out.push({ y: b.y + (by * dist) / cosM, z: b.z + (bz * dist) / cosM });
+              }
+              const lim = Math.abs(dist) - 0.01;
+              return dist > 0 ? out.filter((q) => dPoly(q) >= lim) : out;
+            };
+            const lacos: { y: number; z: number }[][] = [];
+            if (est === 1) lacos.push(desloca(-(Rf + sw)));
+            else if (est === 2) { const ae = Math.max(0.05, Math.min(p.ae ?? 1.5, 2 * Rf * 0.9)); for (let k = 0; k < 200; k++) { const l = desloca(Rf + sw + k * ae); if (l.length < 2) break; lacos.push(l); } }
+            else lacos.push(desloca(Rf + sw));
+            const largMin = 2 * Math.max(...poly.map((q) => dPoly({ y: poly.reduce((s, v) => s + v.y, 0) / poly.length, z: poly.reduce((s, v) => s + v.z, 0) / poly.length })));
+            const prof = rTopo - rFundo;
+            lines.push("(FRESAR PERFIL CLICADO - C" + fmt(infoP.c) + " - TOPO X" + fmt(2 * rTopo) + " - FUNDO X" + fmt(2 * rFundo) + " - FRESA D" + fmt(2 * Rf) + " L" + fmt(lfP) + ")");
+            lines.push("(FRESA D" + fmt(2 * Rf) + " L" + fmt(lfP) + " TOPO)");
+            if (!lacos.length || lacos[0].length < 2) {
+              lines.push("(ATENCAO - A FRESA D" + fmt(2 * Rf) + " NAO ENTRA NESTE PERFIL - LARGURA APROX. " + fmt(largMin) + " - USE FRESA MENOR)");
+            } else if (prof <= 1e-4) {
+              lines.push("(ATENCAO - TOPO E FUNDO IGUAIS - CONFIRA X INICIAL E FINAL NA OPERACAO)");
+            } else {
+              if (lfP < prof - 1e-6) lines.push("(ATENCAO - COMPRIMENTO UTIL L" + fmt(lfP) + " MENOR QUE A PROFUNDIDADE " + fmt(prof) + " - O SUPORTE BATE)");
+              const apP = Math.max(0.02, p.ap ?? 0.5);
+              const niveis: number[] = [];
+              for (let r = rTopo - apP, g = 0; g++ < 500 && r > rFundo + 1e-6; r -= apP) niveis.push(r);
+              niveis.push(rFundo);
+              const xSeg = 2 * rTopo + 2;
+              const fP = Math.max(1, p.f ?? 120), fzP = Math.max(1, p.fz ?? 60);
+              const p0 = lacos[0][0];
+              g0Inicial(bD + 2, Math.min(zFrontClear, zCoord(p0.z)));
+              lines.push("G0C" + fmt(infoP.c));
+              niveis.forEach((rN, iN) => {
+                lacos.forEach((laco0) => {
+                  let laco = (p.cc ?? 0) === 1 ? [...laco0].reverse() : laco0;
+                  if ((p.cc ?? 0) === 2 && iN % 2 === 1) laco = [...laco0].reverse();
+                  const q0 = laco[0];
+                  lines.push("G0X" + fmt(xSeg));
+                  lines.push("G0Y" + fmt(q0.y) + "Z" + fmt(zCoord(q0.z)));
+                  lines.push("G0X" + fmt(2 * rTopo + 1));
+                  lines.push("G1X" + fmt(2 * rN) + "F" + fmt(fzP));
+                  laco.slice(1).forEach((q, k) => lines.push("G1Y" + fmt(q.y) + "Z" + fmt(zCoord(q.z)) + (k === 0 ? "F" + fmt(fP) : "")));
+                  if (est !== 1 || laco.length > 2) lines.push("G1Y" + fmt(q0.y) + "Z" + fmt(zCoord(q0.z))); // fecha o contorno
+                  lines.push("G0X" + fmt(xSeg));
+                });
+              });
+              lines.push("G0X" + fmt(bD + 2));
+              lines.push("G0Y0");
+            }
           }
         } else if (op.tipo === "furoAxial") {
           const nF = Math.max(1, Math.round(p.nf ?? 4));

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
-import { blocosOpsGerados } from "../generators/star18iTB";
+import { desfazAcionadaY, blocosOpsGerados } from "../generators/star18iTB";
 import { Play, Pause, AlertTriangle, Square, ChevronRight, SkipForward, HelpCircle, Sun, Moon, Ruler, Compass, Snowflake, Target, Clock, Gauge, Lock, Unlock } from "lucide-react";
 import { GCodeCommand, SimulationPlotItem, Point2D } from "../types";
 import { calculateCycleTimeDetailed, formatCycleTime, loadMachineParams, saveMachineParams, MachineParams } from "../utils/cycleTimeCalculator";
@@ -1389,6 +1389,7 @@ export function simularGCodeEColisoes(
   fixFolga = 1,
   canalSim = 1
 ): SimColisaoRelatorio {
+  gcodeText = desfazAcionadaY(gcodeText); // acionada radial "profundidade em Y" (Star) volta ao padrão para desenhar/conferir
   const parsedSim = parseGCodeSim(gcodeText, simInvertZ, partLayers);
   const { activeLineIndexes, error } = parsedSim;
   let plotList = parsedSim.plotList;
@@ -1565,7 +1566,7 @@ export function simularGCodeEColisoes(
     const linhaRosca = new Set<number>();
     {
       let modoR = "";
-      let polarF = false, yAtual = 0;
+      let polarF = false, yAtual = 0, acionF = false, cPos = false;
       gcodeText.split("\n").forEach((ln, i) => {
         const cl = ln.replace(/\([^)]*\)/g, "").split(";")[0].toUpperCase();
         if (/G0?[0-3](?![0-9])/.test(cl)) modoR = "mov";
@@ -1576,7 +1577,12 @@ export function simularGCodeEColisoes(
         if (/G13\.1|G7\.1\s*H0/.test(cl)) polarF = false;
         const yM = cl.match(/(?<![A-Z])Y\s*([-+]?\d*\.?\d+)/);
         if (yM) yAtual = parseFloat(yM[1]);
-        if (polarF || Math.abs(yAtual) > 1e-6 || /G12\.1|G13\.1/.test(cl)) linhaRosca.add(i);
+        // ACIONADA com o C posicionado (fresando/furando em ângulo fixo): ali a peça não é de revolução -> quem confere é o 3D
+        if (/M(36|56)(?![0-9])/.test(cl)) acionF = true;
+        if (/M(38|58)(?![0-9])/.test(cl)) { acionF = false; cPos = false; }
+        if (/(?<![A-Z])T\d/.test(cl)) cPos = false;
+        if (acionF && /(?<![A-Z])C\s*[-+]?\d/.test(cl)) cPos = true;
+        if (polarF || Math.abs(yAtual) > 1e-6 || /G12\.1|G13\.1/.test(cl) || (acionF && cPos)) linhaRosca.add(i);
       });
     }
     const zDir = simInvertZ ? -1 : 1;
